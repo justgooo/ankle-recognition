@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+runs/
+data/demo/
+data/realdata/
+.torch-cache/
