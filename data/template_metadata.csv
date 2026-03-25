@@ -1,4 +1,4 @@
-patient_id,label,age,sex,view1_dir,view2_dir,view3_dir,split
-P001,1,62,M,data/real/patients/P001/view1,data/real/patients/P001/view2,data/real/patients/P001/view3,train
-P002,0,45,F,data/real/patients/P002/view1,data/real/patients/P002/view2,data/real/patients/P002/view3,val
-P003,1,58,M,data/real/patients/P003/view1,data/real/patients/P003/view2,data/real/patients/P003/view3,test
+patient_id,label,age,sex,axial_dir,coronal_dir,sagittal_dir,split
+P001,1,62,M,data/real/patients/P001/axial,data/real/patients/P001/coronal,data/real/patients/P001/sagittal,train
+P002,0,45,F,data/real/patients/P002/axial,data/real/patients/P002/coronal,data/real/patients/P002/sagittal,val
+P003,1,58,M,data/real/patients/P003/axial,data/real/patients/P003/coronal,data/real/patients/P003/sagittal,test

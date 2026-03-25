@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
+PLANE_NAMES = ("axial", "coronal", "sagittal")
+
 
 def make_pattern(label: int, view_index: int, slice_index: int, image_size: int) -> np.ndarray:
     image = np.random.normal(loc=0.35, scale=0.08, size=(image_size, image_size)).astype(np.float32)
@@ -66,8 +68,8 @@ def main() -> None:
 
         patient_root = patients_dir / patient_id
         view_paths = []
-        for view_index in range(3):
-            view_dir = patient_root / f"view{view_index + 1}"
+        for view_index, plane_name in enumerate(PLANE_NAMES):
+            view_dir = patient_root / plane_name
             view_paths.append(view_dir)
             for slice_index in range(args.num_slices):
                 image = make_pattern(
@@ -84,9 +86,9 @@ def main() -> None:
                 "label": label,
                 "age": age,
                 "sex": sex,
-                "view1_dir": str(view_paths[0]).replace("\\", "/"),
-                "view2_dir": str(view_paths[1]).replace("\\", "/"),
-                "view3_dir": str(view_paths[2]).replace("\\", "/"),
+                "axial_dir": str(view_paths[0]).replace("\\", "/"),
+                "coronal_dir": str(view_paths[1]).replace("\\", "/"),
+                "sagittal_dir": str(view_paths[2]).replace("\\", "/"),
                 "split": split,
             }
         )

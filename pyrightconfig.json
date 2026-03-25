@@ -1,11 +1,12 @@
 {
-  "venvPath": ".",
-  "venv": ".venv",
   "pythonVersion": "3.12",
   "pythonPlatform": "Windows",
+  "venvPath": ".",
+  "venv": ".venv",
   "include": ["src", "tools", "."],
   "extraPaths": [
-    ".venv/Lib/site-packages"
+    "src",
+    "tools"
   ],
   "reportMissingImports": true
 }

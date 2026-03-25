@@ -1,0 +1,4 @@
+project_includes = ["train.py", "src", "tools"]
+search_path = ["."]
+python_interpreter_path = ".venv/Scripts/python.exe"
+site_package_path = [".venv/Lib/site-packages"]

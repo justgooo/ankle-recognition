@@ -10,9 +10,9 @@ NIFTI_PATTERNS = ("*.nii", "*.nii.gz", "*.gz")
 OUTPUT_COLUMNS = [
     "patient_id",
     "label",
-    "view1_dir",
-    "view2_dir",
-    "view3_dir",
+    "axial_dir",
+    "coronal_dir",
+    "sagittal_dir",
     "split",
 ]
 
@@ -47,9 +47,9 @@ def build_base_rows(files: list[Path]) -> pd.DataFrame:
             {
                 "patient_id": patient_id,
                 "label": pd.NA,
-                "view1_dir": source,
-                "view2_dir": source,
-                "view3_dir": source,
+                "axial_dir": source,
+                "coronal_dir": source,
+                "sagittal_dir": source,
                 "split": pd.NA,
             }
         )
@@ -60,7 +60,7 @@ def merge_optional_metadata(base_df: pd.DataFrame, metadata_path: Path) -> pd.Da
     extra_df = pd.read_csv(metadata_path)
     if "source_file" in extra_df.columns:
         base_df = base_df.copy()
-        base_df["source_file"] = [Path(path).name for path in base_df["view1_dir"]]
+        base_df["source_file"] = [Path(path).name for path in base_df["axial_dir"]]
         merged = base_df.merge(extra_df, on="source_file", how="left", suffixes=("", "_extra"))
     elif "patient_id" in extra_df.columns:
         merged = base_df.merge(extra_df, on="patient_id", how="left", suffixes=("", "_extra"))

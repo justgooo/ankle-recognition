@@ -16,6 +16,7 @@ data:
 
 model:
   backbone: resnet18
+  fusion_type: feature
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256

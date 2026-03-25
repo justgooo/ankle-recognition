@@ -1,5 +1,5 @@
-experiment_name: beginner_multiview_ct
-output_dir: runs/beginner_multiview_ct
+experiment_name: attention_fusion_multiview_ct
+output_dir: runs/attention_fusion_multiview_ct
 seed: 42
 
 data:
@@ -15,11 +15,13 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: feature
+  fusion_type: attention          # 使用注意力融合模式（Attention Pooling + Cross-View Attention）
   share_backbone: true
   use_pretrained: false
   fusion_hidden_dim: 256
   dropout: 0.3
+  cross_view_heads: 8             # Cross-View Attention 的注意力头数
+  cross_view_layers: 2            # Cross-View Attention 的 Transformer 层数
 
 train:
   epochs: 3
