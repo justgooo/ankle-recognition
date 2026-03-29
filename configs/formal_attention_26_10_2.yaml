@@ -1,0 +1,32 @@
+experiment_name: formal_attention_26_10_2
+output_dir: runs/formal_attention_26_10_2
+seed: 42
+
+data:
+  csv_path: data/realdata/metadata_formal_26_10_2.csv
+  base_dir: .
+  image_size: 256
+  num_slices_per_view: 32
+  trim_edge_slices: 1
+  batch_size: 2
+  num_workers: 0
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnet18
+  fusion_type: attention
+  share_backbone: true
+  use_pretrained: true
+  fusion_hidden_dim: 256
+  dropout: 0.3
+  cross_view_heads: 8
+  cross_view_layers: 2
+
+train:
+  epochs: 10
+  lr: 0.0001
+  weight_decay: 0.0001
+  class_weight: true
+  device: auto
