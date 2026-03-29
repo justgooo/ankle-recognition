@@ -354,50 +354,64 @@ class MultiViewAttentionClassifier(nn.Module):
             nn.Linear(fusion_hidden_dim, 2),
         )
 
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播。
-
-        参数：
-            images: (B, 3, S, H, W) 的 CT 图像张量
-
-        返回：
-            logits: (B, 2)
-        """
+    def _forward_impl(
+        self,
+        images: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         batch_size, num_views, num_slices, height, width = images.shape
         view_features = []
+        slice_attention_weights = []
 
         for view_index in range(num_views):
-            # (B, S, H, W) → (B*S, 1, H, W)
+            # (B, S, H, W) -> (B*S, 1, H, W)
             view_tensor = images[:, view_index, :, :, :].reshape(
                 batch_size * num_slices, 1, height, width
             )
 
-            # ResNet18 提取切片特征: (B*S, 512)
+            # ResNet18 slice features: (B*S, 512)
             if self.share_backbone:
                 slice_features = self.shared_encoder(view_tensor)
             else:
                 slice_features = self.view_encoders[view_index](view_tensor)
 
-            # (B*S, 512) → (B, S, 512)
+            # (B*S, 512) -> (B, S, 512)
             slice_features = slice_features.reshape(batch_size, num_slices, self.feature_dim)
 
-            # Attention Pooling: (B, S, 512) → (B, 512)
+            # Attention Pooling: (B, S, 512) -> (B, 512)
             if self.share_backbone:
-                pooled = self.shared_pooling(slice_features)
+                pooled, weights = self.shared_pooling(slice_features, return_weights=True)
             else:
-                pooled = self.view_poolings[view_index](slice_features)
+                pooled, weights = self.view_poolings[view_index](
+                    slice_features,
+                    return_weights=True,
+                )
 
             view_features.append(pooled)
+            slice_attention_weights.append(weights)
 
-        # Stack 视角特征: 3 × (B, 512) → (B, 3, 512)
+        # Stack view features: 3 x (B, 512) -> (B, 3, 512)
         stacked = torch.stack(view_features, dim=1)
 
-        # Cross-View Attention: (B, 3, 512) → (B, 3, 512)
+        # Cross-View Attention: (B, 3, 512) -> (B, 3, 512)
         enhanced = self.cross_view_attention(stacked)
 
-        # Flatten: (B, 3, 512) → (B, 1536)
+        # Flatten: (B, 3, 512) -> (B, 1536)
         fused = enhanced.reshape(batch_size, -1)
 
-        # 分类
-        return self.classifier(fused)
+        # Classification
+        logits = self.classifier(fused)
+        return logits, {
+            "slice_attention_weights": torch.stack(slice_attention_weights, dim=1),
+        }
+
+    def forward_with_attention(
+        self,
+        images: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Run forward pass and return slice-level attention weights."""
+        return self._forward_impl(images)
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        """Run forward pass."""
+        logits, _ = self._forward_impl(images)
+        return logits

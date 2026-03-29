@@ -65,36 +65,20 @@ def parse_args() -> argparse.Namespace:
 # ==================== 数据加载与划分 ====================
 
 
-def load_and_split_dataframe(csv_path: str, seed: int, val_ratio: float):
-    """
-    从 CSV 文件中加载数据，并划分为训练集、验证集、测试集。
-
-    CSV 文件必须包含以下列：
-        - patient_id:    病人 ID
-        - label:         标签（0=正常，1=异常）
-        - axial_dir:     轴状面切片目录
-        - coronal_dir:   冠状面切片目录
-        - sagittal_dir:  矢状面切片目录
-
-    划分方式有两种：
-        1. 如果 CSV 已经有 "split" 列（值为 "train"/"val"/"test"），就按这个列划分
-        2. 否则，自动按 val_ratio 比例随机划分（保持正负样本比例一致 = 分层抽样）
-
-    参数：
-        csv_path:  CSV 文件路径
-        seed:      随机种子（保证每次划分结果相同）
-        val_ratio: 验证集占总数据的比例（比如 0.2 表示 20%）
-
-    返回：
-        train_df, val_df, test_df 三个 DataFrame
-    """
+def load_and_split_dataframe(
+    csv_path: str,
+    seed: int,
+    val_ratio: float,
+    test_ratio: float = 0.0,
+    use_existing_split: bool = True,
+):
+    """Load a CSV file and split it into train/val/test dataframes."""
     df = canonicalize_view_columns(pd.read_csv(csv_path))
 
-    # 检查必须有的列是否存在
     required_columns = {
         "patient_id",
         "label",
-        *VIEW_COLUMNS,  # axial_dir, coronal_dir, sagittal_dir
+        *VIEW_COLUMNS,
     }
     missing = required_columns - set(df.columns)
     if missing:
@@ -102,8 +86,7 @@ def load_and_split_dataframe(csv_path: str, seed: int, val_ratio: float):
 
     df["label"] = df["label"].astype(int)
 
-    # 方式 1：如果 CSV 有 "split" 列，按它来划分
-    if "split" in df.columns:
+    if use_existing_split and "split" in df.columns:
         train_df = df[df["split"] == "train"].copy()
         val_df = df[df["split"] == "val"].copy()
         test_df = df[df["split"] == "test"].copy()
@@ -113,41 +96,61 @@ def load_and_split_dataframe(csv_path: str, seed: int, val_ratio: float):
             raise ValueError("When using a split column, provide at least val or test rows.")
         return train_df, val_df, test_df
 
-    # 方式 2：自动随机划分（分层抽样，保持正负样本比例一致）
+    if val_ratio < 0 or test_ratio < 0:
+        raise ValueError("val_ratio and test_ratio must be >= 0.")
+    if val_ratio + test_ratio >= 1.0:
+        raise ValueError("val_ratio + test_ratio must be < 1.")
+
+    if test_ratio > 0:
+        train_df, remaining_df = train_test_split(
+            df,
+            test_size=val_ratio + test_ratio,
+            stratify=df["label"],
+            random_state=seed,
+        )
+        relative_test_ratio = test_ratio / (val_ratio + test_ratio)
+        val_df, test_df = train_test_split(
+            remaining_df,
+            test_size=relative_test_ratio,
+            stratify=remaining_df["label"],
+            random_state=seed,
+        )
+        return (
+            train_df.reset_index(drop=True),
+            val_df.reset_index(drop=True),
+            test_df.reset_index(drop=True),
+        )
+
     train_df, val_df = train_test_split(
         df,
-        test_size=val_ratio,          # 验证集占比
-        stratify=df["label"],         # 按标签分层，保证训练集和验证集中正负比例一致
-        random_state=seed,            # 随机种子
+        test_size=val_ratio,
+        stratify=df["label"],
+        random_state=seed,
     )
     return train_df.reset_index(drop=True), val_df.reset_index(drop=True), pd.DataFrame()
 
 
 def build_dataloaders(config: dict):
-    """
-    根据配置文件创建数据加载器（DataLoader）。
-
-    DataLoader 的作用是：
-        - 把数据集中的样本自动分成一个个小批次（batch）
-        - 训练时自动打乱数据顺序（shuffle=True）
-        - 支持多线程预加载数据（num_workers）
-
-    返回：
-        train_loader: 训练数据加载器
-        val_loader:   验证数据加载器（可能为 None）
-        test_loader:  测试数据加载器（可能为 None）
-        train_df:     训练集的 DataFrame（后面计算类别权重要用）
-    """
+    """Build dataloaders from config."""
     data_cfg = config["data"]
 
-    # 加载 CSV 并划分数据集
     train_df, val_df, test_df = load_and_split_dataframe(
         csv_path=data_cfg["csv_path"],
         seed=config["seed"],
         val_ratio=data_cfg["val_ratio"],
+        test_ratio=data_cfg.get("test_ratio", 0.0),
+        use_existing_split=data_cfg.get("use_existing_split", True),
     )
 
-    # 所有数据集共用的参数
+    total_samples = len(train_df) + len(val_df) + len(test_df)
+    if total_samples > 0:
+        print(
+            "Dataset split: "
+            f"train={len(train_df)} ({len(train_df) / total_samples:.1%}), "
+            f"val={len(val_df)} ({len(val_df) / total_samples:.1%}), "
+            f"test={len(test_df)} ({len(test_df) / total_samples:.1%})"
+        )
+
     common_kwargs = {
         "base_dir": data_cfg["base_dir"],
         "image_size": data_cfg["image_size"],
@@ -157,36 +160,32 @@ def build_dataloaders(config: dict):
         "hu_max": data_cfg["hu_max"],
     }
 
-    # 创建 PyTorch 数据集对象
     train_dataset = PatientCTDataset(train_df, **common_kwargs)
     val_dataset = PatientCTDataset(val_df, **common_kwargs) if len(val_df) > 0 else None
     test_dataset = PatientCTDataset(test_df, **common_kwargs) if len(test_df) > 0 else None
 
-    batch_size = data_cfg["batch_size"]    # 每批处理多少个样本（比如 4）
-    num_workers = data_cfg["num_workers"]  # 用几个线程并行加载数据
-    pin_memory = torch.cuda.is_available()  # 如果有 GPU，开启 pin_memory 加速数据传输
+    batch_size = data_cfg["batch_size"]
+    num_workers = data_cfg["num_workers"]
+    pin_memory = torch.cuda.is_available()
 
-    # 创建训练集 DataLoader（训练时需要打乱数据顺序）
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,            # 打乱顺序！每个 epoch 数据顺序不同，防止模型记住顺序
+        shuffle=True,
         num_workers=num_workers,
         pin_memory=pin_memory,
     )
 
-    # 创建验证集 DataLoader（验证时不需要打乱）
     val_loader = None
     if val_dataset is not None:
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
-            shuffle=False,       # 不打乱
+            shuffle=False,
             num_workers=num_workers,
             pin_memory=pin_memory,
         )
 
-    # 创建测试集 DataLoader（如果有的话）
     test_loader = None
     if test_dataset is not None:
         test_loader = DataLoader(
@@ -198,9 +197,6 @@ def build_dataloaders(config: dict):
         )
 
     return train_loader, val_loader, test_loader, train_df
-
-
-# ==================== 模型构建 ====================
 
 
 def build_model(config: dict):
@@ -339,6 +335,58 @@ def evaluate(model, loader, criterion, device):
     return average_loss, metrics
 
 
+@torch.no_grad()
+def collect_attention_output(model, loader, device, view_index: int):
+    """Collect attention outputs for a given view."""
+    if loader is None or not hasattr(model, "forward_with_attention"):
+        return None
+
+    model.eval()
+    all_view_weights = []
+    example_rows = []
+
+    for batch in tqdm(loader, desc=f"attention_v{view_index + 1}", leave=False):
+        images = batch["images"].to(device)
+        labels = batch["label"]
+        patient_ids = batch["patient_id"]
+
+        logits, attention_info = model.forward_with_attention(images)
+        abnormal_probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+        view_weights = attention_info["slice_attention_weights"][:, view_index, :].cpu().numpy()
+        all_view_weights.append(view_weights)
+
+        remaining_examples = 5 - len(example_rows)
+        if remaining_examples > 0:
+            for patient_id, label, abnormal_prob, sample_weights in zip(
+                patient_ids[:remaining_examples],
+                labels[:remaining_examples].tolist(),
+                abnormal_probs[:remaining_examples].tolist(),
+                view_weights[:remaining_examples].tolist(),
+            ):
+                example_rows.append(
+                    {
+                        "patient_id": patient_id,
+                        "label": int(label),
+                        "abnormal_prob": float(abnormal_prob),
+                        "slice_weights": [float(weight) for weight in sample_weights],
+                    }
+                )
+
+    if not all_view_weights:
+        return None
+
+    stacked_weights = np.concatenate(all_view_weights, axis=0)
+    mean_slice_weights = stacked_weights.mean(axis=0)
+    return {
+        "view_index": int(view_index + 1),
+        "view_name": VIEW_COLUMNS[view_index].removesuffix("_dir"),
+        "num_samples": int(stacked_weights.shape[0]),
+        "top_slice_index": int(np.argmax(mean_slice_weights) + 1),
+        "mean_slice_weights": [float(weight) for weight in mean_slice_weights.tolist()],
+        "examples": example_rows,
+    }
+
+
 def score_for_model_selection(metrics: dict) -> float:
     """
     计算一个分数，用于选择"最佳模型"。
@@ -474,7 +522,25 @@ def main() -> None:
         _, final_test_metrics = evaluate(model, test_loader, criterion, device)
         summary["test"] = final_test_metrics
 
-    # 保存最终评估结果
+    attention_output_view = config["model"].get("attention_output_view")
+    if attention_output_view is not None:
+        view_index = int(attention_output_view) - 1
+        if not 0 <= view_index < len(VIEW_COLUMNS):
+            raise ValueError(
+                f"model.attention_output_view must be between 1 and {len(VIEW_COLUMNS)}."
+            )
+        attention_output = {
+            "view_index": int(attention_output_view),
+            "view_name": VIEW_COLUMNS[view_index].removesuffix("_dir"),
+        }
+        if val_loader is not None:
+            attention_output["val"] = collect_attention_output(model, val_loader, device, view_index)
+        if test_loader is not None:
+            attention_output["test"] = collect_attention_output(model, test_loader, device, view_index)
+        attention_output_path = output_dir / f"attention_view_{attention_output_view}.json"
+        save_json(attention_output, attention_output_path)
+        summary["attention_output_path"] = str(attention_output_path)
+
     save_json(summary, output_dir / "summary.json")
     print("\nTraining finished.")
     print(f"Summary saved to: {output_dir / 'summary.json'}")

@@ -35,7 +35,11 @@ class AttentionPooling(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_weights: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
         Parameters
         ----------
@@ -53,4 +57,6 @@ class AttentionPooling(nn.Module):
         weights = F.softmax(scores, dim=1)
         # (B, D)
         pooled = (x * weights).sum(dim=1)
+        if return_weights:
+            return pooled, weights.squeeze(-1)
         return pooled
