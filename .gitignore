@@ -5,3 +5,7 @@ runs/
 data/demo/
 data/realdata/
 .torch-cache/
+results.tsv
+run.log
+proxy.log
+formal.log

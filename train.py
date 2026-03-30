@@ -21,6 +21,7 @@ train.py — 模型训练主程序
 from __future__ import annotations
 
 import argparse         # 命令行参数解析
+import time
 from pathlib import Path
 
 import numpy as np
@@ -420,15 +421,22 @@ def main() -> None:
     # ---------- 第 1 步：读取配置 ----------
     args = parse_args()
     config = load_config(args.config)
+    run_start_time = time.perf_counter()
     set_seed(config["seed"])  # 固定随机种子，确保实验可重复
 
     # 创建输出目录（用来保存模型和结果）
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
+    for stale_name in ("best.pt", "history.json", "summary.json"):
+        stale_path = output_dir / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
 
     # 选择设备（自动检测是否有 GPU）
     device = choose_device(config["train"]["device"])
     print(f"Using device: {device}")
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
 
     # ---------- 第 2 步：加载数据 ----------
     train_loader, val_loader, test_loader, train_df = build_dataloaders(config)
@@ -541,9 +549,25 @@ def main() -> None:
         save_json(attention_output, attention_output_path)
         summary["attention_output_path"] = str(attention_output_path)
 
+    total_seconds = time.perf_counter() - run_start_time
+    peak_vram_mb = float("nan")
+    if device.type == "cuda":
+        peak_vram_mb = float(torch.cuda.max_memory_allocated(device) / (1024 ** 2))
+    summary["runtime"] = {
+        "total_seconds": total_seconds,
+        "peak_vram_mb": peak_vram_mb,
+    }
+
+    # 保存最终评估结果
     save_json(summary, output_dir / "summary.json")
     print("\nTraining finished.")
     print(f"Summary saved to: {output_dir / 'summary.json'}")
+    if "best_val" in summary:
+        print(f"best_val_auc={summary['best_val'].get('auc', float('nan')):.6f}")
+        print(f"best_val_f1={summary['best_val'].get('f1', float('nan')):.6f}")
+        print(f"best_val_accuracy={summary['best_val'].get('accuracy', float('nan')):.6f}")
+    print(f"peak_vram_mb={peak_vram_mb:.1f}")
+    print(f"total_seconds={total_seconds:.1f}")
 
 
 # ==================== 入口点 ====================
