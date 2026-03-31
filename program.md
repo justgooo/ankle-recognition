@@ -2,7 +2,11 @@
 
 这个仓库已经为踝关节 CT 分类器配置好了 autoresearch 风格的实验流程。
 整体思路与 `karpathy/autoresearch` 相同，但适配了这个医学影像项目、
-它的评估指标，以及当前的 Windows/PowerShell 环境。
+它的评估指标，以及当前这台 Windows + NVIDIA CUDA 工作站环境。
+
+本文中的命令默认都在仓库根目录的 PowerShell 中执行，并统一使用
+`.\.venv\Scripts\python.exe`。不要直接使用系统 PATH 里的 `python.exe`：
+当前系统 Python 没有安装 `torch`，训练环境在项目 `.venv` 里。
 
 ## 目标
 
@@ -17,21 +21,28 @@
 ## 硬件限制
 
 - 操作系统：Windows，Shell：PowerShell
-- CPU：AMD；GPU：AMD Radeon RX 6700 XT（12GB 显存）
-- **当前仅使用 CPU 训练**（RX 6700 XT 在 Windows 上无可用的 PyTorch GPU 加速方案）
-- 系统内存 16GB
-- batch_size 不得超过 2（proxy）或 2（formal）；如果 OOM 则降至 1
-- 不要尝试 resnet34/50 等更大的骨干网络，resnet18 是上限
-- 每次实验前确认没有残留的大 checkpoint 文件占满磁盘
+- CPU：13th Gen Intel(R) Core(TM) i5-13490F（10 核 / 16 线程）
+- GPU：NVIDIA GeForce RTX 2070 SUPER（8GB 显存，CUDA 可用，驱动 581.80）
+- 系统内存：32GB
+- 训练默认走 `.venv` 中的 PyTorch CUDA 环境（`torch 2.10.0+cu130`，`device: auto` 会选 `cuda`）
+- 当前 `autoresearch_proxy` 最近一次实测：`peak_vram_mb ≈ 1782.6`，`total_seconds ≈ 1708.8`（约 28.5 分钟）
+- 当前 `autoresearch_formal` 最近一次实测：`peak_vram_mb ≈ 5725.3`，`total_seconds ≈ 5964.6`（约 99.4 分钟）
+- 在当前 8GB 显存设备上，`batch_size=2` 已验证可稳定运行；如果你增大 `image_size`、`num_slices_per_view` 或模型规模，优先先降到 1
+- 在 attention + formal（256 / 32 slices / 10 epochs）配置下，不要尝试 resnet34/50 等更大的骨干网络，`resnet18` 仍是默认上限
+- 每次实验前确认 `runs/` 下没有残留的大 checkpoint 文件，并顺手检查 C 盘剩余空间
 
 ## 准备工作
 
 开始一次新的运行时，需要与用户一起完成以下事项：
 
-1. 根据本地日期确定一个运行标签，例如 `2026-03-30-ankle`。
+1. 根据本地日期确定一个运行标签，例如 `2026-03-31-ankle`。
 2. 基于当前主分支创建一个新的分支：
    - `git checkout -b autoresearch/<tag>`
-3. 阅读以下范围内的文件，获得完整上下文：
+3. 先确认训练环境可用：
+   - `Test-Path .\.venv\Scripts\python.exe`
+   - `.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"`
+   - 如果 `torch.cuda.is_available()` 不是 `True`，先停下来修环境，不要盲跑 CPU
+4. 阅读以下范围内的文件，获得完整上下文：
    - `README.md`
    - `train.py`
    - `src/model.py`
@@ -39,16 +50,16 @@
    - `src/cross_view_attention.py`
    - `configs/autoresearch_proxy.yaml`
    - `configs/autoresearch_formal.yaml`
-4. 确认数据已经准备就绪：
+5. 确认数据已经准备就绪：
    - 必须存在 `data/realdata/metadata.csv`。
    - 其中必须包含 `patient_id`、`label`、`axial_dir`、`coronal_dir`、`sagittal_dir`。
    - 如果存在 `split` 字段，它应该已经固定为 `train` / `val` / `test`。
    - 如果缺少 `metadata.csv`，但原始 NIfTI 文件已经位于 `data/realdata/` 下，
      则使用下面的命令生成模板：
-     - `python tools/create_realdata_metadata.py --input_dir data/realdata --output_csv data/realdata/metadata.csv`
+     - `.\.venv\Scripts\python.exe tools/create_realdata_metadata.py --input_dir data/realdata --output_csv data/realdata/metadata.csv`
    - 如果缺少标签或数据划分，先停止实验，并请人工补全后再继续。
-5. 如果 `results.tsv` 不存在，就初始化它。文件中应该只包含表头这一行。
-6. 确认以上准备完成后，再开始实验。
+6. 如果 `results.tsv` 不存在，就初始化它。文件中应该只包含表头这一行。
+7. 确认以上准备完成后，再开始实验。
 
 ## 允许修改的范围
 
@@ -77,7 +88,7 @@
 第一次运行必须是没有任何实验性改动的基线版本：
 
 ```powershell
-python train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
+.\.venv\Scripts\python.exe train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
 ```
 
 然后读取：
@@ -123,7 +134,7 @@ commit	val_auc	val_f1	memory_gb	status	config	description
 2. 在允许修改的范围内做一项实验性改动。
 3. 在运行前先提交这次实验改动。
 4. 运行 proxy 实验：
-   - `python train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1`
+   - `.\.venv\Scripts\python.exe train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1`
 5. 如果运行崩溃：
    - 用 `Get-Content run.log -Tail 30` 查看最后几行（不要读整个日志）
    - 如果是 OOM → 在 description 中记录大致内存用量，标记为 `crash`
@@ -137,7 +148,7 @@ commit	val_auc	val_f1	memory_gb	status	config	description
    - 如果 `best_val.auc` 持平，优先选择更简单的代码
    - 否则回退这次实验
 7. 每出现 3 次 proxy 胜出后，做一次 formal 确认：
-   - `python train.py --config configs/autoresearch_formal.yaml > formal.log 2>&1`
+   - `.\.venv\Scripts\python.exe train.py --config configs/autoresearch_formal.yaml > formal.log 2>&1`
    - 读取 `runs/autoresearch_formal/summary.json`
    - 如果 formal 运行也提升了，就把这个提交视为新的 formal 最优结果
    - 如果 proxy 提升了，但 formal 明显退化，则优先保留上一个 formal 最优结果
@@ -147,14 +158,14 @@ commit	val_auc	val_f1	memory_gb	status	config	description
 
 ## 超时规则
 
-- proxy 实验（4 epochs）预期用时约 **36 分钟**
-- 超时阈值：**75 分钟**。如果一次 proxy 运行超过 75 分钟还未结束，终止它并视为失败
-- formal 实验（10 epochs）预期用时约 **1.5 小时**
-- 超时阈值：**3 小时**
+- proxy 实验（4 epochs）在当前机器上实测约 **28-30 分钟**
+- 超时阈值：**60 分钟**。如果一次 proxy 运行超过 60 分钟还未结束，终止它并视为失败
+- formal 实验（10 epochs）在当前机器上实测约 **95-105 分钟**
+- 超时阈值：**150 分钟**
 - 使用以下方式监控运行时间：
   ```powershell
-  $proc = Start-Process python -ArgumentList "train.py","--config","configs/autoresearch_proxy.yaml" -RedirectStandardOutput run.log -RedirectStandardError err.log -PassThru
-  if (-not $proc.WaitForExit(4500000)) { $proc.Kill(); Write-Host "TIMEOUT" }
+  $proc = Start-Process .\.venv\Scripts\python.exe -ArgumentList "train.py","--config","configs/autoresearch_proxy.yaml" -RedirectStandardOutput run.log -RedirectStandardError err.log -PassThru
+  if (-not $proc.WaitForExit(3600000)) { $proc.Kill(); Write-Host "TIMEOUT" }
   ```
 
 ## 简洁性原则
@@ -219,7 +230,7 @@ commit	val_auc	val_f1	memory_gb	status	config	description
 - 如果系统内存使用率超过 90%，标记为 crash 并回退
 - 如果训练 loss 在前 2 个 epoch 完全没有下降，可以提前终止该实验
 - 每次实验结束后确认 `runs/` 目录下没有残留的大 checkpoint 积累
-- 定期检查磁盘空间：`Get-PSDrive X | Select-Object Free`
+- 定期检查磁盘空间：`Get-PSDrive C | Select-Object Free`
 
 ## 实践经验
 
@@ -227,3 +238,4 @@ commit	val_auc	val_f1	memory_gb	status	config	description
 - 关键杠杆点是 `program.md`，不是在每次运行之间随意手工调整。
 - 说明应该具体、简单，并且始终围绕可衡量的验证集 AUC 变化。
 - 如果某条实验路线反复失败，就换个方向，不要硬推下去。
+
