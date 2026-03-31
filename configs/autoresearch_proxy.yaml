@@ -21,14 +21,14 @@ model:
   fusion_type: attention
   share_backbone: true
   use_pretrained: true
-  fusion_hidden_dim: 256
+  fusion_hidden_dim: 384
   dropout: 0.3
   cross_view_heads: 4
   cross_view_layers: 2
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
   device: auto
