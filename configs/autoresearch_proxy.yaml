@@ -1,4 +1,4 @@
-﻿# Fast proxy config for autoresearch-style iteration.
+# Fast proxy config for autoresearch-style iteration.
 # Keep this fixed during proxy experimentation unless the change itself is the experiment.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
@@ -21,7 +21,7 @@ model:
   fusion_type: attention
   share_backbone: true
   use_pretrained: true
-  fusion_hidden_dim: 384
+  fusion_hidden_dim: 256
   dropout: 0.3
   cross_view_heads: 4
   cross_view_layers: 2
@@ -32,4 +32,3 @@ train:
   weight_decay: 0.0001
   class_weight: true
   device: auto
-
