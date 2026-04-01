@@ -30,3 +30,4 @@ train:
   weight_decay: 0.0001
   class_weight: true
   device: auto
+  augmentation: true
