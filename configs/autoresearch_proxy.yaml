@@ -31,4 +31,3 @@ train:
   class_weight: true
   device: auto
   augmentation: true
-  gradient_clip_norm: 1.0
