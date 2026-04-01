@@ -1,0 +1,19 @@
+﻿1de51f8 autoresearch: restore best proxy config after sweep
+0a25c02 autoresearch: widen proxy fusion head to 384
+8e4c0ee autoresearch: lower proxy lr to 5e-5
+1376565 autoresearch: reset dropout; raise proxy lr to 3e-4
+56387af autoresearch: proxy dropout 0.2 -> 0.4
+ae1f941 docs: align program with current device
+5cdf99f autoresearch: proxy dropout 0.3 -> 0.2
+1f9dc94 autoresearch: set formal cross-view heads to 4
+c5a42a8 autoresearch: reduce proxy cross-view heads to 4
+42f682b Add autoresearch configs and runtime reporting
+d706d4b Update project documentation
+d9fa8f7 chore: add fixed-split attention experiment summary
+57b31b3 docs: use html table for summary comparison
+a7f3d6e docs: add experiment comparison table to summary
+e120c4f feat: add full-data attention training config
+77459e2 docs: refresh README setup and usage guide
+9bee490 docs: update threshold summary and add formal attention config
+3781377 docs: sync project documentation and update configs
+01f1fa0 Initial commit
