@@ -1,7 +1,5 @@
-# Fast proxy config for autoresearch-style iteration.
-# Primary: Feature Fusion with non-shared backbone.
-experiment_name: autoresearch_proxy
-output_dir: runs/autoresearch_proxy
+experiment_name: autoresearch_proxy_feature_dropout_04
+output_dir: runs/autoresearch_proxy_feature_dropout_04
 seed: 42
 
 data:
@@ -19,10 +17,10 @@ data:
 model:
   backbone: resnet18
   fusion_type: feature
-  share_backbone: false
+  share_backbone: true
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.4
 
 train:
   epochs: 4

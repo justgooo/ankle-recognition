@@ -1,4 +1,5 @@
 # Slower confirmation config for promising proxy winners.
+# Primary: Feature Fusion with non-shared backbone.
 experiment_name: autoresearch_formal
 output_dir: runs/autoresearch_formal
 seed: 42
@@ -17,16 +18,14 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: attention
-  share_backbone: true
+  fusion_type: feature
+  share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
   dropout: 0.3
-  cross_view_heads: 4
-  cross_view_layers: 2
 
 train:
-  epochs: 10
+  epochs: 15
   lr: 0.0001
   weight_decay: 0.0001
   class_weight: true

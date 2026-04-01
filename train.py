@@ -44,6 +44,37 @@ from src.utils import (
 )
 
 
+
+
+# ==================== 数据增强 ====================
+
+
+def apply_augmentation(images: torch.Tensor) -> torch.Tensor:
+    """对一个 batch 的 CT 图像做随机增强（仅训练时调用）。
+
+    Args:
+        images: (B, V, S, H, W) 张量，已在 device 上。
+
+    Returns:
+        增强后的图像张量，形状不变。
+    """
+    import torchvision.transforms.functional as TF
+
+    # 随机水平翻转 (p=0.5)
+    if torch.rand(1).item() < 0.5:
+        images = images.flip(-1)
+
+    # 随机旋转 ±10 度
+    angle = (torch.rand(1).item() - 0.5) * 20  # [-10, 10]
+    if abs(angle) > 0.5:
+        B, V, S, H, W = images.shape
+        flat = images.reshape(B * V * S, 1, H, W)
+        flat = TF.rotate(flat, angle)
+        images = flat.reshape(B, V, S, H, W)
+
+    return images
+
+
 # ==================== 命令行参数 ====================
 
 
@@ -241,10 +272,34 @@ def build_model(config: dict):
     )
 
 
+def build_scheduler(config: dict, optimizer):
+    """Build an optional learning-rate scheduler from config."""
+    train_cfg = config["train"]
+    scheduler_name = train_cfg.get("scheduler")
+    if scheduler_name in (None, "", "none"):
+        return None
+
+    if scheduler_name == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=int(train_cfg.get("scheduler_t_max", train_cfg["epochs"])),
+            eta_min=float(train_cfg.get("scheduler_eta_min", 0.0)),
+        )
+
+    raise ValueError(
+        "Unsupported train.scheduler. Expected one of: none, cosine."
+    )
+
+
+def get_current_lr(optimizer) -> float:
+    """Get current learning rate from optimizer."""
+    return float(optimizer.param_groups[0]["lr"])
+
+
 # ==================== 训练逻辑 ====================
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device):
+def train_one_epoch(model, loader, criterion, optimizer, device, gradient_clip_norm=None, augmentation=False):
     """
     训练一个 epoch（遍历一遍所有训练数据）。
 
@@ -274,6 +329,10 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
         images = batch["images"].to(device)  # 把图像数据传到 GPU（如果有的话）
         labels = batch["label"].to(device)   # 标签也传到 GPU
 
+        # ---------- 数据增强（仅训练时） ----------
+        if augmentation:
+            images = apply_augmentation(images)
+
         # ---------- 前向传播 ----------
         optimizer.zero_grad()     # 清零上一步的梯度（不清零会累加）
         logits = model(images)    # 模型预测，得到 (B, 2) 的分数
@@ -281,6 +340,11 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
 
         # ---------- 反向传播 + 参数更新 ----------
         loss.backward()           # 反向传播：自动计算每个参数的梯度
+
+        # ---------- 梯度裁剪 ----------
+        if gradient_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
+
         optimizer.step()          # 根据梯度更新模型参数
 
         # ---------- 记录损失 ----------
@@ -447,11 +511,14 @@ def main() -> None:
     # ---------- 第 4 步：设置损失函数 ----------
     # CrossEntropyLoss = 交叉熵损失，用于分类任务
     # 如果数据不平衡（正常样本 >> 异常样本），可以给少数类更高的权重
+    label_smoothing = float(config["train"].get("label_smoothing", 0.0))
     if config["train"]["class_weight"]:
         class_weights = compute_class_weights(train_df["label"].to_numpy()).to(device)
-        criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
+        criterion = torch.nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
     else:
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    if label_smoothing > 0:
+        print(f"Label smoothing enabled: {label_smoothing}")
 
     # ---------- 第 5 步：设置优化器 ----------
     # Adam 优化器：自动调整学习率的优化算法
@@ -462,6 +529,22 @@ def main() -> None:
         lr=config["train"]["lr"],              # 学习率
         weight_decay=config["train"]["weight_decay"],  # 权重衰减
     )
+    scheduler = build_scheduler(config, optimizer)
+
+
+    # ---------- 训练策略配置 ----------
+    gradient_clip_norm = config["train"].get("gradient_clip_norm")
+    if gradient_clip_norm is not None:
+        gradient_clip_norm = float(gradient_clip_norm)
+        print(f"Gradient clipping enabled: max_norm={gradient_clip_norm}")
+    augmentation_enabled = bool(config["train"].get("augmentation", False))
+    if augmentation_enabled:
+        print("Data augmentation enabled (random flip + rotation)")
+    early_stopping_patience = config["train"].get("early_stopping_patience")
+    if early_stopping_patience is not None:
+        early_stopping_patience = int(early_stopping_patience)
+        print(f"Early stopping enabled: patience={early_stopping_patience}")
+    epochs_without_improvement = 0
 
     # ---------- 第 6 步：训练循环 ----------
     history = []         # 记录每个 epoch 的训练历史
@@ -470,10 +553,15 @@ def main() -> None:
 
     for epoch in range(1, config["train"]["epochs"] + 1):
         print(f"\nEpoch {epoch}/{config['train']['epochs']}")
+        current_lr = get_current_lr(optimizer)
 
         # 训练一轮
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        record = {"epoch": epoch, "train_loss": train_loss}
+        train_loss = train_one_epoch(
+            model, train_loader, criterion, optimizer, device,
+            gradient_clip_norm=gradient_clip_norm,
+            augmentation=augmentation_enabled,
+        )
+        record = {"epoch": epoch, "train_loss": train_loss, "lr": current_lr}
 
         # 在验证集上评估
         if val_loader is not None:
@@ -486,12 +574,12 @@ def main() -> None:
                 }
             )
             print(
-                f"train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
+                f"lr={current_lr:.6g} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
                 f"val_auc={val_metrics['auc']:.4f} | val_acc={val_metrics['accuracy']:.4f}"
             )
             current_score = score_for_model_selection(val_metrics)
         else:
-            print(f"train_loss={train_loss:.4f}")
+            print(f"lr={current_lr:.6g} | train_loss={train_loss:.4f}")
             current_score = -train_loss  # 没有验证集时，用训练损失的负值作为分数（损失越小分数越高）
 
         history.append(record)
@@ -499,6 +587,7 @@ def main() -> None:
         # 如果当前模型比历史最佳还好，就保存它
         if current_score > best_score:
             best_score = current_score
+            epochs_without_improvement = 0
             torch.save(
                 {
                     "model_state_dict": model.state_dict(),  # 保存模型参数
@@ -507,6 +596,16 @@ def main() -> None:
                 best_path,
             )
             print(f"Saved best model to: {best_path}")
+        else:
+            epochs_without_improvement += 1
+
+        # Early stopping
+        if early_stopping_patience is not None and epochs_without_improvement >= early_stopping_patience:
+            print(f"\nEarly stopping at epoch {epoch} (no improvement for {early_stopping_patience} epochs)")
+            break
+
+        if scheduler is not None:
+            scheduler.step()
 
     # ---------- 第 7 步：保存训练历史 ----------
     save_json({"history": history}, output_dir / "history.json")
