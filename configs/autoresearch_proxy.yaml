@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: View Reliability Gating (Scheme 2) VRG-05 dropout=0.2.
+# Experiment: View Reliability Gating (Scheme 2) VRG-06 dropout=0.4.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -22,7 +22,7 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.2
+  dropout: 0.4
 
 train:
   epochs: 4
