@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: Decision Fusion proxy fusion_hidden_dim=384 using the current best 4-epoch settings from 7b184e0.
+# Experiment: Feature Fusion conservative combination (aug=true, label_smoothing=0.05, gradient_clip_norm=0.5).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -18,10 +18,10 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision
+  fusion_type: feature
   share_backbone: false
   use_pretrained: true
-  fusion_hidden_dim: 384
+  fusion_hidden_dim: 256
   dropout: 0.3
 
 train:
@@ -31,4 +31,5 @@ train:
   class_weight: true
   device: auto
   augmentation: true
-  label_smoothing: 0.0
+  label_smoothing: 0.05
+  gradient_clip_norm: 0.5
