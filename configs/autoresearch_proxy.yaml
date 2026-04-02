@@ -22,7 +22,7 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.4
+  dropout: 0.3
 
 train:
   epochs: 4
@@ -31,4 +31,4 @@ train:
   class_weight: true
   device: auto
   augmentation: true
-  label_smoothing: 0.05
+  label_smoothing: 0.1
