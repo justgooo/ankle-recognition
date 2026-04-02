@@ -278,13 +278,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # view(1, -1, 1) 把形状变成 (1, 3, 1)，方便广播乘法
         fusion_weights = torch.softmax(self.view_weight_logits, dim=0).view(1, -1, 1)
 
-        # 第 4 步：在概率空间做加权投票，再转回 log-probabilities
-        # 直接加权 logits 不是严格的“投票”。
-        # 这里先把每个视角的 logits 转成概率，再做加权平均，
-        # 最后取 log 得到可直接喂给 CrossEntropyLoss 的输出。
-        view_probs = torch.softmax(view_logits, dim=-1)
-        fused_probs = (view_probs * fusion_weights).sum(dim=1).clamp_min(1e-8)
-        return fused_probs.log()
+        # 第 4 步：加权求和
+        # (B, 3, 2) × (1, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
+        return (view_logits * fusion_weights).sum(dim=1)
 
 
 class MultiViewAttentionClassifier(nn.Module):
