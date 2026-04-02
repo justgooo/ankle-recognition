@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: View Reliability Gating (Scheme 2) VRG-03 lr=7e-5.
+# Experiment: View Reliability Gating (Scheme 2) VRG-04 lr=3e-4.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -26,7 +26,7 @@ model:
 
 train:
   epochs: 4
-  lr: 0.00007
+  lr: 0.0003
   weight_decay: 0.0001
   class_weight: true
   device: auto
