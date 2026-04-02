@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: Feature Fusion conservative combination (aug=true, label_smoothing=0.05, gradient_clip_norm=0.5).
+# Experiment: Feature Fusion low-priority early-stopping confirmation (aug=true, label_smoothing=0.05, patience=5).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -32,4 +32,4 @@ train:
   device: auto
   augmentation: true
   label_smoothing: 0.05
-  gradient_clip_norm: 0.5
+  early_stopping_patience: 5
