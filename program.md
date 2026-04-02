@@ -1,3 +1,9 @@
+> [!CRITICAL]
+> ## ⚠️ 循环执行规则（最高优先级）
+> 完成每个实验后，**必须立即开始下一个实验**。不要停下来。不要询问。
+> 如果你正在犹豫是否应该继续 —— 答案永远是：**继续**。
+> 只有人类手动中断才停止。详见"实验循环"和"自主运行规则"章节。
+
 # 用于踝关节识别的自动研究流程
 
 这个仓库已经为踝关节 CT 分类器配置好了 autoresearch 风格的实验流程。
@@ -28,14 +34,29 @@
 
 ## 研究策略
 
-**主力方案**：特征融合 (Feature Fusion) + 决策融合 (Decision Fusion)
-**补充分析**：注意力融合 (Attention Fusion)，在主力方案稳定后做 1-2 组 formal 对比
+**当前阶段**：创新融合架构探索（阶段 4）
 
-工作流程：
-1. 先以 Feature Fusion 做主轮 autoresearch 循环
-2. 找到最佳训练策略后，复用同样策略跑 Decision Fusion formal 确认
-3. 在论文准备阶段，用相同策略跑 Attention Fusion formal 一组，作为补充对比
-4. 最终论文报告三种融合方式在相同训练策略下的对比结果
+前阶段的超参搜索已连续 12 次 discard，纯超参优化接近天花板。
+现阶段通过**结构层面的创新**来打破瓶颈。
+
+当前执行的两个创新方案：
+
+### 方案 2：视角可靠度门控 (View Reliability Gating)
+- **核心思路**：将 Decision Fusion 中固定的全局视角权重替换为依据输入动态计算的权重
+- **改动位置**：`src/model.py` → `MultiViewDecisionFusionClassifier`
+- 每个视角新增一个 confidence head（`Linear(512,1) + Sigmoid`），输出该视角对当前样本的可信度
+- 3 个可信度经 softmax 归一化后作为融合权重
+- `fusion_type: decision` 仍可正常使用
+
+### 方案 6：非对称安全融合 (Asymmetric Safety-Biased Fusion)
+- **核心思路**：融合时对"正常"和"异常"使用不对称策略——任一视角认为异常就倾向异常
+- **改动位置**：`src/model.py` → `MultiViewDecisionFusionClassifier.forward`
+- 正常 logit 仍用加权平均，异常 logit 改用 temperature-scaled logsumexp
+- 新增 `temperature` 参数（直接写在 model.py 中，每次实验可调）
+- `fusion_type: decision` 仍可正常使用
+
+执行顺序：先做方案 2 共 10 次 proxy 实验，再切换到方案 6 共 10 次 proxy 实验。
+
 
 ## 硬件限制
 
@@ -61,6 +82,7 @@
    - `.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"`
    - 如果 `torch.cuda.is_available()` 不是 `True`，先停下来修环境，不要盲跑 CPU
 4. 阅读以下文件获取完整上下文：
+   - `backlog.md`（**必须最先读**，了解当前最优纪录、待办优先级和已完成实验）
    - `README.md`
    - `train.py`
    - `src/model.py`
@@ -84,6 +106,9 @@
 
 你可以追加写入：
 - `results.tsv`
+
+你可以读取和更新（按维护规则）：
+- `backlog.md`（实验待办清单，每次实验后必须更新）
 
 不要修改：
 - `train.py`（训练策略增强已内置，通过配置控制）
@@ -161,6 +186,12 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 完成准备后，持续循环执行：
 
+> **重要**：每完成一个实验后，必须更新 `backlog.md`：
+> - keep 的实验：更新“当前最优纪录”表格，将实验从待办移到“已完成”并标注结果
+> - discard 的实验：将实验移到“已完成”并标注结果
+> - 如果结果带来新的实验思路，添加到 backlog 对应优先级
+> - 连续 3 个 discard 后，重新审视 backlog 待办清单
+
 1. 检查当前分支和提交。
 2. 在允许修改的范围内做一项实验性改动。
 3. 在运行前先提交这次实验改动。
@@ -210,24 +241,36 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 ## 实验优先级
 
-以 Feature Fusion 为主，优先做高信号、低风险的实验：
+### 阶段 4A：方案 2 — 视角可靠度门控 (View Reliability Gating)
 
-1. 学习率调优（5e-5 / 7e-5 / 1e-4 / 3e-4）
-2. Dropout 比率（0.2 / 0.3 / 0.4 / 0.5）
-3. CosineAnnealingLR 调度器（搭配 eta_min 参数）
-4. 数据增强开关（`train.augmentation: true`）
-5. 梯度裁剪（`train.gradient_clip_norm: 1.0 / 0.5`）
-6. Label Smoothing（`train.label_smoothing: 0.05 / 0.1`）
-7. EarlyStopping（`train.early_stopping_patience: 5 / 10 / 15`）
-8. 权重衰减（`train.weight_decay: 1e-4 / 5e-4 / 1e-3`）
-9. `fusion_hidden_dim`（128 / 256 / 384）
-10. 增加 proxy epochs 至 6（如果 4 epochs 信号不稳定）
+基线配置沿用当前 Decision Fusion 最优策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0`
 
-当 Feature Fusion 优化告一段落后，对 Decision Fusion 做对比：
-- 用 Feature Fusion 找到的最佳超参（lr、dropout、scheduler 等）
-- 直接切换 `fusion_type` 为 `decision`，跑一组 formal 确认
+1. 纯 View Reliability Gating baseline（默认 dropout=0.3, lr=1e-4）
+2. lr=5e-5
+3. lr=7e-5
+4. lr=3e-4
+5. dropout=0.2
+6. dropout=0.4
+7. label_smoothing=0.05
+8. weight_decay=5e-4
+9. scheduler=cosine, T_max=4, eta_min=1e-6
+10. 基于前 9 次最佳方向的组合实验
 
-避免一次改动太多内容。
+### 阶段 4B：方案 6 — 非对称安全融合 (Asymmetric Safety-Biased Fusion)
+
+在 model.py 中切换为方案 6 后执行，基线同上。
+
+1. temperature=0.5（默认）
+2. temperature=1.0
+3. temperature=0.3
+4. temperature=2.0
+5. temperature=0.5 + lr=5e-5
+6. temperature=0.5 + dropout=0.2
+7. temperature=0.5 + label_smoothing=0.05
+8. temperature=1.0 + lr=7e-5
+9. temperature=0.3 + dropout=0.4
+10. 基于前 9 次最佳方向的组合实验
+
 
 ## 可使用的训练策略配置项
 
