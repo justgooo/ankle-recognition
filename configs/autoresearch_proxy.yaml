@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: Decision Fusion proxy + CosineAnnealingLR from the current zero-miss best baseline.
+# Primary: Decision Fusion with non-shared backbone using the current best feature-training strategy.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -32,6 +32,3 @@ train:
   device: auto
   augmentation: true
   label_smoothing: 0.0
-  scheduler: cosine
-  scheduler_t_max: 4
-  scheduler_eta_min: 0.000001
