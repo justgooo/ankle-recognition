@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: Decision Fusion with smaller classifier head (fusion_hidden_dim=128).
+# Experiment: Decision Fusion 6-epoch proxy recheck using the current best settings from 7b184e0.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -21,11 +21,11 @@ model:
   fusion_type: decision
   share_backbone: false
   use_pretrained: true
-  fusion_hidden_dim: 128
+  fusion_hidden_dim: 256
   dropout: 0.3
 
 train:
-  epochs: 4
+  epochs: 6
   lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
