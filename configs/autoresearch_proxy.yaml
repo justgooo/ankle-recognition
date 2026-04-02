@@ -22,7 +22,7 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.2
 
 train:
   epochs: 4
