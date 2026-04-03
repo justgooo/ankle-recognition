@@ -34,28 +34,19 @@
 
 ## 研究策略
 
-**当前阶段**：创新融合架构探索（阶段 4）
+**当前阶段**：AttentionPooling 增强实验（阶段 5）
 
-前阶段的超参搜索已连续 12 次 discard，纯超参优化接近天花板。
-现阶段通过**结构层面的创新**来打破瓶颈。
+前阶段（阶段 4）的架构创新（View Reliability Gating + Asymmetric Safety-Biased Fusion）
+已各完成 10 次 proxy 实验但均未超过当前最优 0.787。
+现阶段将 Feature Fusion 和 Decision Fusion 的切片聚合从简单 mean pooling
+升级为**可学习 AttentionPooling**，让模型自动聚焦关键切片。
 
-当前执行的两个创新方案：
-
-### 方案 2：视角可靠度门控 (View Reliability Gating)
-- **核心思路**：将 Decision Fusion 中固定的全局视角权重替换为依据输入动态计算的权重
-- **改动位置**：`src/model.py` → `MultiViewDecisionFusionClassifier`
-- 每个视角新增一个 confidence head（`Linear(512,1) + Sigmoid`），输出该视角对当前样本的可信度
-- 3 个可信度经 softmax 归一化后作为融合权重
-- `fusion_type: decision` 仍可正常使用
-
-### 方案 6：非对称安全融合 (Asymmetric Safety-Biased Fusion)
-- **核心思路**：融合时对"正常"和"异常"使用不对称策略——任一视角认为异常就倾向异常
-- **改动位置**：`src/model.py` → `MultiViewDecisionFusionClassifier.forward`
-- 正常 logit 仍用加权平均，异常 logit 改用 temperature-scaled logsumexp
-- 新增 `temperature` 参数（直接写在 model.py 中，每次实验可调）
-- `fusion_type: decision` 仍可正常使用
-
-执行顺序：先做方案 2 共 10 次 proxy 实验，再切换到方案 6 共 10 次 proxy 实验。
+### AttentionPooling 增强
+- **核心思路**：用可学习注意力替代 mean pooling，对 S 个切片加权聚合
+- **改动位置**：`src/model.py` → `MultiViewEncoder.encode_views`
+- 通过 YAML 配置 `model.use_attention_pooling: true` 启用
+- Feature Fusion 和 Decision Fusion 均支持
+- 执行顺序：先做 Feature Fusion 8 次 proxy，再做 Decision Fusion 8 次 proxy
 
 
 ## 硬件限制
@@ -241,35 +232,43 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 ## 实验优先级
 
-### 阶段 4A：方案 2 — 视角可靠度门控 (View Reliability Gating)
+### 阶段 4A：方案 2 — 视角可靠度门控 (View Reliability Gating) ✅ 已完成
 
-基线配置沿用当前 Decision Fusion 最优策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0`
+（10 次 proxy 实验已完结）
 
-1. 纯 View Reliability Gating baseline（默认 dropout=0.3, lr=1e-4）
-2. lr=5e-5
-3. lr=7e-5
-4. lr=3e-4
-5. dropout=0.2
-6. dropout=0.4
-7. label_smoothing=0.05
-8. weight_decay=5e-4
-9. scheduler=cosine, T_max=4, eta_min=1e-6
-10. 基于前 9 次最佳方向的组合实验
+### 阶段 4B：方案 6 — 非对称安全融合 (Asymmetric Safety-Biased Fusion) ✅ 已完成
 
-### 阶段 4B：方案 6 — 非对称安全融合 (Asymmetric Safety-Biased Fusion)
+（10 次 proxy 实验已完结）
 
-在 model.py 中切换为方案 6 后执行，基线同上。
+### 阶段 5：AttentionPooling 增强（Feature Fusion + Decision Fusion）🔴 当前执行中
 
-1. temperature=0.5（默认）
-2. temperature=1.0
-3. temperature=0.3
-4. temperature=2.0
-5. temperature=0.5 + lr=5e-5
-6. temperature=0.5 + dropout=0.2
-7. temperature=0.5 + label_smoothing=0.05
-8. temperature=1.0 + lr=7e-5
-9. temperature=0.3 + dropout=0.4
-10. 基于前 9 次最佳方向的组合实验
+> 给 Feature Fusion 和 Decision Fusion 的切片聚合从 mean pooling 升级为 AttentionPooling。
+> 通过 YAML 配置 `use_attention_pooling: true` 启用。
+> 基线配置沿用当前最佳策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3`
+
+#### 阶段 5A：Feature Fusion + AttentionPooling（8 次 proxy）
+
+1. **AP-FF-01**: baseline（fusion_type=feature, use_attention_pooling=true, lr=1e-4, dropout=0.3）
+2. **AP-FF-02**: lr=5e-5
+3. **AP-FF-03**: lr=7e-5
+4. **AP-FF-04**: dropout=0.2
+5. **AP-FF-05**: dropout=0.4
+6. **AP-FF-06**: label_smoothing=0.05
+7. **AP-FF-07**: lr=5e-5 + label_smoothing=0.05
+8. **AP-FF-08**: 基于前 7 次最佳方向的组合实验
+
+#### 阶段 5B：Decision Fusion + AttentionPooling（8 次 proxy）
+
+基线配置同上，切换 `fusion_type: decision`。
+
+1. **AP-DF-01**: baseline（fusion_type=decision, use_attention_pooling=true, lr=1e-4, dropout=0.3）
+2. **AP-DF-02**: lr=5e-5
+3. **AP-DF-03**: lr=7e-5
+4. **AP-DF-04**: dropout=0.2
+5. **AP-DF-05**: dropout=0.4
+6. **AP-DF-06**: label_smoothing=0.05
+7. **AP-DF-07**: lr=5e-5 + label_smoothing=0.05
+8. **AP-DF-08**: 基于前 7 次最佳方向的组合实验
 
 
 ## 可使用的训练策略配置项
@@ -285,6 +284,9 @@ train:
   early_stopping_patience: 10    # 早停的耐心值（默认不启用）
   label_smoothing: 0.1           # 标签平滑（默认 0.0）
   augmentation: true             # 数据增强：随机翻转+旋转±10°（默认 false）
+
+model:
+  use_attention_pooling: true     # 注意力池化（默认 false，替代 mean pooling）
 ```
 
 ## 如果陷入瓶颈

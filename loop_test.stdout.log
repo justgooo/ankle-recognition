@@ -1,0 +1,18 @@
+
+============================================================
+ Autoresearch Loop - Ankle CT Classifier
+ Max iterations: 1
+ Cooldown: 1s between experiments
+ Codex workdir: C:\Users\xxx\AppData\Local\Temp\codex-workspaces\ankle-ct-codex
+ Codex command: C:\Users\xxx\AppData\Roaming\npm\codex.cmd
+============================================================
+
+
+----------------------------------------
+ Iteration 1 / 1
+ 2026-04-02 11:09:46
+----------------------------------------
+  Disk free: 1263.4 GB
+  GPU memory used: 2140 MB
+  Starting Codex session...
+  Session log: .\autoresearch_logs\run_1_20260402_110946.log

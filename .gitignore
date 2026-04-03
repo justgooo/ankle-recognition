@@ -9,3 +9,5 @@ results.tsv
 run.log
 proxy.log
 formal.log
+*.err.log
+autoresearch_logs/
