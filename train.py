@@ -251,6 +251,7 @@ def build_model(config: dict):
         "use_pretrained": model_cfg["use_pretrained"],       # 是否使用预训练权重
         "fusion_hidden_dim": model_cfg["fusion_hidden_dim"], # 分类器隐藏层维度
         "dropout": model_cfg["dropout"],                     # Dropout 比率
+        "use_attention_pooling": model_cfg.get("use_attention_pooling", False),  # 注意力池化
     }
     fusion_type = model_cfg.get("fusion_type", "feature")
 
@@ -265,6 +266,8 @@ def build_model(config: dict):
             "cross_view_heads": model_cfg.get("cross_view_heads", 8),
             "cross_view_layers": model_cfg.get("cross_view_layers", 2),
         }
+        # MultiViewAttentionClassifier 内部自带 AttentionPooling，不需要此参数
+        attention_kwargs.pop("use_attention_pooling", None)
         return MultiViewAttentionClassifier(**attention_kwargs)
 
     raise ValueError(

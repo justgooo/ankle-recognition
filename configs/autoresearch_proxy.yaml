@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: ASF-06 Asymmetric Safety-Biased Fusion (temperature=0.5 + dropout=0.2).
+# Experiment: AP-FF-01 Feature Fusion + AttentionPooling baseline.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -18,11 +18,12 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision
+  fusion_type: feature
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.2
+  dropout: 0.3
+  use_attention_pooling: true
 
 train:
   epochs: 4

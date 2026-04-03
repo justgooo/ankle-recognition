@@ -6,14 +6,14 @@ model.py — 多视角 CT 分类模型
 整体思路：
     1. 一张 CT 扫描有 3 个视角（轴状面 / 冠状面 / 矢状面），每个视角有多张切片图像。
     2. 用 ResNet18（一种经典的图像识别网络）把每张切片提取成一个 512 维的特征向量。
-    3. 把同一个视角的所有切片特征取"平均"，得到该视角的代表特征。
+    3. 把同一个视角的所有切片特征聚合（mean pooling 或 AttentionPooling），得到该视角的代表特征。
     4. 把 3 个视角的特征拼起来，送进分类器（一个小的全连接网络），输出 2 个值：
        - 第 0 个值代表"正常"的概率
        - 第 1 个值代表"异常"的概率
 
 本文件包含以下类：
     - build_resnet18_encoder(): 构建 ResNet18 特征提取器
-    - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征）
+    - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征，支持 mean pooling 或 AttentionPooling）
     - MultiViewCTClassifier: 特征融合分类器（拼接 3 个视角特征后分类）
     - MultiViewDecisionFusionClassifier: 决策融合分类器（每个视角单独分类后加权投票）
 """
@@ -24,6 +24,8 @@ import torch  # type: ignore[import-not-found]          # PyTorch：深度学习
 import torch.nn as nn  # type: ignore[import-not-found]  # nn 模块：提供各种神经网络层（卷积、线性层等）
 from torchvision.models import ResNet18_Weights, resnet18  # type: ignore[import-not-found]
 # ↑ 从 torchvision 导入 ResNet18 预训练模型和对应的权重
+
+from .attention_pooling import AttentionPooling  # 可学习注意力池化模块
 
 
 def build_resnet18_encoder(use_pretrained: bool) -> nn.Module:
@@ -75,21 +77,26 @@ def build_resnet18_encoder(use_pretrained: bool) -> nn.Module:
 
 class MultiViewEncoder(nn.Module):
     """
-    多视角编码器 — 把 3 个视角的 CT 切片图像分别提取成特征向量。
+    多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
 
     CT 扫描通常有 3 个方向的视角：
-        - 轴状面 (Axial)    — 从上往下看
-        - 冠状面 (Coronal)  — 从前往后看
-        - 矢状面 (Sagittal) — 从侧面看
+        - 轴状面 (Axial)    - 从上往下看
+        - 冠状面 (Coronal)  - 从前往后看
+        - 矢状面 (Sagittal) - 从侧面看
 
     每个视角有多张切片（比如 16 张），这个类的作用就是：
-        对每个视角 → 把所有切片分别过 ResNet18 → 取平均 → 得到该视角的 512 维特征
+        对每个视角 -> 把所有切片分别过 ResNet18 -> 池化聚合 -> 得到该视角的 512 维特征
+
+    池化方式：
+        - use_attention_pooling=False（默认）：简单 mean pooling（对所有切片取平均）
+        - use_attention_pooling=True：AttentionPooling（用可学习注意力聚焦关键切片）
     """
 
     def __init__(
         self,
         share_backbone: bool = True,    # 3 个视角是否共享同一个 ResNet18
         use_pretrained: bool = False,    # 是否使用预训练权重
+        use_attention_pooling: bool = False,  # 是否使用注意力池化替代 mean pooling
     ) -> None:
         """
         参数：
@@ -97,9 +104,13 @@ class MultiViewEncoder(nn.Module):
                 - True（推荐）：3 个视角用同一个 ResNet18，参数量小，不容易过拟合
                 - False：每个视角有自己独立的 ResNet18（3 份参数），参数量更大
             use_pretrained: 是否使用 ImageNet 预训练权重
+            use_attention_pooling: 是否使用 AttentionPooling？
+                - True：用可学习注意力对切片加权聚合（能自动聚焦关键切片）
+                - False（默认）：用简单 mean pooling（对所有切片取平均）
         """
         super().__init__()
         self.share_backbone = share_backbone
+        self.use_attention_pooling = use_attention_pooling
         self.feature_dim = 512  # ResNet18 输出的特征维度固定为 512
 
         if share_backbone:
@@ -110,6 +121,17 @@ class MultiViewEncoder(nn.Module):
             self.view_encoders = nn.ModuleList(
                 [build_resnet18_encoder(use_pretrained=use_pretrained) for _ in range(3)]
             )
+
+        # ---------- 切片池化方式 ----------
+        if use_attention_pooling:
+            if share_backbone:
+                # 共享 backbone 时也共享 pooling 模块
+                self.shared_pooling = AttentionPooling(self.feature_dim)
+            else:
+                # 独立模式：每个视角有自己的 AttentionPooling
+                self.view_poolings = nn.ModuleList(
+                    [AttentionPooling(self.feature_dim) for _ in range(3)]
+                )
 
     def encode_views(self, images: torch.Tensor) -> list[torch.Tensor]:
         """
@@ -126,7 +148,7 @@ class MultiViewEncoder(nn.Module):
 
         返回：
             一个列表，包含 3 个张量，每个形状为 (B, 512)
-            分别代表 3 个视角各自的平均特征
+            分别代表 3 个视角各自的特征
         """
         # 从输入张量中提取各个维度的大小
         batch_size, num_views, num_slices, height, width = images.shape
@@ -150,9 +172,18 @@ class MultiViewEncoder(nn.Module):
             # 把它 reshape 回 (B, S, 512)，这样每个病人有 S 个切片各自的特征
             slice_features = slice_features.reshape(batch_size, num_slices, self.feature_dim)
 
-            # 对所有切片的特征取平均，得到该视角的代表性特征
-            # (B, S, 512) → mean(dim=1) → (B, 512)
-            pooled_view_feature = slice_features.mean(dim=1)
+            # 对所有切片的特征进行池化，得到该视角的代表性特征
+            if self.use_attention_pooling:
+                # AttentionPooling: 用可学习注意力对切片加权聚合
+                # (B, S, 512) -> (B, 512)
+                if self.share_backbone:
+                    pooled_view_feature = self.shared_pooling(slice_features)
+                else:
+                    pooled_view_feature = self.view_poolings[view_index](slice_features)
+            else:
+                # Mean Pooling: 对所有切片取平均
+                # (B, S, 512) -> mean(dim=1) -> (B, 512)
+                pooled_view_feature = slice_features.mean(dim=1)
             view_features.append(pooled_view_feature)
 
         return view_features  # 返回 3 个 (B, 512) 的张量
@@ -176,20 +207,22 @@ class MultiViewCTClassifier(MultiViewEncoder):
         use_pretrained: bool = False,
         fusion_hidden_dim: int = 256,    # 分类器隐藏层的维度
         dropout: float = 0.3,           # Dropout 比率（防止过拟合）
+        use_attention_pooling: bool = False,  # 是否使用注意力池化
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
+            use_attention_pooling=use_attention_pooling,
         )
-        # 3 个视角拼接后的总维度：512 × 3 = 1536
+        # 3 个视角拼接后的总维度：512 * 3 = 1536
         fused_dim = self.feature_dim * 3
 
         # 分类器：一个两层的全连接网络（MLP）
         self.classifier = nn.Sequential(
-            nn.Linear(fused_dim, fusion_hidden_dim),  # 1536 → 256（降维）
+            nn.Linear(fused_dim, fusion_hidden_dim),  # 1536 -> 256（降维）
             nn.ReLU(inplace=True),                    # ReLU 激活函数（引入非线性）
             nn.Dropout(dropout),                      # 随机丢弃 30% 的神经元（防止过拟合）
-            nn.Linear(fusion_hidden_dim, 2),          # 256 → 2（输出 2 个类别的分数）
+            nn.Linear(fusion_hidden_dim, 2),          # 256 -> 2（输出 2 个类别的分数）
         )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
@@ -204,7 +237,7 @@ class MultiViewCTClassifier(MultiViewEncoder):
                     分数越高表示模型越倾向于认为是该类别
         """
         # 第 1 步：提取 3 个视角的特征并拼接
-        # encode_views 返回 3 个 (B, 512) → cat 后变成 (B, 1536)
+        # encode_views 返回 3 个 (B, 512) -> cat 后变成 (B, 1536)
         image_feature = torch.cat(self.encode_views(images), dim=1)
         # 第 2 步：送进分类器，得到分类结果
         return self.classifier(image_feature)
@@ -212,21 +245,21 @@ class MultiViewCTClassifier(MultiViewEncoder):
 
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     """
-    决策融合分类器 — 非对称安全融合版 (Asymmetric Safety-Biased Fusion)。
+    决策融合分类器 - 非对称安全融合版 (Asymmetric Safety-Biased Fusion)。
 
     与原版 Decision Fusion 的关键区别：
         - 原版：对正常和异常 logit 使用相同的对称加权平均
-        - 本版：非对称融合——
-          · 正常 logit：加权平均（保守估计正常概率）
-          · 异常 logit：temperature-scaled logsumexp（任一视角认为异常就倾向异常）
+        - 本版：非对称融合--
+          * 正常 logit：加权平均（保守估计正常概率）
+          * 异常 logit：temperature-scaled logsumexp（任一视角认为异常就倾向异常）
 
     临床意义：
-        "宁可误诊，不可漏诊" — 只要任何一个视角发现异常信号，
+        "宁可误诊，不可漏诊" -- 只要任何一个视角发现异常信号，
         融合结果就会倾向于判定为异常，从而降低漏诊风险。
 
     temperature 参数控制保守程度：
-        - temperature → 0: 接近 hard max（最保守，最不容易漏诊）
-        - temperature → ∞: 接近均匀平均（退化为原版 Decision Fusion）
+        - temperature -> 0: 接近 hard max（最保守，最不容易漏诊）
+        - temperature -> inf: 接近均匀平均（退化为原版 Decision Fusion）
     """
 
     # temperature default; current ASF-05 fixed at 0.5
@@ -238,19 +271,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         use_pretrained: bool = False,
         fusion_hidden_dim: int = 256,
         dropout: float = 0.3,
+        use_attention_pooling: bool = False,  # 是否使用注意力池化
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
+            use_attention_pooling=use_attention_pooling,
         )
         # 每个视角有一个独立的分类器（共 3 个）
         self.view_classifiers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 → 256
+                    nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 -> 256
                     nn.ReLU(inplace=True),
                     nn.Dropout(dropout),
-                    nn.Linear(fusion_hidden_dim, 2),  # 256 → 2（正常/异常）
+                    nn.Linear(fusion_hidden_dim, 2),  # 256 -> 2（正常/异常）
                 )
                 for _ in range(3)  # 创建 3 个分类器
             ]
@@ -291,7 +326,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         fused_normal = (normal_logits * fusion_weights.unsqueeze(0)).sum(dim=1)  # (B,)
 
         # 异常 logit (index=1)：temperature-scaled logsumexp
-        # logsumexp(x/T) * T ≈ max(x) when T→0, ≈ mean(x)+log(3)*T when T→∞
+        # logsumexp(x/T) * T ~ max(x) when T->0, ~ mean(x)+log(3)*T when T->inf
         abnormal_logits = view_logits[:, :, 1]  # (B, 3)
         fused_abnormal = self.temperature * torch.logsumexp(
             abnormal_logits / self.temperature, dim=1
@@ -312,12 +347,12 @@ class MultiViewAttentionClassifier(nn.Module):
 
     工作流程：
         ResNet18 逐张切片提特征 (B*S, 512)
-        → reshape 成 (B, S, 512)
-        → Attention Pooling: (B, S, 512) → (B, 512)  ← 替换 mean pooling
-        → stack 3 个视角: (B, 3, 512)
-        → Cross-View Attention: (B, 3, 512) → (B, 3, 512)
-        → reshape: (B, 1536)
-        → MLP 分类器 → (B, 2)
+        -> reshape 成 (B, S, 512)
+        -> Attention Pooling: (B, S, 512) -> (B, 512)  <- 替换 mean pooling
+        -> stack 3 个视角: (B, 3, 512)
+        -> Cross-View Attention: (B, 3, 512) -> (B, 3, 512)
+        -> reshape: (B, 1536)
+        -> MLP 分类器 -> (B, 2)
     """
 
     def __init__(
@@ -342,8 +377,6 @@ class MultiViewAttentionClassifier(nn.Module):
             )
 
         # ---------- Attention Pooling（逐视角） ----------
-        from .attention_pooling import AttentionPooling
-
         if share_backbone:
             # 共享 backbone 时也共享 pooling
             self.shared_pooling = AttentionPooling(self.feature_dim)
@@ -363,7 +396,7 @@ class MultiViewAttentionClassifier(nn.Module):
         )
 
         # ---------- 分类头 ----------
-        fused_dim = self.feature_dim * 3  # 512 × 3 = 1536
+        fused_dim = self.feature_dim * 3  # 512 * 3 = 1536
         self.classifier = nn.Sequential(
             nn.LayerNorm(fused_dim),
             nn.Linear(fused_dim, fusion_hidden_dim),
