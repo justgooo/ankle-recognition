@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Queue head from backlog: AP-FF-02 Feature Fusion + AttentionPooling lr=5e-5.
+# Queue head from backlog: AP-FF-03 Feature Fusion + AttentionPooling lr=7e-5.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -27,7 +27,7 @@ model:
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.00007
   weight_decay: 0.0001
   class_weight: true
   device: auto
