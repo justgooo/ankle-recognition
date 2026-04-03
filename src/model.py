@@ -229,8 +229,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         - temperature → ∞: 接近均匀平均（退化为原版 Decision Fusion）
     """
 
-    # temperature 默认值；当前 ASF-01 baseline 固定为 0.5
-    DEFAULT_TEMPERATURE = 0.5
+    # temperature 默认值；当前 ASF-02 固定为 1.0
+    DEFAULT_TEMPERATURE = 1.0
 
     def __init__(
         self,
