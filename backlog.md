@@ -12,10 +12,10 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | AP-FF-02：Feature Fusion + AttentionPooling lr=5e-5 proxy |
-| 上次结果 | discard（no_miss_val_acc=0.532, no_miss_val_spe=0.120, val_AUC=0.939） |
-| 下一步 | AP-FF-03：Feature Fusion + AttentionPooling lr=7e-5 proxy |
-| 连续 discard 计数 | 2 |
+| 上次实验 | AP-FF-03：Feature Fusion + AttentionPooling lr=7e-5 proxy |
+| 上次结果 | discard（no_miss_val_acc=0.553, no_miss_val_spe=0.160, val_AUC=0.893） |
+| 下一步 | AP-FF-04：Feature Fusion + AttentionPooling dropout=0.2 proxy（按规则切换超参维度） |
+| 连续 discard 计数 | 3 |
 | 累计 proxy keep 数 | 0（阶段 5 尚未出现 keep） |
 
 ---
@@ -41,7 +41,7 @@
 
 - [x] **AP-FF-01**: baseline（fusion_type=feature, use_attention_pooling=true, lr=1e-4, dropout=0.3）→ no_miss_val_acc=0.574, val_AUC=0.910 → discard
 - [x] **AP-FF-02**: lr=5e-5 → no_miss_val_acc=0.532, val_AUC=0.939 → discard
-- [ ] **AP-FF-03**: lr=7e-5
+- [x] **AP-FF-03**: lr=7e-5 → no_miss_val_acc=0.553, val_AUC=0.893 → discard
 - [ ] **AP-FF-04**: dropout=0.2
 - [ ] **AP-FF-05**: dropout=0.4
 - [ ] **AP-FF-06**: label_smoothing=0.05

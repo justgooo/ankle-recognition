@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Queue head from backlog: AP-FF-03 Feature Fusion + AttentionPooling lr=7e-5.
+# Queue head from backlog: AP-FF-04 Feature Fusion + AttentionPooling dropout=0.2.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -22,12 +22,12 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.2
   use_attention_pooling: true
 
 train:
   epochs: 4
-  lr: 0.00007
+  lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
   device: auto
