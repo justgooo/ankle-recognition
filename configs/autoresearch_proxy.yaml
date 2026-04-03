@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: ASF-03 Asymmetric Safety-Biased Fusion (temperature=0.3).
+# Experiment: ASF-04 Asymmetric Safety-Biased Fusion (temperature=2.0).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
