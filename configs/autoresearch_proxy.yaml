@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Experiment: ASF-05 Asymmetric Safety-Biased Fusion (temperature=0.5 + lr=5e-5).
+# Experiment: ASF-06 Asymmetric Safety-Biased Fusion (temperature=0.5 + dropout=0.2).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -22,11 +22,11 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.2
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
   device: auto
