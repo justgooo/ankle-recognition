@@ -1,5 +1,5 @@
 # Slower confirmation config for promising proxy winners.
-# Primary: Feature Fusion + AttentionPooling with non-shared backbone.
+# Formal mirror for the Stage 5 Feature Fusion + AttentionPooling baseline family.
 experiment_name: autoresearch_formal
 output_dir: runs/autoresearch_formal
 seed: 42
