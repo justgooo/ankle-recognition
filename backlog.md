@@ -12,9 +12,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | 进入阶段 4 — 创新融合架构探索 |
-| 上次结果 | N/A（新阶段开始） |
-| 下一步 | 方案 2（View Reliability Gating）baseline proxy 实验 |
+| 上次实验 | VRG-10：View Reliability Gating 组合实验（lr=5e-5, label_smoothing=0.05）proxy |
+| 上次结果 | discard（no_miss_val_acc=0.670, no_miss_val_spe=0.380, val_AUC=0.951） |
+| 下一步 | ASF-01：Asymmetric Safety-Biased Fusion baseline（temperature=0.5）proxy |
 | 连续 discard 计数 | 0（新架构重置） |
 | 累计 proxy keep 数 | 0（新阶段重置） |
 
@@ -83,26 +83,17 @@
 
 > 超参搜索已连续 12 次 discard，通过结构创新打破瓶颈。
 
-### 阶段 4A：方案 2 — 视角可靠度门控 (View Reliability Gating) 🔴 当前执行中
+### 阶段 4A：方案 2 — 视角可靠度门控 (View Reliability Gating) ✅ 已完成
 
 > 将 Decision Fusion 中固定的全局视角权重替换为基于输入的动态 confidence 门控。
 > 基线：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3`
 
-- [ ] VRG-01: baseline（纯 View Reliability Gating，默认超参）
-- [ ] VRG-02: lr=5e-5
-- [ ] VRG-03: lr=7e-5
-- [ ] VRG-04: lr=3e-4
-- [ ] VRG-05: dropout=0.2
-- [ ] VRG-06: dropout=0.4
-- [ ] VRG-07: label_smoothing=0.05
-- [ ] VRG-08: weight_decay=5e-4
-- [ ] VRG-09: scheduler=cosine, T_max=4, eta_min=1e-6
-- [ ] VRG-10: 基于前 9 次最佳方向的组合实验
+- 暂无（10 个 VRG proxy 实验已完成；最佳信号来自 VRG-02 的高 AUC 与 VRG-07 的较好零漏诊校准，但组合实验 VRG-10 仍未超过当前 best 0.787，转向阶段 4B）
 
-### 阶段 4B：方案 6 — 非对称安全融合 (Asymmetric Safety-Biased Fusion)
+### 阶段 4B：方案 6 — 非对称安全融合 (Asymmetric Safety-Biased Fusion) 🔴 当前执行中
 
 > 异常 logit 使用 temperature-scaled logsumexp 融合，直接对齐"宁可误诊不可漏诊"的临床需求。
-> 基线同上，需要先 revert model.py 的方案 2 改动再实现方案 6。
+> model.py 已切换为方案 6 实现。temperature 在 `model.py` 的 `DEFAULT_TEMPERATURE` 中修改。
 
 - [ ] ASF-01: temperature=0.5
 - [ ] ASF-02: temperature=1.0
@@ -163,6 +154,19 @@
 - [x] Decision Fusion proxy `scheduler=cosine, scheduler_t_max=4, scheduler_eta_min=1e-6`（share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0）→ no_miss_val_acc=0.734, no_miss_val_spe=0.500, val_AUC=0.941 → discard（4 epoch proxy 上 cosine 仍未改善零漏诊阈值表现，未能触发 formal）
 - [x] Decision Fusion proxy 概率空间加权投票（share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0）→ no_miss_val_acc=0.691, no_miss_val_spe=0.420, val_AUC=0.918 → discard（概率投票虽然更符合决策融合直觉，但零漏诊阈值抬高到 0.301，验证集零漏诊 acc 明显退化）
 
+### 阶段 4A：View Reliability Gating 阶段（Round 4, 已完成）
+
+- [x] **VRG-01: baseline**（share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0） → no_miss_val_acc=0.681, no_miss_val_spe=0.400, val_AUC=0.941 → discard（低于当前 best 0.787）
+- [x] **VRG-02: lr=5e-5**（share_backbone=false, aug=true, dropout=0.3, label_smoothing=0.0） → no_miss_val_acc=0.755, no_miss_val_spe=0.540, val_AUC=0.958 → discard（AUC 明显升高，但零漏诊 val_acc 仍低于当前 best 0.787）
+- [x] **VRG-03: lr=7e-5**（share_backbone=false, aug=true, dropout=0.3, label_smoothing=0.0） → no_miss_val_acc=0.755, no_miss_val_spe=0.540, val_AUC=0.940 → discard（与 VRG-02 相同的零漏诊表现，但 AUC 回落，仍低于当前 best 0.787）
+- [x] **VRG-04: lr=3e-4**（share_backbone=false, aug=true, dropout=0.3, label_smoothing=0.0） → no_miss_val_acc=0.585, no_miss_val_spe=0.220, val_AUC=0.885 → discard（大学习率明显破坏校准与零漏诊阈值表现，较当前 best 0.787 大幅退化）
+- [x] **VRG-05: dropout=0.2**（share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0） → no_miss_val_acc=0.617, no_miss_val_spe=0.280, val_AUC=0.931 → discard（较当前 best 0.787 明显退化；虽较 VRG-04 恢复部分校准，但零漏诊阈值表现仍偏弱）
+- [x] **VRG-06: dropout=0.4**（share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0） → no_miss_val_acc=0.479, no_miss_val_spe=0.020, val_AUC=0.928 → discard（相较当前 best 0.787 明显退化；阈值降到 0.069 后特异度几乎归零，说明更高 dropout 严重破坏零漏诊校准）
+- [x] **VRG-07: label_smoothing=0.05**（share_backbone=false, aug=true, lr=1e-4, dropout=0.3） → no_miss_val_acc=0.745, no_miss_val_spe=0.520, val_AUC=0.943 → discard（较当前 best 0.787 仍有差距；零漏诊阈值升至 0.295，特异度回升到 0.520，但零漏诊 acc 仍未超过最佳 Decision Fusion）
+- [x] **VRG-08: weight_decay=5e-4**（share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0） → no_miss_val_acc=0.489, no_miss_val_spe=0.040, val_AUC=0.916 → discard（较当前 best 0.787 大幅退化；零漏诊阈值降到 0.091，特异度几乎清零，说明更强 L2 正则显著破坏了 VRG 的校准）
+- [x] **VRG-09: scheduler=cosine, T_max=4, eta_min=1e-6**（share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0） → no_miss_val_acc=0.574, no_miss_val_spe=0.200, val_AUC=0.940 → discard（较当前 best 0.787 明显退化；虽然 AUC 回到 0.940，但零漏诊 acc 进一步下滑，说明 4 epoch proxy 下 cosine 调度未改善 VRG 的阈值校准）
+- [x] **VRG-10: lr=5e-5 + label_smoothing=0.05**（share_backbone=false, aug=true, dropout=0.3） → no_miss_val_acc=0.670, no_miss_val_spe=0.380, val_AUC=0.951 → discard（AUC 仍较高，但零漏诊阈值降到 0.166 后 FP 明显增多，未能同时继承 VRG-02 的高 AUC 与 VRG-07 的零漏诊校准优势）
+
 ### Attention Fusion 阶段（旧实验，已完结）
 
 - [x] 约 17 组 proxy 实验 → 已转入 Feature Fusion 为主力
@@ -178,6 +182,7 @@
    - 如果结果带来新的实验思路，添加到对应优先级
 3. **连续 3 个 discard 后**：重新审视待办清单，考虑换方向
 4. **人类编辑后**：Agent 下次启动时以文件内容为准
+
 
 
 
