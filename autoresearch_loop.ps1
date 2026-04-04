@@ -92,9 +92,9 @@ function Get-PlanDisplayName {
     )
 
     switch ($PlanNumber) {
-        2 { return "方案 2（View Reliability Gating）" }
-        6 { return "方案 6（Asymmetric Safety-Biased Fusion）" }
-        default { return ("方案 {0}" -f $PlanNumber) }
+        2 { return "Plan 2 (View Reliability Gating)" }
+        6 { return "Plan 6 (Asymmetric Safety-Biased Fusion)" }
+        default { return ("Plan {0}" -f $PlanNumber) }
     }
 }
 
@@ -114,10 +114,10 @@ function Format-PlanList {
     }
 
     if ($Items.Count -eq 2) {
-        return ("{0} 和 {1}" -f $Items[0], $Items[1])
+        return ("{0} and {1}" -f $Items[0], $Items[1])
     }
 
-    return ((($Items | Select-Object -First ($Items.Count - 1)) -join "、") + " 和 " + $Items[-1])
+    return ((($Items | Select-Object -First ($Items.Count - 1)) -join ", ") + " and " + $Items[-1])
 }
 
 function Get-TargetedPlanDefinitions {
@@ -127,9 +127,9 @@ function Get-TargetedPlanDefinitions {
 
     $Lines = foreach ($PlanNumber in $PlanNumbers) {
         switch ($PlanNumber) {
-            2 { "- 方案 2 = View Reliability Gating（动态视角可靠度门控）" }
-            6 { "- 方案 6 = Asymmetric Safety-Biased Fusion（非对称安全融合）" }
-            default { "- 方案 $PlanNumber = use the implementation defined in the implementation plan / repository history" }
+            2 { "- Plan 2 = View Reliability Gating (dynamic per-sample view reliability gating)" }
+            6 { "- Plan 6 = Asymmetric Safety-Biased Fusion (asymmetric safety-biased fusion)" }
+            default { "- Plan $PlanNumber = use the implementation defined in the implementation plan / repository history" }
         }
     }
 
@@ -148,7 +148,7 @@ function Get-SessionPrompt {
     if ($TargetedRerunMode) {
         $PlanList = Format-PlanList -PlanNumbers $PlanNumbers
         $PlanDefinitions = Get-TargetedPlanDefinitions -PlanNumbers $PlanNumbers
-        $RerunIds = @($PlanNumbers | ForEach-Object { "R{0}-01 ... R{0}-{1:D2}" -f $_, $RunsPerPlan }) -join "；"
+        $RerunIds = @($PlanNumbers | ForEach-Object { "R{0}-01 ... R{0}-{1:D2}" -f $_, $RunsPerPlan }) -join "; "
 
         $ImplementationPlanInstruction = @"
 3. Also read this implementation plan with explicit UTF-8 decoding:
@@ -183,7 +183,7 @@ $PlanDefinitions
    f. If success: run threshold evaluation
    g. For THIS campaign, use threshold_eval.json as the source of truth and keep a run iff no_miss_val_acc > $KeepThresholdText at the zero-miss threshold. Do NOT require beating the global best 0.787. If no_miss_val_acc <= $KeepThresholdText, mark discard.
    h. Record results in results.tsv
-   i. Update backlog.md (rerun progress, keep/discard status, Agent 状态 table, next unfinished rerun)
+   i. Update backlog.md (rerun progress, keep/discard status, agent status table, next unfinished rerun)
 9. If all planned reruns are already complete, do NOT invent new work. Output this exact final line and exit cleanly:
    CAMPAIGN_COMPLETE: rerun queue exhausted | no action taken
 10. Otherwise output a final summary line:
