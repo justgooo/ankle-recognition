@@ -31,6 +31,36 @@
 
 ---
 
+## 用户定向 rerun Campaign 🔴 当前最高优先级
+
+> 本轮会话覆盖常规 backlog 优先级，只执行 Plan 2 / Plan 6 的定向 rerun。
+> 判定规则（仅本 campaign 生效）：以 `threshold_eval.json` 为准，**仅当 `no_miss_val_acc > 0.75` 时记为 keep**；否则记为 discard。
+> 固定顺序：先 `R2-01 → R2-08`，再 `R6-01 → R6-08`。
+
+### Plan 2：View Reliability Gating（8 次 proxy rerun）
+
+- [ ] **R2-01**: baseline（fusion_type=decision, share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0）
+- [ ] **R2-02**: lr=5e-5
+- [ ] **R2-03**: lr=7e-5
+- [ ] **R2-04**: dropout=0.2
+- [ ] **R2-05**: dropout=0.4
+- [ ] **R2-06**: label_smoothing=0.05
+- [ ] **R2-07**: lr=5e-5 + label_smoothing=0.05
+- [ ] **R2-08**: 基于前 7 次 rerun 最佳方向的组合实验
+
+### Plan 6：Asymmetric Safety-Biased Fusion（8 次 proxy rerun）
+
+- [ ] **R6-01**: temperature=0.5 baseline（fusion_type=decision, share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0）
+- [ ] **R6-02**: temperature=1.0
+- [ ] **R6-03**: temperature=0.3
+- [ ] **R6-04**: temperature=2.0
+- [ ] **R6-05**: temperature=0.5 + lr=5e-5
+- [ ] **R6-06**: temperature=0.5 + dropout=0.2
+- [ ] **R6-07**: temperature=0.5 + label_smoothing=0.05
+- [ ] **R6-08**: 基于前 7 次 rerun 最佳方向的组合实验
+
+---
+
 ## 阶段 5：AttentionPooling 增强 🔴 当前执行中
 
 > 将 Feature Fusion 和 Decision Fusion 的切片聚合从 mean pooling 升级为 AttentionPooling。

@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Executing AP-FF-04: Feature Fusion + AttentionPooling dropout=0.2.
+# Executing R2-01: View Reliability Gating baseline rerun.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -18,12 +18,12 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: feature
+  fusion_type: decision
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.2
-  use_attention_pooling: true
+  dropout: 0.3
+  use_attention_pooling: false
 
 train:
   epochs: 4
