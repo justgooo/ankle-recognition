@@ -14,9 +14,9 @@
 param(
     [int]$MaxIterations = 50,
     [int]$CooldownSeconds = 30,
-    [string]$OpenAIBaseUrl,
-    [string]$OpenAIApiKey,
-    [string]$OpenAIModel,
+    [string]$OpenAIBaseUrl = "http://c76d.abrdns.com:8317/v1",
+    [string]$OpenAIApiKey = "sk-iNZGzCzR5TTZlXYXY",
+    [string]$OpenAIModel = "gpt-5.4",
     [ValidateSet("openai-completions", "chat", "chat-completions", "openai-responses", "responses")]
     [string]$OpenAIApi = "openai-completions",
     [int]$OpenAIFailureThreshold = 5,
@@ -56,9 +56,9 @@ function Resolve-CodexWireApi {
     )
 
     switch ($ApiMode.ToLowerInvariant()) {
-        "openai-completions" { return "chat" }
-        "chat" { return "chat" }
-        "chat-completions" { return "chat" }
+        "openai-completions" { return "responses" }
+        "chat" { return "responses" }
+        "chat-completions" { return "responses" }
         "openai-responses" { return "responses" }
         "responses" { return "responses" }
         default {
