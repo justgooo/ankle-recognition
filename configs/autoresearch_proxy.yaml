@@ -1,5 +1,5 @@
 # Fast proxy config for autoresearch-style iteration.
-# Executing R2-01: View Reliability Gating baseline rerun.
+# Campaign R2-01: View Reliability Gating baseline rerun.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
