@@ -8,18 +8,22 @@
     .\autoresearch_loop.ps1 -MaxIterations 20 -CooldownSeconds 30
 .EXAMPLE
     .\autoresearch_loop.ps1 -RerunPlanNumbers 2,6 -RunsPerPlan 8 -KeepNoMissAccThreshold 0.75 -ImplementationPlanPath "C:\Users\xxx\.gemini\antigravity\brain\547f61e5-499e-48f5-b53c-155cffb49664\implementation_plan.md.resolved"
+.EXAMPLE
+    .\autoresearch_loop.ps1 -OpenAIEnvFile "C:\Users\xxx\.openclaw-docker\.env.docker" -StrictOpenAIPrimary -RerunPlanNumbers 2,6 -RunsPerPlan 8 -KeepNoMissAccThreshold 0.75 -ImplementationPlanPath "C:\Users\xxx\.gemini\antigravity\brain\547f61e5-499e-48f5-b53c-155cffb49664\implementation_plan.md.resolved"
 #>
 
 [CmdletBinding()]
 param(
     [int]$MaxIterations = 50,
     [int]$CooldownSeconds = 30,
-    [string]$OpenAIBaseUrl = "http://c76d.abrdns.com:8317/v1",
-    [string]$OpenAIApiKey = "sk-iNZGzCzR5TTZlXYXY",
-    [string]$OpenAIModel = "gpt-5.4",
+    [string]$OpenAIBaseUrl,
+    [string]$OpenAIApiKey,
+    [string]$OpenAIModel,
+    [string]$OpenAIEnvFile,
     [ValidateSet("openai-completions", "chat", "chat-completions", "openai-responses", "responses")]
     [string]$OpenAIApi = "openai-completions",
     [int]$OpenAIFailureThreshold = 5,
+    [switch]$StrictOpenAIPrimary,
     [string]$ImplementationPlanPath,
     [int[]]$RerunPlanNumbers = @(),
     [ValidateRange(1, 100)]
@@ -44,6 +48,8 @@ $ResolvedOpenAIWireApi = $null
 $ResolvedImplementationPlanPath = $null
 $TargetedRerunMode = $false
 $KeepThresholdText = $KeepNoMissAccThreshold.ToString("0.00", [System.Globalization.CultureInfo]::InvariantCulture)
+$OpenAIPrimaryExplicitlyRequested = $false
+$ResolvedOpenAIEnvFile = $null
 
 [Console]::InputEncoding = $Utf8NoBom
 [Console]::OutputEncoding = $Utf8NoBom
@@ -65,6 +71,30 @@ function Resolve-CodexWireApi {
             throw "Unsupported OpenAI api mode: $ApiMode"
         }
     }
+}
+
+function Get-EnvFileValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Keys
+    )
+
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "OpenAI env file was not found: $FilePath"
+    }
+
+    $FileContent = Get-Content -Path $FilePath -Encoding UTF8
+    foreach ($Key in $Keys) {
+        foreach ($Line in $FileContent) {
+            if ($Line -match ('^\s*' + [regex]::Escape($Key) + '=(.*)$')) {
+                return $Matches[1].Trim()
+            }
+        }
+    }
+
+    return $null
 }
 
 function Get-UniquePlanNumbers {
@@ -356,6 +386,52 @@ function Invoke-CodexExec {
     }
 }
 
+function New-CodexInvocationParams {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodexBinary,
+        [Parameter(Mandatory = $true)]
+        [string]$PromptText,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkDir,
+        [Parameter(Mandatory = $true)]
+        [string]$LastMessageFile,
+        [Parameter(Mandatory = $true)]
+        [string]$LogPath,
+        [switch]$UseOpenAIProvider,
+        [string]$ProviderName,
+        [string]$BaseUrl,
+        [string]$EnvKeyName,
+        [string]$Model,
+        [string]$WireApi,
+        [string]$OpenAIEnvValue
+    )
+
+    $InvocationArgs = Get-CodexExecArguments `
+        -WorkDir $WorkDir `
+        -LastMessageFile $LastMessageFile `
+        -UseOpenAIProvider:$UseOpenAIProvider `
+        -ProviderName $ProviderName `
+        -BaseUrl $BaseUrl `
+        -EnvKeyName $EnvKeyName `
+        -Model $Model `
+        -WireApi $WireApi
+
+    $Params = @{
+        CodexBinary = $CodexBinary
+        PromptText = $PromptText
+        Arguments = $InvocationArgs
+        LogPath = $LogPath
+    }
+
+    if ($UseOpenAIProvider) {
+        $Params.OpenAIEnvKeyName = $EnvKeyName
+        $Params.OpenAIEnvValue = $OpenAIEnvValue
+    }
+
+    return $Params
+}
+
 try {
     cmd /c chcp 65001 > $null
 } catch {
@@ -370,12 +446,42 @@ if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
     throw "codex CLI was not found in PATH."
 }
 
-$OpenAIInputs = @($OpenAIBaseUrl, $OpenAIApiKey, $OpenAIModel) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-if ($OpenAIInputs.Count -gt 0 -and $OpenAIInputs.Count -lt 3) {
+$OpenAIParamNames = @("OpenAIBaseUrl", "OpenAIApiKey", "OpenAIModel")
+$OpenAIEnvFileRequested = $PSBoundParameters.ContainsKey("OpenAIEnvFile") -and -not [string]::IsNullOrWhiteSpace($OpenAIEnvFile)
+
+if ($OpenAIEnvFileRequested) {
+    $ResolvedOpenAIEnvFile = (Resolve-Path -LiteralPath $OpenAIEnvFile -ErrorAction Stop).Path
+
+    if (-not $PSBoundParameters.ContainsKey("OpenAIBaseUrl")) {
+        $OpenAIBaseUrl = Get-EnvFileValue -FilePath $ResolvedOpenAIEnvFile -Keys @(
+            "AI_VIDEO_TRANSCRIBER_OPENAI_BASE_URL",
+            "OPENAI_BASE_URL"
+        )
+    }
+
+    if (-not $PSBoundParameters.ContainsKey("OpenAIApiKey")) {
+        $OpenAIApiKey = Get-EnvFileValue -FilePath $ResolvedOpenAIEnvFile -Keys @(
+            "AI_VIDEO_TRANSCRIBER_OPENAI_API_KEY",
+            "OPENAI_API_KEY"
+        )
+    }
+
+    if (-not $PSBoundParameters.ContainsKey("OpenAIModel")) {
+        $OpenAIModel = Get-EnvFileValue -FilePath $ResolvedOpenAIEnvFile -Keys @(
+            "AI_VIDEO_TRANSCRIBER_OPENAI_MODEL",
+            "OPENAI_MODEL"
+        )
+    }
+}
+
+$OpenAIExplicitInputs = @($OpenAIParamNames | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-Variable -Name $_ -ValueOnly)) })
+$OpenAIPrimaryExplicitlyRequested = $OpenAIEnvFileRequested -or ($OpenAIExplicitInputs.Count -gt 0)
+
+if ($OpenAIExplicitInputs.Count -gt 0 -and $OpenAIExplicitInputs.Count -lt 3) {
     throw "OpenAI fallback mode requires OpenAIBaseUrl, OpenAIApiKey, and OpenAIModel together."
 }
 
-if ($OpenAIInputs.Count -eq 3) {
+if ($OpenAIExplicitInputs.Count -eq 3) {
     if ($OpenAIFailureThreshold -lt 1) {
         throw "OpenAIFailureThreshold must be >= 1."
     }
@@ -444,8 +550,18 @@ Write-Host (" Codex workdir: {0}" -f $CodexWorkDir) -ForegroundColor Cyan
 Write-Host (" Codex command: {0}" -f $CodexCommand) -ForegroundColor Cyan
 if ($UseOpenAIPrimary) {
     Write-Host (" OpenAI primary: {0} | model={1} | api={2} | fallback after {3} consecutive provider failures" -f $OpenAIBaseUrl, $OpenAIModel, $ResolvedOpenAIWireApi, $OpenAIFailureThreshold) -ForegroundColor Cyan
+    if ($ResolvedOpenAIEnvFile) {
+        Write-Host (" OpenAI env file: {0}" -f $ResolvedOpenAIEnvFile) -ForegroundColor Cyan
+    }
+    if ($StrictOpenAIPrimary) {
+        Write-Host " OpenAI fallback: disabled (strict primary mode)" -ForegroundColor Cyan
+    }
 } else {
-    Write-Host " OpenAI primary: disabled" -ForegroundColor Cyan
+    if ($OpenAIPrimaryExplicitlyRequested) {
+        Write-Host " OpenAI primary: disabled after validation" -ForegroundColor Cyan
+    } else {
+        Write-Host " OpenAI primary: disabled (use -OpenAIEnvFile or explicit OpenAI args to enable)" -ForegroundColor Cyan
+    }
 }
 if ($TargetedRerunMode) {
     Write-Host (" Targeted rerun: {0}" -f (Format-PlanList -PlanNumbers $RerunPlanNumbers)) -ForegroundColor Cyan
@@ -497,28 +613,19 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
     }
 
     try {
-        $CodexArgs = Get-CodexExecArguments `
+        $InvokeParams = New-CodexInvocationParams `
+            -CodexBinary $CodexCommand `
+            -PromptText $Prompt `
             -WorkDir $CodexWorkDir `
             -LastMessageFile $LastMessageFile `
+            -LogPath $LogFile `
             -UseOpenAIProvider:$UsePrimaryRunnerThisIteration `
             -ProviderName $PrimaryProviderName `
             -BaseUrl $OpenAIBaseUrl `
             -EnvKeyName $PrimaryEnvKeyName `
             -Model $OpenAIModel `
-            -WireApi $ResolvedOpenAIWireApi
-
-        $InvokeParams = @{
-            CodexBinary = $CodexCommand
-            PromptText = $Prompt
-            Arguments = $CodexArgs
-            LogPath = $LogFile
-        }
-
-        if ($UsePrimaryRunnerThisIteration) {
-            $InvokeParams.OpenAIEnvKeyName = $PrimaryEnvKeyName
-            $InvokeParams.OpenAIEnvValue = $OpenAIApiKey
-        }
-
+            -WireApi $ResolvedOpenAIWireApi `
+            -OpenAIEnvValue $OpenAIApiKey
         $ExitCode = Invoke-CodexExec @InvokeParams
     } catch {
         Write-Host ("  Codex invocation failed: {0}" -f $_) -ForegroundColor Red
@@ -539,7 +646,40 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
             $OpenAIFailureStreak++
             Write-Host ("  OpenAI primary failure streak: {0}/{1}" -f $OpenAIFailureStreak, $OpenAIFailureThreshold) -ForegroundColor Yellow
 
-            if ($OpenAIFailureStreak -ge $OpenAIFailureThreshold) {
+            if ($StrictOpenAIPrimary) {
+                Write-Host "  Strict OpenAI primary mode is enabled; Codex fallback is disabled." -ForegroundColor Yellow
+            } else {
+                Write-Host "  Retrying this iteration immediately with Codex fallback..." -ForegroundColor Yellow
+                Add-Content -Path $LogFile -Encoding utf8 -Value "`n===== OPENAI PRIMARY FAILED; RETRYING WITH CODEX FALLBACK =====`n"
+                try {
+                    $FallbackInvokeParams = New-CodexInvocationParams `
+                        -CodexBinary $CodexCommand `
+                        -PromptText $Prompt `
+                        -WorkDir $CodexWorkDir `
+                        -LastMessageFile $LastMessageFile `
+                        -LogPath $LogFile `
+                        -ProviderName $PrimaryProviderName `
+                        -BaseUrl $OpenAIBaseUrl `
+                        -EnvKeyName $PrimaryEnvKeyName `
+                        -Model $OpenAIModel `
+                        -WireApi $ResolvedOpenAIWireApi `
+                        -OpenAIEnvValue $OpenAIApiKey
+                    $ExitCode = Invoke-CodexExec @FallbackInvokeParams
+                    if ($ExitCode -eq 0) {
+                        Write-Host "  Codex fallback succeeded for this iteration." -ForegroundColor Green
+                        $FallbackToCodex = $true
+                        $OpenAIFailureStreak = $OpenAIFailureThreshold
+                    } else {
+                        Write-Host ("  Codex fallback also failed (exit={0})." -f $ExitCode) -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host ("  Codex fallback invocation failed: {0}" -f $_) -ForegroundColor Red
+                    ("FALLBACK_ERROR: {0}" -f $_) | Out-File -FilePath $LogFile -Append -Encoding utf8
+                    $ExitCode = 1
+                }
+            }
+
+            if (-not $StrictOpenAIPrimary -and $OpenAIFailureStreak -ge $OpenAIFailureThreshold) {
                 $FallbackToCodex = $true
                 Write-Host ("  OpenAI primary reached {0} consecutive provider failures. Future iterations will fallback to Codex." -f $OpenAIFailureThreshold) -ForegroundColor Yellow
             }
