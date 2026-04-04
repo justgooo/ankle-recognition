@@ -245,20 +245,24 @@ class MultiViewCTClassifier(MultiViewEncoder):
 
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     """
-    决策融合分类器 - 视角可靠度门控版 (View Reliability Gating)。
+    决策融合分类器 - 非对称安全融合版 (Asymmetric Safety-Biased Fusion)。
 
     与原版 Decision Fusion 的关键区别：
-        - 原版：3 个视角共用一组固定的全局权重（nn.Parameter(zeros(3))）
-        - 本版：每个视角有一个 confidence head，根据当前样本的特征动态计算权重
-          → 不同病人的融合权重不同，能适应"某个视角拍得不清楚"等个体差异
+        - 原版：对正常和异常 logit 都做对称加权平均
+        - 本版：非对称融合——
+          · 正常 logit：使用固定全局权重做加权平均
+          · 异常 logit：使用 temperature-scaled logsumexp 放大任一视角的异常信号
 
-    工作流程：
-        1. 用父类 MultiViewEncoder 提取 3 个视角的特征
-        2. 每个视角各自通过自己的分类器，得到各自的分类分数
-        3. 每个视角的 confidence head 输出可信度 (0~1)
-        4. 3 个可信度经 softmax 归一化后作为融合权重
-        5. 用动态权重对 3 个视角的分类结果加权平均
+    临床意义：
+        "宁可误诊，不可漏诊"——只要任何一个视角出现明显异常，
+        融合后的异常 logit 就会被推高，从而降低漏诊风险。
+
+    temperature 参数控制保守程度：
+        - temperature → 0：接近 hard max（最保守）
+        - temperature → ∞：逐渐退化为平均化融合
     """
+
+    DEFAULT_TEMPERATURE = 0.5
 
     def __init__(
         self,
@@ -285,28 +289,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 视角可靠度门控：每个视角一个 confidence head
-        # 输入 512 维特征 → 输出 1 个标量（经 sigmoid 映射到 0~1）
-        # 3 个 confidence 经 softmax 归一化后作为动态融合权重
-        self.confidence_heads = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(self.feature_dim, 1),  # 512 → 1
-                    nn.Sigmoid(),                    # 映射到 (0, 1)
-                )
-                for _ in range(3)
-            ]
-        )
+        # 正常 logit 仍使用固定全局权重，保证融合逻辑简单稳定
+        self.view_weight_logits = nn.Parameter(torch.zeros(3))
+        # 异常 logit 使用非对称温度融合，temperature 越小越接近 hard max
+        self.temperature = self.DEFAULT_TEMPERATURE
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
-        前向传播：每个视角独立分类，用动态可信度权重融合。
+        前向传播：每个视角独立分类，再做非对称安全融合。
 
         参数：
             images: (B, 3, S, H, W) 的 CT 图像张量
 
         返回：
-            logits: (B, 2) 的张量，3 个视角动态加权投票后的分类结果
+            logits: (B, 2) 的张量，融合后的分类结果
         """
         # 第 1 步：提取 3 个视角的特征
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
@@ -317,18 +313,19 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 3 步：计算每个视角的动态可信度
-        confidences = torch.stack(
-            [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
+        # 第 3 步：正常 logit 用固定全局权重做加权平均
+        fusion_weights = torch.softmax(self.view_weight_logits, dim=0)  # (3,)
+        normal_logits = view_logits[:, :, 0]  # (B, 3)
+        fused_normal = (normal_logits * fusion_weights.unsqueeze(0)).sum(dim=1)  # (B,)
+
+        # 第 4 步：异常 logit 用 temperature-scaled logsumexp 放大异常信号
+        abnormal_logits = view_logits[:, :, 1]  # (B, 3)
+        fused_abnormal = self.temperature * torch.logsumexp(
+            abnormal_logits / self.temperature,
             dim=1,
-        )  # (B, 3, 1)
+        )  # (B,)
 
-        # softmax 归一化：3 个可信度 → 和为 1 的融合权重
-        fusion_weights = torch.softmax(confidences, dim=1)  # (B, 3, 1)
-
-        # 第 4 步：动态加权求和
-        # (B, 3, 2) × (B, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
-        return (view_logits * fusion_weights).sum(dim=1)
+        return torch.stack([fused_normal, fused_abnormal], dim=1)
 
 
 class MultiViewAttentionClassifier(nn.Module):

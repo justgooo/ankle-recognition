@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Targeted rerun campaign: Plan 2 / View Reliability Gating.
-# Stable rerun ID: R2-08 (best-direction consolidation: keep lr=5e-5 and restore baseline label_smoothing=0.0).
+# Targeted rerun campaign: Plan 6 / Asymmetric Safety-Biased Fusion.
+# Stable rerun ID: R6-01 (temperature=0.5 baseline).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -28,7 +28,7 @@ model:
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
   device: auto
