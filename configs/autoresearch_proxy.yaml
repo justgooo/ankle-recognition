@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Targeted rerun campaign: Plan 1 / Hierarchical Hybrid Fusion.
-# Stable rerun ID: R1-09 (R1-01 + fusion_hidden_dim=384).
+# Stage 6: Uncertainty-Weighted Decision Fusion (UWDF).
+# Current run: UWDF-01 baseline.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -19,10 +19,10 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision  # Plan 1 hybrid path is implemented under the existing decision entry point.
+  fusion_type: decision  # UWDF is implemented under the decision entry point.
   share_backbone: false
   use_pretrained: true
-  fusion_hidden_dim: 384
+  fusion_hidden_dim: 256
   dropout: 0.3
   use_attention_pooling: false
 

@@ -34,19 +34,21 @@
 
 ## 研究策略
 
-**当前阶段**：AttentionPooling 增强实验（阶段 5）
+**当前阶段**：Uncertainty-Weighted Decision Fusion 实验（阶段 6）
 
-前阶段（阶段 4）的架构创新（View Reliability Gating + Asymmetric Safety-Biased Fusion）
-已各完成 10 次 proxy 实验但均未超过当前最优 0.787。
-现阶段将 Feature Fusion 和 Decision Fusion 的切片聚合从简单 mean pooling
-升级为**可学习 AttentionPooling**，让模型自动聚焦关键切片。
+前阶段（阶段 4/5）的架构创新（VRG / ASF / AttentionPooling / Hierarchical Hybrid Fusion）
+已各完成多轮实验但均未超过当前最优 0.798。
+现阶段实现 **UWDF（不确定性加权决策融合）**：每个视角输出 logits + 不确定性，
+用精度加权（precision weighting）做样本自适应融合。
 
-### AttentionPooling 增强
-- **核心思路**：用可学习注意力替代 mean pooling，对 S 个切片加权聚合
-- **改动位置**：`src/model.py` → `MultiViewEncoder.encode_views`
-- 通过 YAML 配置 `model.use_attention_pooling: true` 启用
-- Feature Fusion 和 Decision Fusion 均支持
-- 执行顺序：先做 Feature Fusion 8 次 proxy，再做 Decision Fusion 8 次 proxy
+### UWDF 核心设计
+- **架构**：每个视角使用 `UncertaintyHead` 同时输出 logits (B,2) 和 log_var (B,1)
+- **融合**：precision = exp(-log_var) → softmax → 加权平均 logits
+- **训练损失**：CE(fused_logits) + heteroscedastic auxiliary loss (Kendall & Gal 2017)
+  - L_aux = (1/V) * Σ_v [exp(-s_v) * CE(logits_v, label) + s_v]
+- **理论基础**：不确定性高的视角 CE 贡献被自动降权，但 log_var 正则项防止方差无限增大
+- 通过 `fusion_type: decision` 启用（UWDF 实现在 decision 入口点下）
+- 执行顺序：8 次 proxy 超参搜索
 
 
 ## 硬件限制
@@ -240,35 +242,27 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 （10 次 proxy 实验已完结）
 
-### 阶段 5：AttentionPooling 增强（Feature Fusion + Decision Fusion）🔴 当前执行中
+### 阶段 5：AttentionPooling 增强 ❌ 已放弃
 
-> 给 Feature Fusion 和 Decision Fusion 的切片聚合从 mean pooling 升级为 AttentionPooling。
-> 通过 YAML 配置 `use_attention_pooling: true` 启用。
+（AP-FF 前 3 次全部 discard，用户决定放弃）
+
+### 阶段 6：UWDF（Uncertainty-Weighted Decision Fusion）🔴 当前执行中
+
+> 每个视角的分类头同时输出 logits 和不确定性 (log σ²)。
+> 融合权重 = softmax(precision)，precision = exp(-log_var)。
+> 训练损失 = CE(fused) + heteroscedastic aux loss。
 > 基线配置沿用当前最佳策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3`
 
-#### 阶段 5A：Feature Fusion + AttentionPooling（8 次 proxy）
+#### 阶段 6A：UWDF 超参搜索（8 次 proxy）
 
-1. **AP-FF-01**: baseline（fusion_type=feature, use_attention_pooling=true, lr=1e-4, dropout=0.3）
-2. **AP-FF-02**: lr=5e-5
-3. **AP-FF-03**: lr=7e-5
-4. **AP-FF-04**: dropout=0.2
-5. **AP-FF-05**: dropout=0.4
-6. **AP-FF-06**: label_smoothing=0.05
-7. **AP-FF-07**: lr=5e-5 + label_smoothing=0.05
-8. **AP-FF-08**: 基于前 7 次最佳方向的组合实验
-
-#### 阶段 5B：Decision Fusion + AttentionPooling（8 次 proxy）
-
-基线配置同上，切换 `fusion_type: decision`。
-
-1. **AP-DF-01**: baseline（fusion_type=decision, use_attention_pooling=true, lr=1e-4, dropout=0.3）
-2. **AP-DF-02**: lr=5e-5
-3. **AP-DF-03**: lr=7e-5
-4. **AP-DF-04**: dropout=0.2
-5. **AP-DF-05**: dropout=0.4
-6. **AP-DF-06**: label_smoothing=0.05
-7. **AP-DF-07**: lr=5e-5 + label_smoothing=0.05
-8. **AP-DF-08**: 基于前 7 次最佳方向的组合实验
+1. **UWDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3）
+2. **UWDF-02**: lr=5e-5
+3. **UWDF-03**: lr=7e-5
+4. **UWDF-04**: dropout=0.2
+5. **UWDF-05**: dropout=0.4
+6. **UWDF-06**: label_smoothing=0.05
+7. **UWDF-07**: lr=5e-5 + label_smoothing=0.05
+8. **UWDF-08**: 基于前 7 次最佳方向的组合实验
 
 
 ## 可使用的训练策略配置项

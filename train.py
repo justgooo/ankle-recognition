@@ -341,6 +341,23 @@ def train_one_epoch(model, loader, criterion, optimizer, device, gradient_clip_n
         logits = model(images)    # 模型预测，得到 (B, 2) 的分数
         loss = criterion(logits, labels)  # 计算损失（交叉熵损失）
 
+        # ---------- 不确定性校准辅助损失 (UWDF) ----------
+        # 如果模型是 UWDF（暴露了 _view_logits 和 _log_vars），
+        # 则计算 Kendall & Gal 2017 的 heteroscedastic uncertainty loss：
+        #   L_aux = (1/V) * Σ_v [exp(-s_v) * CE_v + s_v]
+        # 其中 s_v = log_var_v（视角 v 的预测不确定性）
+        _vl = getattr(model, '_view_logits', None)
+        _lv = getattr(model, '_log_vars', None)
+        if _vl is not None and _lv is not None:
+            import torch.nn.functional as _F
+            _num_views = _vl.size(1)
+            _aux = torch.zeros(1, device=labels.device)
+            for _v in range(_num_views):
+                _vce = _F.cross_entropy(_vl[:, _v], labels, reduction='none')  # (B,)
+                _sv = _lv[:, _v, 0]  # (B,)
+                _aux = _aux + (torch.exp(-_sv) * _vce + _sv).mean()
+            loss = loss + _aux / _num_views
+
         # ---------- 反向传播 + 参数更新 ----------
         loss.backward()           # 反向传播：自动计算每个参数的梯度
 
