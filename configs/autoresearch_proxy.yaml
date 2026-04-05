@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
 # Targeted rerun campaign: Plan 6 / Asymmetric Safety-Biased Fusion.
-# Stable rerun ID: R6-02 (temperature=1.0).
+# Stable rerun ID: R6-03 (temperature=0.3).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
