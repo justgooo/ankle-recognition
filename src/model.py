@@ -262,7 +262,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         - temperature → ∞：逐渐退化为平均化融合
     """
 
-    DEFAULT_TEMPERATURE = 2.0
+    DEFAULT_TEMPERATURE = 0.5
 
     def __init__(
         self,
