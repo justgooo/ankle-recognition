@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
 # Stage 6: Uncertainty-Weighted Decision Fusion (UWDF).
-# Current run: UWDF-07 (lr=5e-5 + label_smoothing=0.05).
+# Current run: UWDF-08 (dropout=0.2 + lr=5e-5, label_smoothing=0.0).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -23,7 +23,7 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.2
   use_attention_pooling: false
 
 train:
@@ -33,4 +33,4 @@ train:
   class_weight: true
   device: auto
   augmentation: true
-  label_smoothing: 0.05
+  label_smoothing: 0.0
