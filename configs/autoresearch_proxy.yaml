@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
 # Stage 6: Uncertainty-Weighted Decision Fusion (UWDF).
-# Current run: UWDF-01 baseline.
+# Current run: UWDF-05 dropout=0.4.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -23,7 +23,7 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.4
   use_attention_pooling: false
 
 train:
