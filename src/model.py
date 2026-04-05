@@ -245,24 +245,16 @@ class MultiViewCTClassifier(MultiViewEncoder):
 
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     """
-    决策融合分类器 - 非对称安全融合版 (Asymmetric Safety-Biased Fusion)。
+    层次化混合融合分类器（Hierarchical Hybrid Fusion）。
 
-    与原版 Decision Fusion 的关键区别：
-        - 原版：对正常和异常 logit 都做对称加权平均
-        - 本版：非对称融合——
-          · 正常 logit：使用固定全局权重做加权平均
-          · 异常 logit：使用 temperature-scaled logsumexp 放大任一视角的异常信号
-
-    临床意义：
-        "宁可误诊，不可漏诊"——只要任何一个视角出现明显异常，
-        融合后的异常 logit 就会被推高，从而降低漏诊风险。
-
-    temperature 参数控制保守程度：
-        - temperature → 0：接近 hard max（最保守）
-        - temperature → ∞：逐渐退化为平均化融合
+    说明：
+        - 为了保持 train.py 不变，这个实验继续复用 `fusion_type=decision`
+        - 但内部不再是纯 Decision Fusion，而是同时构建：
+          1. Feature Fusion 分支：拼接 3 个视角特征 -> MLP -> feature_logits
+          2. Decision Fusion 分支：3 个视角各自分类 -> 加权平均 -> decision_logits
+        - 然后用一个样本级标量门控，在两个 logits 之间做自适应插值：
+          final_logits = gate * feature_logits + (1 - gate) * decision_logits
     """
-
-    DEFAULT_TEMPERATURE = 2.0
 
     def __init__(
         self,
@@ -277,26 +269,38 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
         )
-        # 每个视角有一个独立的分类器（共 3 个）
+        fused_dim = self.feature_dim * 3
+
+        # Feature Fusion 分支：3 个视角特征拼接后做分类
+        self.feature_classifier = nn.Sequential(
+            nn.Linear(fused_dim, fusion_hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_hidden_dim, 2),
+        )
+
+        # Decision Fusion 分支：每个视角单独分类
         self.view_classifiers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 -> 256
+                    nn.Linear(self.feature_dim, fusion_hidden_dim),
                     nn.ReLU(inplace=True),
                     nn.Dropout(dropout),
-                    nn.Linear(fusion_hidden_dim, 2),  # 256 -> 2（正常/异常）
+                    nn.Linear(fusion_hidden_dim, 2),
                 )
-                for _ in range(3)  # 创建 3 个分类器
+                for _ in range(3)
             ]
         )
-        # 正常 logit 仍使用固定全局权重，保证融合逻辑简单稳定
         self.view_weight_logits = nn.Parameter(torch.zeros(3))
-        # 异常 logit 使用非对称温度融合，temperature 越小越接近 hard max
-        self.temperature = self.DEFAULT_TEMPERATURE
+
+        # 标量门控：输入 [feature_logits, decision_logits] 共 4 维，输出每个样本 1 个 gate
+        self.hybrid_gate = nn.Linear(4, 1)
+        nn.init.zeros_(self.hybrid_gate.weight)
+        nn.init.zeros_(self.hybrid_gate.bias)
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
-        前向传播：每个视角独立分类，再做非对称安全融合。
+        前向传播：先分别得到 feature / decision 两个分支的 logits，再做门控融合。
 
         参数：
             images: (B, 3, S, H, W) 的 CT 图像张量
@@ -305,27 +309,26 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             logits: (B, 2) 的张量，融合后的分类结果
         """
         # 第 1 步：提取 3 个视角的特征
-        view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
+        view_features = self.encode_views(images)
 
-        # 第 2 步：每个视角分别做分类
+        # 第 2 步：Feature Fusion 分支
+        fused_feature = torch.cat(view_features, dim=1)
+        feature_logits = self.feature_classifier(fused_feature)
+
+        # 第 3 步：Decision Fusion 分支
         view_logits = torch.stack(
             [classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)],
             dim=1,
-        )  # (B, 3, 2)
+        )
+        fusion_weights = torch.softmax(self.view_weight_logits, dim=0).view(1, 3, 1)
+        decision_logits = (view_logits * fusion_weights).sum(dim=1)
 
-        # 第 3 步：正常 logit 用固定全局权重做加权平均
-        fusion_weights = torch.softmax(self.view_weight_logits, dim=0)  # (3,)
-        normal_logits = view_logits[:, :, 0]  # (B, 3)
-        fused_normal = (normal_logits * fusion_weights.unsqueeze(0)).sum(dim=1)  # (B,)
+        # 第 4 步：根据两个分支的 logits 学习样本级 gate
+        gate_input = torch.cat([feature_logits, decision_logits], dim=1)
+        gate = torch.sigmoid(self.hybrid_gate(gate_input))
 
-        # 第 4 步：异常 logit 用 temperature-scaled logsumexp 放大异常信号
-        abnormal_logits = view_logits[:, :, 1]  # (B, 3)
-        fused_abnormal = self.temperature * torch.logsumexp(
-            abnormal_logits / self.temperature,
-            dim=1,
-        )  # (B,)
-
-        return torch.stack([fused_normal, fused_abnormal], dim=1)
+        # 第 5 步：门控融合最终 logits
+        return gate * feature_logits + (1.0 - gate) * decision_logits
 
 
 class MultiViewAttentionClassifier(nn.Module):

@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Targeted rerun campaign: Plan 6 / Asymmetric Safety-Biased Fusion.
-# Stable rerun ID: R6-08 (best-direction consolidation: keep temperature=2.0 and restore baseline label_smoothing=0.0).
+# Targeted rerun campaign: Plan 1 / Hierarchical Hybrid Fusion.
+# Stable rerun ID: R1-01 (baseline hybrid fusion).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -19,7 +19,7 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision
+  fusion_type: decision  # Plan 1 hybrid path is implemented under the existing decision entry point.
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
