@@ -34,20 +34,18 @@
 
 ## 研究策略
 
-**当前阶段**：Uncertainty-Weighted Decision Fusion 实验（阶段 6）
+**当前阶段**：Dual-Granularity Adaptive Fusion 实验（阶段 7）
 
-前阶段（阶段 4/5）的架构创新（VRG / ASF / AttentionPooling / Hierarchical Hybrid Fusion）
+前阶段（阶段 4/5/6）的架构创新（VRG / ASF / AttentionPooling / HHF / UWDF）
 已各完成多轮实验但均未超过当前最优 0.798。
-现阶段实现 **UWDF（不确定性加权决策融合）**：每个视角输出 logits + 不确定性，
-用精度加权（precision weighting）做样本自适应融合。
+现阶段实现 **DGAF（双粒度自适应融合）**：同时在特征级和决策级做融合，
+用 View-Aware Gate 为每个样本动态选择最优融合路径。
 
-### UWDF 核心设计
-- **架构**：每个视角使用 `UncertaintyHead` 同时输出 logits (B,2) 和 log_var (B,1)
-- **融合**：precision = exp(-log_var) → softmax → 加权平均 logits
-- **训练损失**：CE(fused_logits) + heteroscedastic auxiliary loss (Kendall & Gal 2017)
-  - L_aux = (1/V) * Σ_v [exp(-s_v) * CE(logits_v, label) + s_v]
-- **理论基础**：不确定性高的视角 CE 贡献被自动降权，但 log_var 正则项防止方差无限增大
-- 通过 `fusion_type: decision` 启用（UWDF 实现在 decision 入口点下）
+### DGAF 核心设计
+- **双分支架构**：Feature Branch (特征级融合) + Decision Branch (决策级融合)
+- **View-Aware Gate**：输入 = [视角特征范数(3D) + 分歧度(1D) + 两分支logits(4D)] → 2层MLP → gate
+- **融合**：final = gate * feature_logits + (1-gate) * decision_logits
+- 通过 `fusion_type: decision` 启用（DGAF 实现在 decision 入口点下）
 - 执行顺序：8 次 proxy 超参搜索
 
 

@@ -12,11 +12,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | R1-09：Hierarchical Hybrid Fusion fusion_hidden_dim=384 proxy rerun |
-| 上次结果 | discard（no_miss_val_acc=0.691, no_miss_val_spe=0.420, val_AUC=0.909） |
-| 下一步 | UWDF-01：Uncertainty-Weighted Decision Fusion baseline |
+| 上次实验 | UWDF-08：dropout=0.2 + lr=5e-5 |
+| 上次结果 | discard（no_miss_val_acc=0.660, no_miss_val_spe=0.360, val_AUC=0.926） |
+| 下一步 | DGAF-01：Dual-Granularity Adaptive Fusion baseline |
 | 连续 discard 计数 | 0（新阶段重置） |
-| 累计 proxy keep 数 | 3（既有 rerun campaign keep=3/16） |
+| 累计 proxy keep 数 | 3（既有 rerun campaign keep=3/16；UWDF keep=0/8） |
 
 ---
 
@@ -88,7 +88,7 @@
 
 ---
 
-## 阶段 6：Uncertainty-Weighted Decision Fusion (UWDF) 🔴 当前最高优先级
+## 阶段 6：Uncertainty-Weighted Decision Fusion (UWDF) ✅ 已完成（8/8 proxy，全 discard）
 
 > **论文创新点**：不确定性加权决策融合。
 > 每个视角不仅输出分类 logits，还输出预测不确定性（log σ²）。
@@ -98,14 +98,35 @@
 
 ### 阶段 6A：UWDF 超参搜索（8 次 proxy）
 
-- [ ] **UWDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
-- [ ] **UWDF-02**: lr=5e-5
-- [ ] **UWDF-03**: lr=7e-5
-- [ ] **UWDF-04**: dropout=0.2
-- [ ] **UWDF-05**: dropout=0.4
-- [ ] **UWDF-06**: label_smoothing=0.05
-- [ ] **UWDF-07**: lr=5e-5 + label_smoothing=0.05
-- [ ] **UWDF-08**: 基于前 7 次最佳方向的组合实验
+- [x] **UWDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）→ no_miss_val_acc=0.574, no_miss_val_spe=0.200, val_AUC=0.911 → discard
+- [x] **UWDF-02**: lr=5e-5 → no_miss_val_acc=0.723, no_miss_val_spe=0.480, val_AUC=0.922 → discard
+- [x] **UWDF-03**: lr=7e-5 → no_miss_val_acc=0.574, no_miss_val_spe=0.200, val_AUC=0.937 → discard
+- [x] **UWDF-04**: dropout=0.2 → no_miss_val_acc=0.734, no_miss_val_spe=0.500, val_AUC=0.923 → discard
+- [x] **UWDF-05**: dropout=0.4 → no_miss_val_acc=0.596, no_miss_val_spe=0.240, val_AUC=0.913 → discard
+- [x] **UWDF-06**: label_smoothing=0.05 → no_miss_val_acc=0.702, no_miss_val_spe=0.440, val_AUC=0.927 → discard
+- [x] **UWDF-07**: lr=5e-5 + label_smoothing=0.05 → no_miss_val_acc=0.638, no_miss_val_spe=0.320, val_AUC=0.920 → discard
+- [x] **UWDF-08**: dropout=0.2 + lr=5e-5（基于前 7 次最佳方向组合，保持 label_smoothing=0.0）→ no_miss_val_acc=0.660, no_miss_val_spe=0.360, val_AUC=0.926 → discard
+
+---
+
+
+## 阶段 7：Dual-Granularity Adaptive Fusion (DGAF) 🔴 当前最高优先级
+
+> **论文创新点**：双粒度自适应融合。
+> 同时在特征级和决策级做融合，用 View-Aware Gate（视角置信度 + 分歧度 + 双分支 logits）
+> 为每个样本动态选择最优融合路径。
+> 基线配置：share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3, fusion_hidden_dim=256
+
+### 阶段 7A：DGAF 超参搜索（8 次 proxy）
+
+- [ ] **DGAF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
+- [ ] **DGAF-02**: lr=5e-5
+- [ ] **DGAF-03**: lr=7e-5
+- [ ] **DGAF-04**: dropout=0.2
+- [ ] **DGAF-05**: dropout=0.4
+- [ ] **DGAF-06**: label_smoothing=0.05
+- [ ] **DGAF-07**: lr=5e-5 + label_smoothing=0.05
+- [ ] **DGAF-08**: 基于前 7 次最佳方向的组合实验
 
 ---
 

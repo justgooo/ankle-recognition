@@ -15,7 +15,7 @@ model.py — 多视角 CT 分类模型
     - build_resnet18_encoder(): 构建 ResNet18 特征提取器
     - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征，支持 mean pooling 或 AttentionPooling）
     - MultiViewCTClassifier: 特征融合分类器（拼接 3 个视角特征后分类）
-    - MultiViewDecisionFusionClassifier: 决策融合分类器（每个视角单独分类后加权投票）
+    - MultiViewDecisionFusionClassifier: 双粒度自适应融合分类器 (DGAF)
 """
 
 from __future__ import annotations
@@ -243,92 +243,39 @@ class MultiViewCTClassifier(MultiViewEncoder):
         return self.classifier(image_feature)
 
 
-class UncertaintyHead(nn.Module):
-    """
-    不确定性双头分类器 —— 同时输出分类 logits 和预测不确定性。
-
-    每个视角各自使用一个 UncertaintyHead，输出：
-        - logits  (B, 2)：该视角对"正常/异常"的分类分数
-        - log_var (B, 1)：该视角的预测不确定性（对数方差 log σ²）
-
-    log_var 的含义：
-        - log_var 大（如 +3）→ 方差大 → 该视角不确定 → 在融合时权重低
-        - log_var 小（如 -3）→ 方差小 → 该视角有信心 → 在融合时权重高
-        - 初始化为 0 → 初始方差 = 1 → 三个视角等权起步
-    """
-
-    def __init__(
-        self,
-        feature_dim: int,
-        hidden_dim: int,
-        num_classes: int = 2,
-        dropout: float = 0.3,
-    ) -> None:
-        super().__init__()
-        # 共享的特征变换层
-        self.shared = nn.Sequential(
-            nn.Linear(feature_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-        )
-        # 分类头：输出 logits
-        self.logits_head = nn.Linear(hidden_dim, num_classes)
-        # 不确定性头：输出 log(σ²)
-        self.log_var_head = nn.Linear(hidden_dim, 1)
-        # 初始化：log_var ≈ 0 → σ² ≈ 1 → 三个视角初始等权
-        nn.init.zeros_(self.log_var_head.weight)
-        nn.init.zeros_(self.log_var_head.bias)
-
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        参数：
-            x: (B, feature_dim) 的视角特征
-
-        返回：
-            logits:  (B, 2) 分类分数
-            log_var: (B, 1) 预测不确定性
-        """
-        h = self.shared(x)
-        logits = self.logits_head(h)
-        log_var = self.log_var_head(h)
-        # 限制 log_var 范围，防止数值不稳定
-        log_var = torch.clamp(log_var, min=-5.0, max=5.0)
-        return logits, log_var
-
-
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     """
-    不确定性加权决策融合 (Uncertainty-Weighted Decision Fusion, UWDF)。
+    双粒度自适应融合分类器 (Dual-Granularity Adaptive Fusion, DGAF)。
 
     核心思想：
-        每个视角不仅输出分类结果，还输出"我对这个判断有多不确定"。
-        不确定性高的视角在融合时权重自动降低。
+        同时在「特征级」和「决策级」两个粒度做融合，
+        并用一个样本自适应的门控机制为每个样本动态选择最优融合路径。
 
-    数学原理（Heteroscedastic Uncertainty, Kendall & Gal 2017）：
-        每个视角 v 输出：
-            - logits_v  (B, 2)：分类分数
-            - log_var_v (B, 1)：预测不确定性（对数方差 log σ²）
+    两个融合粒度：
+        1. 特征级融合 (Feature Branch)：
+           拼接 3 个视角的 512 维特征 → MLP → feature_logits
+           优势：保留跨视角交互信息
+           劣势：容易受到噪声视角干扰
 
-        融合权重 = softmax(precision)，其中 precision_v = exp(-log_var_v) = 1/σ²_v
-        融合结果 = Σ_v weight_v * logits_v
+        2. 决策级融合 (Decision Branch)：
+           每个视角独立分类 → 加权平均 → decision_logits
+           优势：对单视角噪声鲁棒
+           劣势：缺乏跨视角交互
 
-        训练损失（在 train.py 中计算）：
-            L = CE(fused_logits, label)
-              + (1/V) * Σ_v [exp(-s_v) * CE(logits_v, label) + s_v]
-            其中 s_v = log_var_v
+    自适应门控 (View-Aware Gate)：
+        输入 = [视角特征置信度(3D) + 视角间分歧度(1D) + 两分支logits(4D)]
+        → 2 层 MLP → sigmoid → gate ∈ [0, 1]
+        → final = gate * feature_logits + (1 - gate) * decision_logits
 
-        第一项：全局分类损失（标准交叉熵）
-        第二项：不确定性校准辅助损失
-            - exp(-s_v) * CE_v：不确定性高时降低该视角的损失贡献
-            - s_v：防止不确定性无限增大（正则项）
+    与 Hierarchical Hybrid Fusion (HHF) 的改进：
+        - HHF：gate 输入只有 4D (两分支 logits)，单层线性 → 表达力不足，9 次全 discard
+        - DGAF：gate 输入 8D (含视角置信度 + 分歧度)，2 层 MLP → 更强的上下文感知
 
-    与传统 Decision Fusion 的区别：
-        - 传统：视角权重是全局固定的（所有样本共用一组权重）
-        - UWDF：视角权重是样本自适应的（每个样本、每个视角的不确定性不同）
-
-    与 View Reliability Gating (VRG) 的区别：
-        - VRG：用 sigmoid(MLP(feature)) 做二值化门控，学"重要性"
-        - UWDF：用 softmax(1/σ²) 做概率化精度加权，学"不确定性"，有明确概率论含义
+    论文创新点：
+        "We propose Dual-Granularity Adaptive Fusion (DGAF), which operates
+        simultaneously at both feature and decision levels, using view-level
+        confidence and inter-view disagreement to dynamically weight the
+        contribution of each fusion pathway on a per-sample basis."
     """
 
     def __init__(
@@ -344,54 +291,99 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
         )
-        # 3 个视角各自的不确定性双头分类器
-        self.view_heads = nn.ModuleList(
+        fused_dim = self.feature_dim * 3  # 512 * 3 = 1536
+
+        # ===== 分支 1：特征级融合 =====
+        self.feature_classifier = nn.Sequential(
+            nn.Linear(fused_dim, fusion_hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_hidden_dim, 2),
+        )
+
+        # ===== 分支 2：决策级融合 =====
+        # 每个视角独立的分类头
+        self.view_classifiers = nn.ModuleList(
             [
-                UncertaintyHead(
-                    self.feature_dim, fusion_hidden_dim, num_classes=2, dropout=dropout
+                nn.Sequential(
+                    nn.Linear(self.feature_dim, fusion_hidden_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout),
+                    nn.Linear(fusion_hidden_dim, 2),
                 )
                 for _ in range(3)
             ]
         )
-        # 暴露给 train.py 的辅助信息（每次 forward 后更新）
-        self._view_logits: torch.Tensor | None = None
-        self._log_vars: torch.Tensor | None = None
+        # 可学习的视角权重（用于 Decision Branch 的加权平均）
+        self.view_weight_logits = nn.Parameter(torch.zeros(3))
+
+        # ===== 自适应门控 (View-Aware Gate) =====
+        # 输入维度：
+        #   - 3 个视角的归一化特征范数 (3D) — 视角级置信度
+        #   - 视角间分歧度 (1D) — 各视角预测的方差
+        #   - Feature Branch logits (2D)
+        #   - Decision Branch logits (2D)
+        #   共 8 维
+        gate_input_dim = 3 + 1 + 2 + 2  # = 8
+        self.gate_net = nn.Sequential(
+            nn.Linear(gate_input_dim, 32),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(32, 1),
+        )
+        # 初始化门控输出 ≈ 0 → sigmoid(0) = 0.5 → 初始两分支等权
+        nn.init.zeros_(self.gate_net[-1].weight)
+        nn.init.zeros_(self.gate_net[-1].bias)
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
-        前向传播：提取 3 个视角特征，各自预测 logits 和不确定性，精度加权融合。
+        前向传播：双粒度融合 + 自适应门控。
 
         参数：
             images: (B, 3, S, H, W) 的 CT 图像张量
 
         返回：
-            fused_logits: (B, 2) 的张量，精度加权融合后的分类结果
+            logits: (B, 2) 的张量，自适应融合后的分类结果
         """
         # 第 1 步：提取 3 个视角的特征
-        view_features = self.encode_views(images)
+        view_features = self.encode_views(images)  # 3 × (B, 512)
 
-        # 第 2 步：每个视角输出 logits 和不确定性
-        logits_list: list[torch.Tensor] = []
-        log_var_list: list[torch.Tensor] = []
-        for i, feat in enumerate(view_features):
-            logits_i, log_var_i = self.view_heads[i](feat)
-            logits_list.append(logits_i)
-            log_var_list.append(log_var_i)
+        # 第 2 步：Feature Branch — 特征级融合
+        fused_feature = torch.cat(view_features, dim=1)  # (B, 1536)
+        feature_logits = self.feature_classifier(fused_feature)  # (B, 2)
 
-        all_logits = torch.stack(logits_list, dim=1)    # (B, 3, 2)
-        all_log_vars = torch.stack(log_var_list, dim=1)  # (B, 3, 1)
+        # 第 3 步：Decision Branch — 决策级融合
+        view_logits_list = [
+            clf(feat) for clf, feat in zip(self.view_classifiers, view_features)
+        ]
+        view_logits_stacked = torch.stack(view_logits_list, dim=1)  # (B, 3, 2)
+        fusion_weights = torch.softmax(self.view_weight_logits, dim=0).view(1, 3, 1)
+        decision_logits = (view_logits_stacked * fusion_weights).sum(dim=1)  # (B, 2)
 
-        # 暴露给 train.py 用于计算辅助损失
-        self._view_logits = all_logits
-        self._log_vars = all_log_vars
+        # 第 4 步：计算门控输入特征
+        # (a) 视角置信度：每个视角特征的 L2 范数（归一化到 [0,1] 范围）
+        view_norms = torch.stack(
+            [feat.norm(dim=1) for feat in view_features], dim=1
+        )  # (B, 3)
+        # 对范数做 min-max 归一化（逐样本），避免量级差异影响门控
+        norm_min = view_norms.min(dim=1, keepdim=True).values
+        norm_max = view_norms.max(dim=1, keepdim=True).values
+        view_conf = (view_norms - norm_min) / (norm_max - norm_min + 1e-8)  # (B, 3)
 
-        # 第 3 步：精度加权融合 (Precision-Weighted Fusion)
-        # precision = 1/σ² = exp(-log_var)
-        precision = torch.exp(-all_log_vars)         # (B, 3, 1)
-        weights = torch.softmax(precision, dim=1)     # (B, 3, 1) 归一化
-        fused_logits = (all_logits * weights).sum(dim=1)  # (B, 2)
+        # (b) 视角间分歧度：各视角异常概率的方差
+        view_probs = torch.stack(
+            [torch.softmax(vl, dim=1)[:, 1] for vl in view_logits_list], dim=1
+        )  # (B, 3) — 每个视角的异常概率
+        disagreement = view_probs.var(dim=1, keepdim=True)  # (B, 1)
 
-        return fused_logits
+        # (c) 拼接门控输入
+        gate_input = torch.cat(
+            [view_conf, disagreement, feature_logits, decision_logits], dim=1
+        )  # (B, 8)
+
+        # 第 5 步：门控融合
+        gate = torch.sigmoid(self.gate_net(gate_input))  # (B, 1)
+        return gate * feature_logits + (1.0 - gate) * decision_logits
 
 
 class MultiViewAttentionClassifier(nn.Module):

@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 6: Uncertainty-Weighted Decision Fusion (UWDF).
-# Current run: UWDF-08 (dropout=0.2 + lr=5e-5, label_smoothing=0.0).
+# Stage 7: Dual-Granularity Adaptive Fusion (DGAF).
+# Current run: DGAF-01 baseline.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -19,16 +19,16 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision  # UWDF is implemented under the decision entry point.
+  fusion_type: decision  # DGAF is implemented under the decision entry point.
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.2
+  dropout: 0.3
   use_attention_pooling: false
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
   device: auto
