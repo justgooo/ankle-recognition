@@ -10,6 +10,8 @@
     .\autoresearch_loop.ps1 -RerunPlanNumbers 2,6 -RunsPerPlan 8 -KeepNoMissAccThreshold 0.75 -ImplementationPlanPath "C:\Users\xxx\.gemini\antigravity\brain\547f61e5-499e-48f5-b53c-155cffb49664\implementation_plan.md.resolved"
 .EXAMPLE
     .\autoresearch_loop.ps1 -OpenAIEnvFile "C:\Users\xxx\.openclaw-docker\.env.docker" -StrictOpenAIPrimary -RerunPlanNumbers 2,6 -RunsPerPlan 8 -KeepNoMissAccThreshold 0.75 -ImplementationPlanPath "C:\Users\xxx\.gemini\antigravity\brain\547f61e5-499e-48f5-b53c-155cffb49664\implementation_plan.md.resolved"
+.EXAMPLE
+    .\autoresearch_loop.ps1 -RerunPlanNumbers 1 -RunsPerPlan 10 -ImplementationPlanPath "C:\Users\xxx\.gemini\antigravity\brain\547f61e5-499e-48f5-b53c-155cffb49664\implementation_plan.md.resolved"
 #>
 
 [CmdletBinding()]
@@ -41,6 +43,10 @@ $CodexCommand = $null
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $PrimaryProviderName = "autoresearch_openai"
 $PrimaryEnvKeyName = "AUTORESEARCH_OPENAI_API_KEY"
+$DefaultOpenAIEnvFileCandidates = @(
+    (Join-Path $env:USERPROFILE ".openclaw-docker\.env.docker"),
+    "C:\Users\xxx\.openclaw-docker\.env.docker"
+)
 $OpenAIFailureStreak = 0
 $FallbackToCodex = $false
 $UseOpenAIPrimary = $false
@@ -49,6 +55,7 @@ $ResolvedImplementationPlanPath = $null
 $TargetedRerunMode = $false
 $KeepThresholdText = $KeepNoMissAccThreshold.ToString("0.00", [System.Globalization.CultureInfo]::InvariantCulture)
 $OpenAIPrimaryExplicitlyRequested = $false
+$OpenAIPrimaryAutoDetected = $false
 $ResolvedOpenAIEnvFile = $null
 
 [Console]::InputEncoding = $Utf8NoBom
@@ -97,6 +104,46 @@ function Get-EnvFileValue {
     return $null
 }
 
+function Resolve-DefaultOpenAIEnvFile {
+    param(
+        [string[]]$Candidates
+    )
+
+    foreach ($Candidate in $Candidates) {
+        if ([string]::IsNullOrWhiteSpace($Candidate)) {
+            continue
+        }
+
+        if (Test-Path -LiteralPath $Candidate) {
+            return (Resolve-Path -LiteralPath $Candidate -ErrorAction Stop).Path
+        }
+    }
+
+    return $null
+}
+
+function Get-OpenAISettingsFromEnvFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    return @{
+        BaseUrl = Get-EnvFileValue -FilePath $FilePath -Keys @(
+            "AI_VIDEO_TRANSCRIBER_OPENAI_BASE_URL",
+            "OPENAI_BASE_URL"
+        )
+        ApiKey = Get-EnvFileValue -FilePath $FilePath -Keys @(
+            "AI_VIDEO_TRANSCRIBER_OPENAI_API_KEY",
+            "OPENAI_API_KEY"
+        )
+        Model = Get-EnvFileValue -FilePath $FilePath -Keys @(
+            "AI_VIDEO_TRANSCRIBER_OPENAI_MODEL",
+            "OPENAI_MODEL"
+        )
+    }
+}
+
 function Get-UniquePlanNumbers {
     param(
         [int[]]$PlanNumbers
@@ -122,6 +169,7 @@ function Get-PlanDisplayName {
     )
 
     switch ($PlanNumber) {
+        1 { return "Plan 1 (Hierarchical Hybrid Fusion)" }
         2 { return "Plan 2 (View Reliability Gating)" }
         6 { return "Plan 6 (Asymmetric Safety-Biased Fusion)" }
         default { return ("Plan {0}" -f $PlanNumber) }
@@ -157,6 +205,7 @@ function Get-TargetedPlanDefinitions {
 
     $Lines = foreach ($PlanNumber in $PlanNumbers) {
         switch ($PlanNumber) {
+            1 { "- Plan 1 = Hierarchical Hybrid Fusion (combine Feature Fusion logits and Decision Fusion logits with a learnable scalar gate over [feature_logits, decision_logits]; keep train.py unchanged and implement inside src/model.py / YAML config only)" }
             2 { "- Plan 2 = View Reliability Gating (dynamic per-sample view reliability gating)" }
             6 { "- Plan 6 = Asymmetric Safety-Biased Fusion (asymmetric safety-biased fusion)" }
             default { "- Plan $PlanNumber = use the implementation defined in the implementation plan / repository history" }
@@ -164,6 +213,60 @@ function Get-TargetedPlanDefinitions {
     }
 
     return ($Lines -join "`n")
+}
+
+function Get-TargetedCampaignBlueprints {
+    param(
+        [int[]]$PlanNumbers,
+        [int]$RunsPerPlan
+    )
+
+    $Sections = foreach ($PlanNumber in $PlanNumbers) {
+        switch ($PlanNumber) {
+            1 {
+                $Plan1Runs = @(
+                    "R1-01: baseline hybrid fusion (new hybrid branch that fuses feature_logits and decision_logits with a learnable gate; share_backbone=false, augmentation=true, lr=1e-4, fusion_hidden_dim=256, dropout=0.3, label_smoothing=0.0)",
+                    "R1-02: R1-01 + lr=5e-5",
+                    "R1-03: R1-01 + lr=7e-5",
+                    "R1-04: R1-01 + dropout=0.2",
+                    "R1-05: R1-01 + dropout=0.4",
+                    "R1-06: R1-01 + label_smoothing=0.05",
+                    "R1-07: R1-01 + lr=5e-5 + label_smoothing=0.05",
+                    "R1-08: R1-01 + fusion_hidden_dim=128",
+                    "R1-09: R1-01 + fusion_hidden_dim=384",
+                    "R1-10: combination run based on the best signal from R1-01 ... R1-09"
+                )
+
+                if ($RunsPerPlan -gt $Plan1Runs.Count) {
+                    throw "Plan 1 currently defines a deterministic 10-run campaign. Requested RunsPerPlan=$RunsPerPlan exceeds that limit."
+                }
+
+                @(
+                    "Plan 1 rerun queue (use these exact IDs and descriptions when creating or updating backlog.md):"
+                    ($Plan1Runs | Select-Object -First $RunsPerPlan | ForEach-Object { "- $_" })
+                ) -join "`n"
+            }
+            2 {
+                @"
+Plan 2 rerun queue source of truth:
+- Reuse the existing backlog.md campaign queue for R2-01 ... R2-$("{0:D2}" -f $RunsPerPlan).
+- Do not invent a different order; if the queue is missing, reconstruct it from repository history / backlog history before editing code.
+"@
+            }
+            6 {
+                @"
+Plan 6 rerun queue source of truth:
+- Reuse the existing backlog.md campaign queue for R6-01 ... R6-$("{0:D2}" -f $RunsPerPlan).
+- Do not invent a different order; if the queue is missing, reconstruct it from repository history / backlog history before editing code.
+"@
+            }
+            default {
+                "Plan $PlanNumber rerun queue source of truth: if backlog.md lacks a dedicated queue, recover a deterministic queue from the implementation plan before editing code."
+            }
+        }
+    }
+
+    return ($Sections -join "`n`n")
 }
 
 function Get-SessionPrompt {
@@ -178,6 +281,7 @@ function Get-SessionPrompt {
     if ($TargetedRerunMode) {
         $PlanList = Format-PlanList -PlanNumbers $PlanNumbers
         $PlanDefinitions = Get-TargetedPlanDefinitions -PlanNumbers $PlanNumbers
+        $CampaignBlueprints = Get-TargetedCampaignBlueprints -PlanNumbers $PlanNumbers -RunsPerPlan $RunsPerPlan
         $RerunIds = @($PlanNumbers | ForEach-Object { "R{0}-01 ... R{0}-{1:D2}" -f $_, $RunsPerPlan }) -join "; "
 
         $ImplementationPlanInstruction = @"
@@ -200,10 +304,12 @@ YOUR TASK FOR THIS SESSION (do exactly ONE experiment):
 2. Read program.md - understand the full experiment protocol
 $ImplementationPlanInstruction
 4. Focus ONLY on this targeted rerun campaign: rerun $PlanList, exactly $RunsPerPlan proxy runs per plan.
-5. This targeted rerun campaign supersedes the normal "pick the highest priority uncompleted experiment from backlog.md" rule. If backlog.md does not already contain a dedicated highest-priority rerun section for this campaign, insert one above the current stage-5 queue without deleting the existing history.
+5. This targeted rerun campaign supersedes the normal "pick the highest priority uncompleted experiment from backlog.md" rule. If backlog.md does not already contain a dedicated highest-priority rerun section for this campaign, insert one above the current stage-5 queue using the exact queue blueprint below, without deleting the existing history.
 6. Use stable rerun IDs so fresh sessions can resume deterministically: $RerunIds
-7. Work through the rerun queue in the order provided above. Do NOT invent additional experiment families.
-8. Execute exactly ONE unfinished rerun from this campaign:
+7. Work through the rerun queue in the order provided above. Do NOT invent additional experiment families or alternate queue orders.
+8. Queue blueprint / source of truth:
+$CampaignBlueprints
+9. Execute exactly ONE unfinished rerun from this campaign:
    a. Apply the correct plan-specific implementation for the selected rerun:
 $PlanDefinitions
    b. Make code/config changes within the allowed scope (see program.md)
@@ -214,9 +320,9 @@ $PlanDefinitions
    g. For THIS campaign, use threshold_eval.json as the source of truth and keep a run iff no_miss_val_acc > $KeepThresholdText at the zero-miss threshold. Do NOT require beating the global best 0.787. If no_miss_val_acc <= $KeepThresholdText, mark discard.
    h. Record results in results.tsv
    i. Update backlog.md (rerun progress, keep/discard status, agent status table, next unfinished rerun)
-9. If all planned reruns are already complete, do NOT invent new work. Output this exact final line and exit cleanly:
+10. If all planned reruns are already complete, do NOT invent new work. Output this exact final line and exit cleanly:
    CAMPAIGN_COMPLETE: rerun queue exhausted | no action taken
-10. Otherwise output a final summary line:
+11. Otherwise output a final summary line:
    EXPERIMENT_DONE: <status> | <description> | no_miss_val_acc=<value>
 
 CRITICAL CONSTRAINTS:
@@ -449,28 +555,29 @@ if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
 $OpenAIParamNames = @("OpenAIBaseUrl", "OpenAIApiKey", "OpenAIModel")
 $OpenAIEnvFileRequested = $PSBoundParameters.ContainsKey("OpenAIEnvFile") -and -not [string]::IsNullOrWhiteSpace($OpenAIEnvFile)
 
+if (-not $OpenAIEnvFileRequested) {
+    $ResolvedOpenAIEnvFile = Resolve-DefaultOpenAIEnvFile -Candidates $DefaultOpenAIEnvFileCandidates
+    $OpenAIPrimaryAutoDetected = -not [string]::IsNullOrWhiteSpace($ResolvedOpenAIEnvFile)
+}
+
 if ($OpenAIEnvFileRequested) {
     $ResolvedOpenAIEnvFile = (Resolve-Path -LiteralPath $OpenAIEnvFile -ErrorAction Stop).Path
+    $OpenAIPrimaryAutoDetected = $false
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ResolvedOpenAIEnvFile)) {
+    $OpenAISettings = Get-OpenAISettingsFromEnvFile -FilePath $ResolvedOpenAIEnvFile
 
     if (-not $PSBoundParameters.ContainsKey("OpenAIBaseUrl")) {
-        $OpenAIBaseUrl = Get-EnvFileValue -FilePath $ResolvedOpenAIEnvFile -Keys @(
-            "AI_VIDEO_TRANSCRIBER_OPENAI_BASE_URL",
-            "OPENAI_BASE_URL"
-        )
+        $OpenAIBaseUrl = $OpenAISettings.BaseUrl
     }
 
     if (-not $PSBoundParameters.ContainsKey("OpenAIApiKey")) {
-        $OpenAIApiKey = Get-EnvFileValue -FilePath $ResolvedOpenAIEnvFile -Keys @(
-            "AI_VIDEO_TRANSCRIBER_OPENAI_API_KEY",
-            "OPENAI_API_KEY"
-        )
+        $OpenAIApiKey = $OpenAISettings.ApiKey
     }
 
     if (-not $PSBoundParameters.ContainsKey("OpenAIModel")) {
-        $OpenAIModel = Get-EnvFileValue -FilePath $ResolvedOpenAIEnvFile -Keys @(
-            "AI_VIDEO_TRANSCRIBER_OPENAI_MODEL",
-            "OPENAI_MODEL"
-        )
+        $OpenAIModel = $OpenAISettings.Model
     }
 }
 
@@ -551,7 +658,11 @@ Write-Host (" Codex command: {0}" -f $CodexCommand) -ForegroundColor Cyan
 if ($UseOpenAIPrimary) {
     Write-Host (" OpenAI primary: {0} | model={1} | api={2} | fallback after {3} consecutive provider failures" -f $OpenAIBaseUrl, $OpenAIModel, $ResolvedOpenAIWireApi, $OpenAIFailureThreshold) -ForegroundColor Cyan
     if ($ResolvedOpenAIEnvFile) {
-        Write-Host (" OpenAI env file: {0}" -f $ResolvedOpenAIEnvFile) -ForegroundColor Cyan
+        if ($OpenAIPrimaryAutoDetected) {
+            Write-Host (" OpenAI env file: {0} (auto-detected default)" -f $ResolvedOpenAIEnvFile) -ForegroundColor Cyan
+        } else {
+            Write-Host (" OpenAI env file: {0}" -f $ResolvedOpenAIEnvFile) -ForegroundColor Cyan
+        }
     }
     if ($StrictOpenAIPrimary) {
         Write-Host " OpenAI fallback: disabled (strict primary mode)" -ForegroundColor Cyan
@@ -560,7 +671,7 @@ if ($UseOpenAIPrimary) {
     if ($OpenAIPrimaryExplicitlyRequested) {
         Write-Host " OpenAI primary: disabled after validation" -ForegroundColor Cyan
     } else {
-        Write-Host " OpenAI primary: disabled (use -OpenAIEnvFile or explicit OpenAI args to enable)" -ForegroundColor Cyan
+        Write-Host " OpenAI primary: disabled (default env file not found; use -OpenAIEnvFile or explicit OpenAI args to enable)" -ForegroundColor Cyan
     }
 }
 if ($TargetedRerunMode) {

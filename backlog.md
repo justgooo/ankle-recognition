@@ -12,11 +12,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | UWDF-08：dropout=0.2 + lr=5e-5 |
-| 上次结果 | discard（no_miss_val_acc=0.660, no_miss_val_spe=0.360, val_AUC=0.926） |
-| 下一步 | DGAF-01：Dual-Granularity Adaptive Fusion baseline |
-| 连续 discard 计数 | 0（新阶段重置） |
-| 累计 proxy keep 数 | 3（既有 rerun campaign keep=3/16；UWDF keep=0/8） |
+| 上次实验 | DGAF-04：dropout=0.2 |
+| 上次结果 | discard（no_miss_val_acc=0.777, no_miss_val_spe=0.580, val_AUC=0.933） |
+| 下一步 | DGAF-05：dropout=0.4 |
+| 连续 discard 计数 | 4 |
+| 累计 proxy keep 数 | 3（既有 rerun campaign keep=3/16；UWDF keep=0/8；DGAF keep=0/4） |
 
 ---
 
@@ -119,10 +119,10 @@
 
 ### 阶段 7A：DGAF 超参搜索（8 次 proxy）
 
-- [ ] **DGAF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
-- [ ] **DGAF-02**: lr=5e-5
-- [ ] **DGAF-03**: lr=7e-5
-- [ ] **DGAF-04**: dropout=0.2
+- [x] **DGAF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）→ no_miss_val_acc=0.755, no_miss_val_spe=0.540, val_AUC=0.930 → discard
+- [x] **DGAF-02**: lr=5e-5 → no_miss_val_acc=0.723, no_miss_val_spe=0.480, val_AUC=0.946 → discard
+- [x] **DGAF-03**: lr=7e-5 → no_miss_val_acc=0.723, no_miss_val_spe=0.480, val_AUC=0.937 → discard
+- [x] **DGAF-04**: dropout=0.2 → no_miss_val_acc=0.777, no_miss_val_spe=0.580, val_AUC=0.933 → discard
 - [ ] **DGAF-05**: dropout=0.4
 - [ ] **DGAF-06**: label_smoothing=0.05
 - [ ] **DGAF-07**: lr=5e-5 + label_smoothing=0.05
