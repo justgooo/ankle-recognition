@@ -15,7 +15,7 @@ model.py — 多视角 CT 分类模型
     - build_resnet18_encoder(): 构建 ResNet18 特征提取器
     - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征，支持 mean pooling 或 AttentionPooling）
     - MultiViewCTClassifier: 特征融合分类器（拼接 3 个视角特征后分类）
-    - MultiViewDecisionFusionClassifier: 跨视角特征交互融合分类器 (CVFI)
+    - MultiViewDecisionFusionClassifier: 决策融合分类器（每个视角单独分类后加权投票）
 """
 
 from __future__ import annotations
@@ -243,48 +243,22 @@ class MultiViewCTClassifier(MultiViewEncoder):
         return self.classifier(image_feature)
 
 
-# =====================================================================
-# 跨视角特征交互融合 (Cross-View Feature Interaction Fusion, CVFI)
-# =====================================================================
-
-
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     """
-    跨视角特征交互融合分类器 (Cross-View Feature Interaction Fusion, CVFI)。
+    决策融合分类器 - 视角可靠度门控版 (View Reliability Gating)。
 
-    核心思想：
-        传统 Feature Fusion 把 3 个 512 维特征暴力拼接成 1536 维再送 MLP，
-        这种方式只有一阶信息（各视角特征独立堆叠），无法显式建模视角间的交互。
+    与原版 Decision Fusion 的关键区别：
+        - 原版：3 个视角共用一组固定的全局权重（nn.Parameter(zeros(3))）
+        - 本版：每个视角有一个 confidence head，根据当前样本的特征动态计算权重
+          → 不同病人的融合权重不同，能适应"某个视角拍得不清楚"等个体差异
 
-        CVFI 在拼接的基础上，增加视角两两之间的**逐元素乘积交互项**：
-        - v1 ⊙ v2（轴-冠交互）：捕获两个视角中同时激活的特征通道
-        - v2 ⊙ v3（冠-矢交互）
-        - v1 ⊙ v3（轴-矢交互）
-
-        每个交互项通过轻量投影压缩到 interaction_dim 维，
-        最终拼接为 [一阶特征 + 二阶交互] 送入分类器。
-
-    与暴力拼接 Feature Fusion 的对比：
-        - FF:   concat([v1, v2, v3]) = 1536D → MLP（只有一阶信息）
-        - CVFI: concat([v1, v2, v3, proj(v1⊙v2), proj(v2⊙v3), proj(v1⊙v3)])
-                = 1920D → MLP（一阶 + 二阶交互）
-
-    医学直觉：
-        正常骨结构在多个视角上的特征通道表现一致（乘积大），
-        骨折导致的视角间不一致会让特定通道的乘积值降低。
-        交互项使分类器能显式利用这种跨视角一致性/不一致性信号。
-
-    论文创新点：
-        "We propose Cross-View Feature Interaction Fusion (CVFI), which
-        augments standard multi-view feature concatenation with explicit
-        second-order interaction terms. Element-wise products between view
-        pairs capture cross-view feature co-activation patterns, enabling
-        the classifier to exploit inter-view consistency signals that are
-        invisible to first-order concatenation."
+    工作流程：
+        1. 用父类 MultiViewEncoder 提取 3 个视角的特征
+        2. 每个视角各自通过自己的分类器，得到各自的分类分数
+        3. 每个视角的 confidence head 输出可信度 (0~1)
+        4. 3 个可信度经 softmax 归一化后作为融合权重
+        5. 用动态权重对 3 个视角的分类结果加权平均
     """
-
-    # 交互项压缩维度（每对视角的 512 维乘积压缩到此维度）
-    INTERACTION_DIM = 128
 
     def __init__(
         self,
@@ -292,71 +266,69 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         use_pretrained: bool = False,
         fusion_hidden_dim: int = 256,
         dropout: float = 0.3,
-        use_attention_pooling: bool = False,
+        use_attention_pooling: bool = False,  # 是否使用注意力池化
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
         )
-
-        interaction_dim = self.INTERACTION_DIM
-
-        # ===== 交互投影层 =====
-        # 将 512 维的逐元素乘积压缩到 interaction_dim 维
-        # 每对视角有独立的投影（学习不同视角对的交互模式）
-        self.proj_ax_co = nn.Sequential(           # 轴状面 ⊙ 冠状面
-            nn.Linear(self.feature_dim, interaction_dim),
-            nn.ReLU(inplace=True),
+        # 每个视角有一个独立的分类器（共 3 个）
+        self.view_classifiers = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 -> 256
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout),
+                    nn.Linear(fusion_hidden_dim, 2),  # 256 -> 2（正常/异常）
+                )
+                for _ in range(3)  # 创建 3 个分类器
+            ]
         )
-        self.proj_co_sa = nn.Sequential(           # 冠状面 ⊙ 矢状面
-            nn.Linear(self.feature_dim, interaction_dim),
-            nn.ReLU(inplace=True),
-        )
-        self.proj_ax_sa = nn.Sequential(           # 轴状面 ⊙ 矢状面
-            nn.Linear(self.feature_dim, interaction_dim),
-            nn.ReLU(inplace=True),
-        )
-
-        # ===== 分类头 =====
-        # 总维度 = 一阶 3×512 + 二阶 3×interaction_dim = 1536 + 384 = 1920
-        fused_dim = self.feature_dim * 3 + interaction_dim * 3
-
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(fused_dim),                           # 层归一化：稳定训练
-            nn.Linear(fused_dim, fusion_hidden_dim),           # 1920 → 256
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(fusion_hidden_dim, 2),                   # 256 → 2
+        # 视角可靠度门控：每个视角一个 confidence head
+        # 输入 512 维特征 → 输出 1 个标量（经 sigmoid 映射到 0~1）
+        # 3 个 confidence 经 softmax 归一化后作为动态融合权重
+        self.confidence_heads = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.feature_dim, 1),  # 512 → 1
+                    nn.Sigmoid(),                    # 映射到 (0, 1)
+                )
+                for _ in range(3)
+            ]
         )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
-        前向传播：特征交互融合 + 分类。
+        前向传播：每个视角独立分类，用动态可信度权重融合。
 
         参数：
             images: (B, 3, S, H, W) 的 CT 图像张量
 
         返回：
-            logits: (B, 2) 的张量，分类结果
+            logits: (B, 2) 的张量，3 个视角动态加权投票后的分类结果
         """
         # 第 1 步：提取 3 个视角的特征
-        views = self.encode_views(images)
-        # views = [axial(B,512), coronal(B,512), sagittal(B,512)]
+        view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：计算二阶交互项（逐元素乘积 + 压缩投影）
-        inter_ax_co = self.proj_ax_co(views[0] * views[1])    # (B, 128)
-        inter_co_sa = self.proj_co_sa(views[1] * views[2])    # (B, 128)
-        inter_ax_sa = self.proj_ax_sa(views[0] * views[2])    # (B, 128)
+        # 第 2 步：每个视角分别做分类
+        view_logits = torch.stack(
+            [classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)],
+            dim=1,
+        )  # (B, 3, 2)
 
-        # 第 3 步：拼接一阶特征 + 二阶交互项
-        fused = torch.cat([
-            views[0], views[1], views[2],                      # 一阶：3×512 = 1536
-            inter_ax_co, inter_co_sa, inter_ax_sa,             # 二阶：3×128 = 384
-        ], dim=1)                                               # 总计：1920
+        # 第 3 步：计算每个视角的动态可信度
+        confidences = torch.stack(
+            [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
+            dim=1,
+        )  # (B, 3, 1)
 
-        # 第 4 步：分类
-        return self.classifier(fused)  # (B, 2)
+        # softmax 归一化：3 个可信度 → 和为 1 的融合权重
+        fusion_weights = torch.softmax(confidences, dim=1)  # (B, 3, 1)
+
+        # 第 4 步：动态加权求和
+        # (B, 3, 2) × (B, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
+        return (view_logits * fusion_weights).sum(dim=1)
 
 
 class MultiViewAttentionClassifier(nn.Module):
