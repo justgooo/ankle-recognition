@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
 # Stage 7: Dual-Granularity Adaptive Fusion (DGAF).
-# Current run: DGAF-04 dropout=0.2.
+# Current run: DGAF-05 dropout=0.4.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -23,7 +23,7 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.2
+  dropout: 0.4
   use_attention_pooling: false
 
 train:
