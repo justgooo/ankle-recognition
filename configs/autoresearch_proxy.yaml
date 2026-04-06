@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
 # Stage 8: Progressive Feature Distillation Fusion (PFDF).
-# Current run: PFDF-07 lr=5e-5 + label_smoothing=0.05 (dropout=0.3).
+# Current run: PFDF-08 best-direction combo = lr=5e-5 + baseline label_smoothing=0.0 (dropout=0.3).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -33,4 +33,4 @@ train:
   class_weight: true
   device: auto
   augmentation: true
-  label_smoothing: 0.05
+  label_smoothing: 0.0
