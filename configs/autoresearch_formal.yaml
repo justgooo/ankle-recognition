@@ -1,5 +1,6 @@
 # Slower confirmation config for promising proxy winners.
 # Formal mirror for the Stage 8 Progressive Feature Distillation Fusion (PFDF) family.
+# Current mirror: PFDF-02 lr=5e-5 (dropout=0.3, ls=0.0).
 experiment_name: autoresearch_formal
 output_dir: runs/autoresearch_formal
 seed: 42
@@ -27,7 +28,7 @@ model:
 
 train:
   epochs: 15
-  lr: 0.0001
+  lr: 0.00005
   weight_decay: 0.0001
   class_weight: true
   device: auto
