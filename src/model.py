@@ -15,7 +15,7 @@ model.py — 多视角 CT 分类模型
     - build_resnet18_encoder(): 构建 ResNet18 特征提取器
     - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征，支持 mean pooling 或 AttentionPooling）
     - MultiViewCTClassifier: 特征融合分类器（拼接 3 个视角特征后分类）
-    - MultiViewDecisionFusionClassifier: 双粒度自适应融合分类器 (DGAF)
+    - MultiViewDecisionFusionClassifier: 渐进式特征蒸馏融合分类器 (PFDF)
 """
 
 from __future__ import annotations
@@ -243,39 +243,107 @@ class MultiViewCTClassifier(MultiViewEncoder):
         return self.classifier(image_feature)
 
 
+# =====================================================================
+# 渐进式特征蒸馏融合 (Progressive Feature Distillation Fusion, PFDF)
+# =====================================================================
+
+
+class PairwiseFusionUnit(nn.Module):
+    """
+    两两融合单元：用交叉注意力让两个视角互相增强，再投影回原维度。
+
+    工作原理：
+        给定两个视角的特征 feat_a 和 feat_b（各 512 维）：
+        1. 让 feat_a "关注" feat_b（交叉注意力 a→b）→ 得到 a_enhanced
+        2. 让 feat_b "关注" feat_a（交叉注意力 b→a）→ 得到 b_enhanced
+        3. 拼接 [a_enhanced, b_enhanced] → 1024 维 → 投影回 512 维
+
+    这样做的好处：
+        - 两个视角在融合前先互相"对齐"（通过交叉注意力）
+        - 融合后维度保持 512，不会像暴力拼接那样导致维度爆炸
+        - 每一步融合都有跨视角的信息交互
+
+    论文表述：
+        "Each pairwise fusion stage employs bidirectional cross-attention
+        to align features between two views before projecting the combined
+        representation back to the original feature space."
+    """
+
+    def __init__(self, feature_dim: int = 512, num_heads: int = 4, dropout: float = 0.3):
+        super().__init__()
+        # 交叉注意力：a 查询 b 的信息
+        self.cross_attn_a2b = nn.MultiheadAttention(
+            feature_dim, num_heads=num_heads, batch_first=True, dropout=dropout,
+        )
+        # 交叉注意力：b 查询 a 的信息
+        self.cross_attn_b2a = nn.MultiheadAttention(
+            feature_dim, num_heads=num_heads, batch_first=True, dropout=dropout,
+        )
+        # 融合投影：把交叉注意力增强后的两个 512 维拼接为 1024 维，再投影回 512 维
+        self.fuse_proj = nn.Sequential(
+            nn.Linear(feature_dim * 2, feature_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, feat_a: torch.Tensor, feat_b: torch.Tensor) -> torch.Tensor:
+        """
+        两两融合。
+
+        参数：
+            feat_a: (B, 512) — 视角 A 的特征
+            feat_b: (B, 512) — 视角 B 的特征
+
+        返回：
+            fused: (B, 512) — 融合后的特征
+        """
+        # MultiheadAttention 需要 (B, seq_len, dim) 格式，添加 seq 维度
+        a = feat_a.unsqueeze(1)  # (B, 1, 512)
+        b = feat_b.unsqueeze(1)  # (B, 1, 512)
+
+        # 双向交叉注意力
+        a_enhanced, _ = self.cross_attn_a2b(a, b, b)  # a 关注 b 的信息
+        b_enhanced, _ = self.cross_attn_b2a(b, a, a)  # b 关注 a 的信息
+
+        # 拼接并投影回 512 维
+        fused = torch.cat([
+            a_enhanced.squeeze(1),  # (B, 512)
+            b_enhanced.squeeze(1),  # (B, 512)
+        ], dim=1)  # (B, 1024)
+        return self.fuse_proj(fused)  # (B, 512)
+
+
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     """
-    双粒度自适应融合分类器 (Dual-Granularity Adaptive Fusion, DGAF)。
+    渐进式特征蒸馏融合分类器 (Progressive Feature Distillation Fusion, PFDF)。
 
     核心思想：
-        同时在「特征级」和「决策级」两个粒度做融合，
-        并用一个样本自适应的门控机制为每个样本动态选择最优融合路径。
+        传统 Feature Fusion 把 3 个 512 维特征暴力拼接成 1536 维再送 MLP，
+        这种方式存在两个问题：
+        1. 1536 维输入对小型 MLP 来说负担过重
+        2. 三个视角的特征没有经过"对齐"就直接拼接
 
-    两个融合粒度：
-        1. 特征级融合 (Feature Branch)：
-           拼接 3 个视角的 512 维特征 → MLP → feature_logits
-           优势：保留跨视角交互信息
-           劣势：容易受到噪声视角干扰
+        PFDF 通过渐进式两两融合来解决这个问题：
+        Stage 1: Fuse(axial, coronal) → fused_AC  (512 维)
+        Stage 2: Fuse(fused_AC, sagittal) → final  (512 维)
 
-        2. 决策级融合 (Decision Branch)：
-           每个视角独立分类 → 加权平均 → decision_logits
-           优势：对单视角噪声鲁棒
-           劣势：缺乏跨视角交互
+        每个融合阶段使用双向交叉注意力让两个输入互相增强后再合并。
 
-    自适应门控 (View-Aware Gate)：
-        输入 = [视角特征置信度(3D) + 视角间分歧度(1D) + 两分支logits(4D)]
-        → 2 层 MLP → sigmoid → gate ∈ [0, 1]
-        → final = gate * feature_logits + (1 - gate) * decision_logits
+    与暴力拼接 Feature Fusion 的对比：
+        - FF: concat(3×512) = 1536 维 → MLP → 2 类   (分类器压力大)
+        - PFDF: 渐进融合 → 512 维 → MLP → 2 类       (分类器只需处理 512 维)
 
-    与 Hierarchical Hybrid Fusion (HHF) 的改进：
-        - HHF：gate 输入只有 4D (两分支 logits)，单层线性 → 表达力不足，9 次全 discard
-        - DGAF：gate 输入 8D (含视角置信度 + 分歧度)，2 层 MLP → 更强的上下文感知
+    与 Hierarchical Hybrid Fusion (HHF) 的对比：
+        - HHF: 门控融合两个分支，9/9 实验 discard（门控学不好）
+        - PFDF: 纯特征级渐进融合，无门控 → 更稳定
 
     论文创新点：
-        "We propose Dual-Granularity Adaptive Fusion (DGAF), which operates
-        simultaneously at both feature and decision levels, using view-level
-        confidence and inter-view disagreement to dynamically weight the
-        contribution of each fusion pathway on a per-sample basis."
+        "We propose Progressive Feature Distillation Fusion (PFDF), a
+        hierarchical fusion strategy that progressively integrates multi-view
+        features through pairwise cross-attention. Unlike flat concatenation,
+        PFDF enables feature alignment between views before fusion, reducing
+        the dimensionality burden on the classifier and capturing inter-view
+        correspondences at each fusion stage."
     """
 
     def __init__(
@@ -291,99 +359,49 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
         )
-        fused_dim = self.feature_dim * 3  # 512 * 3 = 1536
 
-        # ===== 分支 1：特征级融合 =====
-        self.feature_classifier = nn.Sequential(
-            nn.Linear(fused_dim, fusion_hidden_dim),
+        # ===== 渐进式融合阶段 =====
+        # Stage 1: 融合 axial + coronal → fused_AC (512 维)
+        self.fuse_stage1 = PairwiseFusionUnit(
+            self.feature_dim, num_heads=4, dropout=dropout,
+        )
+        # Stage 2: 融合 fused_AC + sagittal → final (512 维)
+        self.fuse_stage2 = PairwiseFusionUnit(
+            self.feature_dim, num_heads=4, dropout=dropout,
+        )
+
+        # ===== 分类头 =====
+        # 输入只有 512 维（而非 1536 维），分类器压力大幅减小
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(self.feature_dim),                    # 层归一化：稳定训练
+            nn.Linear(self.feature_dim, fusion_hidden_dim),    # 512 → 256
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(fusion_hidden_dim, 2),
+            nn.Linear(fusion_hidden_dim, 2),                   # 256 → 2
         )
-
-        # ===== 分支 2：决策级融合 =====
-        # 每个视角独立的分类头
-        self.view_classifiers = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(self.feature_dim, fusion_hidden_dim),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(dropout),
-                    nn.Linear(fusion_hidden_dim, 2),
-                )
-                for _ in range(3)
-            ]
-        )
-        # 可学习的视角权重（用于 Decision Branch 的加权平均）
-        self.view_weight_logits = nn.Parameter(torch.zeros(3))
-
-        # ===== 自适应门控 (View-Aware Gate) =====
-        # 输入维度：
-        #   - 3 个视角的归一化特征范数 (3D) — 视角级置信度
-        #   - 视角间分歧度 (1D) — 各视角预测的方差
-        #   - Feature Branch logits (2D)
-        #   - Decision Branch logits (2D)
-        #   共 8 维
-        gate_input_dim = 3 + 1 + 2 + 2  # = 8
-        self.gate_net = nn.Sequential(
-            nn.Linear(gate_input_dim, 32),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.1),
-            nn.Linear(32, 1),
-        )
-        # 初始化门控输出 ≈ 0 → sigmoid(0) = 0.5 → 初始两分支等权
-        nn.init.zeros_(self.gate_net[-1].weight)
-        nn.init.zeros_(self.gate_net[-1].bias)
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
-        前向传播：双粒度融合 + 自适应门控。
+        前向传播：渐进式融合 + 分类。
 
         参数：
             images: (B, 3, S, H, W) 的 CT 图像张量
 
         返回：
-            logits: (B, 2) 的张量，自适应融合后的分类结果
+            logits: (B, 2) 的张量，分类结果
         """
         # 第 1 步：提取 3 个视角的特征
-        view_features = self.encode_views(images)  # 3 × (B, 512)
+        views = self.encode_views(images)  # [axial(B,512), coronal(B,512), sagittal(B,512)]
 
-        # 第 2 步：Feature Branch — 特征级融合
-        fused_feature = torch.cat(view_features, dim=1)  # (B, 1536)
-        feature_logits = self.feature_classifier(fused_feature)  # (B, 2)
+        # 第 2 步：渐进式两两融合
+        # Stage 1: axial + coronal → fused_AC
+        fused_ac = self.fuse_stage1(views[0], views[1])  # (B, 512)
 
-        # 第 3 步：Decision Branch — 决策级融合
-        view_logits_list = [
-            clf(feat) for clf, feat in zip(self.view_classifiers, view_features)
-        ]
-        view_logits_stacked = torch.stack(view_logits_list, dim=1)  # (B, 3, 2)
-        fusion_weights = torch.softmax(self.view_weight_logits, dim=0).view(1, 3, 1)
-        decision_logits = (view_logits_stacked * fusion_weights).sum(dim=1)  # (B, 2)
+        # Stage 2: fused_AC + sagittal → final_fused
+        final_fused = self.fuse_stage2(fused_ac, views[2])  # (B, 512)
 
-        # 第 4 步：计算门控输入特征
-        # (a) 视角置信度：每个视角特征的 L2 范数（归一化到 [0,1] 范围）
-        view_norms = torch.stack(
-            [feat.norm(dim=1) for feat in view_features], dim=1
-        )  # (B, 3)
-        # 对范数做 min-max 归一化（逐样本），避免量级差异影响门控
-        norm_min = view_norms.min(dim=1, keepdim=True).values
-        norm_max = view_norms.max(dim=1, keepdim=True).values
-        view_conf = (view_norms - norm_min) / (norm_max - norm_min + 1e-8)  # (B, 3)
-
-        # (b) 视角间分歧度：各视角异常概率的方差
-        view_probs = torch.stack(
-            [torch.softmax(vl, dim=1)[:, 1] for vl in view_logits_list], dim=1
-        )  # (B, 3) — 每个视角的异常概率
-        disagreement = view_probs.var(dim=1, keepdim=True)  # (B, 1)
-
-        # (c) 拼接门控输入
-        gate_input = torch.cat(
-            [view_conf, disagreement, feature_logits, decision_logits], dim=1
-        )  # (B, 8)
-
-        # 第 5 步：门控融合
-        gate = torch.sigmoid(self.gate_net(gate_input))  # (B, 1)
-        return gate * feature_logits + (1.0 - gate) * decision_logits
+        # 第 3 步：分类
+        return self.classifier(final_fused)  # (B, 2)
 
 
 class MultiViewAttentionClassifier(nn.Module):

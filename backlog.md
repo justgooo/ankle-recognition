@@ -12,11 +12,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | DGAF-04：dropout=0.2 |
-| 上次结果 | discard（no_miss_val_acc=0.777, no_miss_val_spe=0.580, val_AUC=0.933） |
-| 下一步 | DGAF-05：dropout=0.4 |
-| 连续 discard 计数 | 4 |
-| 累计 proxy keep 数 | 3（既有 rerun campaign keep=3/16；UWDF keep=0/8；DGAF keep=0/4） |
+| 上次实验 | DGAF-07：lr=5e-5 + label_smoothing=0.05 |
+| 上次结果 | discard（no_miss_val_acc=0.702, no_miss_val_spe=0.440, val_AUC=0.946） |
+| 下一步 | PFDF-01：baseline（lr=1e-4, dropout=0.3, ls=0.0） |
+| 连续 discard 计数 | 0（新阶段重置） |
+| 累计 proxy keep 数 | 3（既有 rerun campaign keep=3/16；UWDF keep=0/8；DGAF keep=0/7；PFDF keep=0/0） |
 
 ---
 
@@ -110,23 +110,45 @@
 ---
 
 
-## 阶段 7：Dual-Granularity Adaptive Fusion (DGAF) 🔴 当前最高优先级
+## 阶段 7：Dual-Granularity Adaptive Fusion (DGAF) ✅ 已完成（跳过末尾 2 次）
 
 > **论文创新点**：双粒度自适应融合。
 > 同时在特征级和决策级做融合，用 View-Aware Gate（视角置信度 + 分歧度 + 双分支 logits）
 > 为每个样本动态选择最优融合路径。
+> 6/8 次 proxy 全 discard，跳过 DGAF-07/08 转入 PFDF。
 > 基线配置：share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3, fusion_hidden_dim=256
 
-### 阶段 7A：DGAF 超参搜索（8 次 proxy）
+### 阶段 7A：DGAF 超参搜索（7/8 次 proxy，DGAF-08 跳过）
 
 - [x] **DGAF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）→ no_miss_val_acc=0.755, no_miss_val_spe=0.540, val_AUC=0.930 → discard
 - [x] **DGAF-02**: lr=5e-5 → no_miss_val_acc=0.723, no_miss_val_spe=0.480, val_AUC=0.946 → discard
 - [x] **DGAF-03**: lr=7e-5 → no_miss_val_acc=0.723, no_miss_val_spe=0.480, val_AUC=0.937 → discard
 - [x] **DGAF-04**: dropout=0.2 → no_miss_val_acc=0.777, no_miss_val_spe=0.580, val_AUC=0.933 → discard
-- [ ] **DGAF-05**: dropout=0.4
-- [ ] **DGAF-06**: label_smoothing=0.05
-- [ ] **DGAF-07**: lr=5e-5 + label_smoothing=0.05
-- [ ] **DGAF-08**: 基于前 7 次最佳方向的组合实验
+- [x] **DGAF-05**: dropout=0.4 → no_miss_val_acc=0.777, no_miss_val_spe=0.580, val_AUC=0.933 → discard
+- [x] **DGAF-06**: label_smoothing=0.05 → no_miss_val_acc=0.681, no_miss_val_spe=0.400, val_AUC=0.932 → discard
+- [x] **DGAF-07**: lr=5e-5 + label_smoothing=0.05 → no_miss_val_acc=0.702, no_miss_val_spe=0.440, val_AUC=0.946 → discard
+- [x] ~~**DGAF-08**~~: 已跳过（转入 PFDF，2026-04-06）
+
+---
+
+## 阶段 8：Progressive Feature Distillation Fusion (PFDF) 🔴 当前最高优先级
+
+> **论文创新点**：渐进式特征蒸馏融合。
+> 通过两阶段两两交叉注意力渐进融合三个视角特征：
+> Stage 1: Fuse(axial, coronal) → 512D；Stage 2: Fuse(result, sagittal) → 512D。
+> 分类器只需处理 512 维（而非暴力拼接的 1536 维），降低过拟合风险。
+> 基线配置：share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3, fusion_hidden_dim=256
+
+### 阶段 8A：PFDF 超参搜索（8 次 proxy）
+
+- [ ] **PFDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
+- [ ] **PFDF-02**: lr=5e-5
+- [ ] **PFDF-03**: lr=7e-5
+- [ ] **PFDF-04**: dropout=0.2
+- [ ] **PFDF-05**: dropout=0.4
+- [ ] **PFDF-06**: label_smoothing=0.05
+- [ ] **PFDF-07**: lr=5e-5 + label_smoothing=0.05
+- [ ] **PFDF-08**: 基于前 7 次最佳方向的组合实验
 
 ---
 

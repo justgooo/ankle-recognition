@@ -34,18 +34,18 @@
 
 ## 研究策略
 
-**当前阶段**：Dual-Granularity Adaptive Fusion 实验（阶段 7）
+**当前阶段**：Progressive Feature Distillation Fusion 实验（阶段 8）
 
-前阶段（阶段 4/5/6）的架构创新（VRG / ASF / AttentionPooling / HHF / UWDF）
+前阶段（阶段 4/5/6/7）的架构创新（VRG / ASF / AttentionPooling / HHF / UWDF / DGAF）
 已各完成多轮实验但均未超过当前最优 0.798。
-现阶段实现 **DGAF（双粒度自适应融合）**：同时在特征级和决策级做融合，
-用 View-Aware Gate 为每个样本动态选择最优融合路径。
+现阶段实现 **PFDF（渐进式特征蒸馏融合）**：通过两阶段两两交叉注意力渐进融合三个视角特征，
+分类器只需处理 512 维（而非 1536 维），降低过拟合风险。
 
-### DGAF 核心设计
-- **双分支架构**：Feature Branch (特征级融合) + Decision Branch (决策级融合)
-- **View-Aware Gate**：输入 = [视角特征范数(3D) + 分歧度(1D) + 两分支logits(4D)] → 2层MLP → gate
-- **融合**：final = gate * feature_logits + (1-gate) * decision_logits
-- 通过 `fusion_type: decision` 启用（DGAF 实现在 decision 入口点下）
+### PFDF 核心设计
+- **渐进式融合**：Stage 1: Fuse(axial, coronal) → 512D；Stage 2: Fuse(result, sagittal) → 512D
+- **PairwiseFusionUnit**：双向交叉注意力（4 heads）+ 拼接投影，让两个视角互相对齐后融合
+- **轻量分类头**：LayerNorm → Linear(512,256) → ReLU → Dropout → Linear(256,2)
+- 通过 `fusion_type: decision` 启用（PFDF 实现在 decision 入口点下）
 - 执行顺序：8 次 proxy 超参搜索
 
 
@@ -244,23 +244,30 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 （AP-FF 前 3 次全部 discard，用户决定放弃）
 
-### 阶段 6：UWDF（Uncertainty-Weighted Decision Fusion）🔴 当前执行中
+### 阶段 6：UWDF（Uncertainty-Weighted Decision Fusion）✅ 已完成
 
-> 每个视角的分类头同时输出 logits 和不确定性 (log σ²)。
-> 融合权重 = softmax(precision)，precision = exp(-log_var)。
-> 训练损失 = CE(fused) + heteroscedastic aux loss。
+（8 次 proxy 实验全 discard，已完结）
+
+### 阶段 7：DGAF（Dual-Granularity Adaptive Fusion）✅ 已完成（跳过末尾 2 次）
+
+（6/8 次 proxy 实验已完成，全 discard，跳过 DGAF-07/08 转入 PFDF）
+
+### 阶段 8：PFDF（Progressive Feature Distillation Fusion）🔴 当前执行中
+
+> 渐进式两两交叉注意力融合：Stage 1 融合 axial+coronal，Stage 2 融合结果+sagittal。
+> 分类器只处理 512 维（而非暴力拼接的 1536 维），降低过拟合风险。
 > 基线配置沿用当前最佳策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3`
 
-#### 阶段 6A：UWDF 超参搜索（8 次 proxy）
+#### 阶段 8A：PFDF 超参搜索（8 次 proxy）
 
-1. **UWDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3）
-2. **UWDF-02**: lr=5e-5
-3. **UWDF-03**: lr=7e-5
-4. **UWDF-04**: dropout=0.2
-5. **UWDF-05**: dropout=0.4
-6. **UWDF-06**: label_smoothing=0.05
-7. **UWDF-07**: lr=5e-5 + label_smoothing=0.05
-8. **UWDF-08**: 基于前 7 次最佳方向的组合实验
+1. **PFDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3）
+2. **PFDF-02**: lr=5e-5
+3. **PFDF-03**: lr=7e-5
+4. **PFDF-04**: dropout=0.2
+5. **PFDF-05**: dropout=0.4
+6. **PFDF-06**: label_smoothing=0.05
+7. **PFDF-07**: lr=5e-5 + label_smoothing=0.05
+8. **PFDF-08**: 基于前 7 次最佳方向的组合实验
 
 
 ## 可使用的训练策略配置项

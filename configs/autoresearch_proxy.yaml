@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 7: Dual-Granularity Adaptive Fusion (DGAF).
-# Current run: DGAF-07 lr=5e-5 + label_smoothing=0.05.
+# Stage 8: Progressive Feature Distillation Fusion (PFDF).
+# Current run: PFDF-01 baseline (lr=1e-4, dropout=0.3, ls=0.0).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -19,7 +19,7 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision  # DGAF is implemented under the decision entry point.
+  fusion_type: decision  # PFDF is implemented under the decision entry point.
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
@@ -28,9 +28,9 @@ model:
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
   device: auto
   augmentation: true
-  label_smoothing: 0.05
+  label_smoothing: 0.0
