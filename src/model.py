@@ -15,7 +15,7 @@ model.py — 多视角 CT 分类模型
     - build_resnet18_encoder(): 构建 ResNet18 特征提取器
     - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征，支持 mean pooling 或 AttentionPooling）
     - MultiViewCTClassifier: 特征融合分类器（拼接 3 个视角特征后分类）
-    - MultiViewDecisionFusionClassifier: 渐进式特征蒸馏融合分类器 (PFDF)
+    - MultiViewDecisionFusionClassifier: 跨视角特征交互融合分类器 (CVFI)
 """
 
 from __future__ import annotations
@@ -244,107 +244,47 @@ class MultiViewCTClassifier(MultiViewEncoder):
 
 
 # =====================================================================
-# 渐进式特征蒸馏融合 (Progressive Feature Distillation Fusion, PFDF)
+# 跨视角特征交互融合 (Cross-View Feature Interaction Fusion, CVFI)
 # =====================================================================
-
-
-class PairwiseFusionUnit(nn.Module):
-    """
-    两两融合单元：用交叉注意力让两个视角互相增强，再投影回原维度。
-
-    工作原理：
-        给定两个视角的特征 feat_a 和 feat_b（各 512 维）：
-        1. 让 feat_a "关注" feat_b（交叉注意力 a→b）→ 得到 a_enhanced
-        2. 让 feat_b "关注" feat_a（交叉注意力 b→a）→ 得到 b_enhanced
-        3. 拼接 [a_enhanced, b_enhanced] → 1024 维 → 投影回 512 维
-
-    这样做的好处：
-        - 两个视角在融合前先互相"对齐"（通过交叉注意力）
-        - 融合后维度保持 512，不会像暴力拼接那样导致维度爆炸
-        - 每一步融合都有跨视角的信息交互
-
-    论文表述：
-        "Each pairwise fusion stage employs bidirectional cross-attention
-        to align features between two views before projecting the combined
-        representation back to the original feature space."
-    """
-
-    def __init__(self, feature_dim: int = 512, num_heads: int = 4, dropout: float = 0.3):
-        super().__init__()
-        # 交叉注意力：a 查询 b 的信息
-        self.cross_attn_a2b = nn.MultiheadAttention(
-            feature_dim, num_heads=num_heads, batch_first=True, dropout=dropout,
-        )
-        # 交叉注意力：b 查询 a 的信息
-        self.cross_attn_b2a = nn.MultiheadAttention(
-            feature_dim, num_heads=num_heads, batch_first=True, dropout=dropout,
-        )
-        # 融合投影：把交叉注意力增强后的两个 512 维拼接为 1024 维，再投影回 512 维
-        self.fuse_proj = nn.Sequential(
-            nn.Linear(feature_dim * 2, feature_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-        )
-
-    def forward(self, feat_a: torch.Tensor, feat_b: torch.Tensor) -> torch.Tensor:
-        """
-        两两融合。
-
-        参数：
-            feat_a: (B, 512) — 视角 A 的特征
-            feat_b: (B, 512) — 视角 B 的特征
-
-        返回：
-            fused: (B, 512) — 融合后的特征
-        """
-        # MultiheadAttention 需要 (B, seq_len, dim) 格式，添加 seq 维度
-        a = feat_a.unsqueeze(1)  # (B, 1, 512)
-        b = feat_b.unsqueeze(1)  # (B, 1, 512)
-
-        # 双向交叉注意力
-        a_enhanced, _ = self.cross_attn_a2b(a, b, b)  # a 关注 b 的信息
-        b_enhanced, _ = self.cross_attn_b2a(b, a, a)  # b 关注 a 的信息
-
-        # 拼接并投影回 512 维
-        fused = torch.cat([
-            a_enhanced.squeeze(1),  # (B, 512)
-            b_enhanced.squeeze(1),  # (B, 512)
-        ], dim=1)  # (B, 1024)
-        return self.fuse_proj(fused)  # (B, 512)
 
 
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     """
-    渐进式特征蒸馏融合分类器 (Progressive Feature Distillation Fusion, PFDF)。
+    跨视角特征交互融合分类器 (Cross-View Feature Interaction Fusion, CVFI)。
 
     核心思想：
         传统 Feature Fusion 把 3 个 512 维特征暴力拼接成 1536 维再送 MLP，
-        这种方式存在两个问题：
-        1. 1536 维输入对小型 MLP 来说负担过重
-        2. 三个视角的特征没有经过"对齐"就直接拼接
+        这种方式只有一阶信息（各视角特征独立堆叠），无法显式建模视角间的交互。
 
-        PFDF 通过渐进式两两融合来解决这个问题：
-        Stage 1: Fuse(axial, coronal) → fused_AC  (512 维)
-        Stage 2: Fuse(fused_AC, sagittal) → final  (512 维)
+        CVFI 在拼接的基础上，增加视角两两之间的**逐元素乘积交互项**：
+        - v1 ⊙ v2（轴-冠交互）：捕获两个视角中同时激活的特征通道
+        - v2 ⊙ v3（冠-矢交互）
+        - v1 ⊙ v3（轴-矢交互）
 
-        每个融合阶段使用双向交叉注意力让两个输入互相增强后再合并。
+        每个交互项通过轻量投影压缩到 interaction_dim 维，
+        最终拼接为 [一阶特征 + 二阶交互] 送入分类器。
 
     与暴力拼接 Feature Fusion 的对比：
-        - FF: concat(3×512) = 1536 维 → MLP → 2 类   (分类器压力大)
-        - PFDF: 渐进融合 → 512 维 → MLP → 2 类       (分类器只需处理 512 维)
+        - FF:   concat([v1, v2, v3]) = 1536D → MLP（只有一阶信息）
+        - CVFI: concat([v1, v2, v3, proj(v1⊙v2), proj(v2⊙v3), proj(v1⊙v3)])
+                = 1920D → MLP（一阶 + 二阶交互）
 
-    与 Hierarchical Hybrid Fusion (HHF) 的对比：
-        - HHF: 门控融合两个分支，9/9 实验 discard（门控学不好）
-        - PFDF: 纯特征级渐进融合，无门控 → 更稳定
+    医学直觉：
+        正常骨结构在多个视角上的特征通道表现一致（乘积大），
+        骨折导致的视角间不一致会让特定通道的乘积值降低。
+        交互项使分类器能显式利用这种跨视角一致性/不一致性信号。
 
     论文创新点：
-        "We propose Progressive Feature Distillation Fusion (PFDF), a
-        hierarchical fusion strategy that progressively integrates multi-view
-        features through pairwise cross-attention. Unlike flat concatenation,
-        PFDF enables feature alignment between views before fusion, reducing
-        the dimensionality burden on the classifier and capturing inter-view
-        correspondences at each fusion stage."
+        "We propose Cross-View Feature Interaction Fusion (CVFI), which
+        augments standard multi-view feature concatenation with explicit
+        second-order interaction terms. Element-wise products between view
+        pairs capture cross-view feature co-activation patterns, enabling
+        the classifier to exploit inter-view consistency signals that are
+        invisible to first-order concatenation."
     """
+
+    # 交互项压缩维度（每对视角的 512 维乘积压缩到此维度）
+    INTERACTION_DIM = 128
 
     def __init__(
         self,
@@ -360,21 +300,31 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             use_attention_pooling=use_attention_pooling,
         )
 
-        # ===== 渐进式融合阶段 =====
-        # Stage 1: 融合 axial + coronal → fused_AC (512 维)
-        self.fuse_stage1 = PairwiseFusionUnit(
-            self.feature_dim, num_heads=4, dropout=dropout,
+        interaction_dim = self.INTERACTION_DIM
+
+        # ===== 交互投影层 =====
+        # 将 512 维的逐元素乘积压缩到 interaction_dim 维
+        # 每对视角有独立的投影（学习不同视角对的交互模式）
+        self.proj_ax_co = nn.Sequential(           # 轴状面 ⊙ 冠状面
+            nn.Linear(self.feature_dim, interaction_dim),
+            nn.ReLU(inplace=True),
         )
-        # Stage 2: 融合 fused_AC + sagittal → final (512 维)
-        self.fuse_stage2 = PairwiseFusionUnit(
-            self.feature_dim, num_heads=4, dropout=dropout,
+        self.proj_co_sa = nn.Sequential(           # 冠状面 ⊙ 矢状面
+            nn.Linear(self.feature_dim, interaction_dim),
+            nn.ReLU(inplace=True),
+        )
+        self.proj_ax_sa = nn.Sequential(           # 轴状面 ⊙ 矢状面
+            nn.Linear(self.feature_dim, interaction_dim),
+            nn.ReLU(inplace=True),
         )
 
         # ===== 分类头 =====
-        # 输入只有 512 维（而非 1536 维），分类器压力大幅减小
+        # 总维度 = 一阶 3×512 + 二阶 3×interaction_dim = 1536 + 384 = 1920
+        fused_dim = self.feature_dim * 3 + interaction_dim * 3
+
         self.classifier = nn.Sequential(
-            nn.LayerNorm(self.feature_dim),                    # 层归一化：稳定训练
-            nn.Linear(self.feature_dim, fusion_hidden_dim),    # 512 → 256
+            nn.LayerNorm(fused_dim),                           # 层归一化：稳定训练
+            nn.Linear(fused_dim, fusion_hidden_dim),           # 1920 → 256
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(fusion_hidden_dim, 2),                   # 256 → 2
@@ -382,7 +332,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
-        前向传播：渐进式融合 + 分类。
+        前向传播：特征交互融合 + 分类。
 
         参数：
             images: (B, 3, S, H, W) 的 CT 图像张量
@@ -391,17 +341,22 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             logits: (B, 2) 的张量，分类结果
         """
         # 第 1 步：提取 3 个视角的特征
-        views = self.encode_views(images)  # [axial(B,512), coronal(B,512), sagittal(B,512)]
+        views = self.encode_views(images)
+        # views = [axial(B,512), coronal(B,512), sagittal(B,512)]
 
-        # 第 2 步：渐进式两两融合
-        # Stage 1: axial + coronal → fused_AC
-        fused_ac = self.fuse_stage1(views[0], views[1])  # (B, 512)
+        # 第 2 步：计算二阶交互项（逐元素乘积 + 压缩投影）
+        inter_ax_co = self.proj_ax_co(views[0] * views[1])    # (B, 128)
+        inter_co_sa = self.proj_co_sa(views[1] * views[2])    # (B, 128)
+        inter_ax_sa = self.proj_ax_sa(views[0] * views[2])    # (B, 128)
 
-        # Stage 2: fused_AC + sagittal → final_fused
-        final_fused = self.fuse_stage2(fused_ac, views[2])  # (B, 512)
+        # 第 3 步：拼接一阶特征 + 二阶交互项
+        fused = torch.cat([
+            views[0], views[1], views[2],                      # 一阶：3×512 = 1536
+            inter_ax_co, inter_co_sa, inter_ax_sa,             # 二阶：3×128 = 384
+        ], dim=1)                                               # 总计：1920
 
-        # 第 3 步：分类
-        return self.classifier(final_fused)  # (B, 2)
+        # 第 4 步：分类
+        return self.classifier(fused)  # (B, 2)
 
 
 class MultiViewAttentionClassifier(nn.Module):

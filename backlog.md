@@ -12,11 +12,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | DGAF-07：lr=5e-5 + label_smoothing=0.05 |
-| 上次结果 | discard（no_miss_val_acc=0.702, no_miss_val_spe=0.440, val_AUC=0.946） |
-| 下一步 | PFDF-01：baseline（lr=1e-4, dropout=0.3, ls=0.0） |
+| 上次实验 | PFDF-08：best-direction combo（lr=5e-5 + 恢复 baseline label_smoothing=0.0） |
+| 上次结果 | discard（no_miss_val_acc=0.755, no_miss_val_spe=0.540, val_AUC=0.916） |
+| 下一步 | 阶段 9：CVFI-01 baseline（Cross-View Feature Interaction Fusion） |
 | 连续 discard 计数 | 0（新阶段重置） |
-| 累计 proxy keep 数 | 3（既有 rerun campaign keep=3/16；UWDF keep=0/8；DGAF keep=0/7；PFDF keep=0/0） |
+| 累计 proxy keep 数 | 3（既有 rerun campaign keep=3/16；UWDF keep=0/8；DGAF keep=0/7；PFDF keep=0/8） |
 
 ---
 
@@ -131,7 +131,7 @@
 
 ---
 
-## 阶段 8：Progressive Feature Distillation Fusion (PFDF) 🔴 当前最高优先级
+## 阶段 8：Progressive Feature Distillation Fusion (PFDF) ✅ 已完成（8/8 proxy，全 discard）
 
 > **论文创新点**：渐进式特征蒸馏融合。
 > 通过两阶段两两交叉注意力渐进融合三个视角特征：
@@ -141,14 +141,36 @@
 
 ### 阶段 8A：PFDF 超参搜索（8 次 proxy）
 
-- [ ] **PFDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
-- [ ] **PFDF-02**: lr=5e-5
-- [ ] **PFDF-03**: lr=7e-5
-- [ ] **PFDF-04**: dropout=0.2
-- [ ] **PFDF-05**: dropout=0.4
-- [ ] **PFDF-06**: label_smoothing=0.05
-- [ ] **PFDF-07**: lr=5e-5 + label_smoothing=0.05
-- [ ] **PFDF-08**: 基于前 7 次最佳方向的组合实验
+- [x] **PFDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）→ no_miss_val_acc=0.702, no_miss_val_spe=0.440, val_AUC=0.920 → discard
+- [x] **PFDF-02**: lr=5e-5 → no_miss_val_acc=0.787, no_miss_val_spe=0.600, val_AUC=0.920 → discard
+- [x] **PFDF-03**: lr=7e-5 → no_miss_val_acc=0.670, no_miss_val_spe=0.380, val_AUC=0.893 → discard
+- [x] **PFDF-04**: dropout=0.2 → no_miss_val_acc=0.543, no_miss_val_spe=0.140, val_AUC=0.920 → discard
+- [x] **PFDF-05**: dropout=0.4 → no_miss_val_acc=0.500, no_miss_val_spe=0.060, val_AUC=0.903 → discard
+- [x] **PFDF-06**: label_smoothing=0.05 → no_miss_val_acc=0.745, no_miss_val_spe=0.520, val_AUC=0.934 → discard
+- [x] **PFDF-07**: lr=5e-5 + label_smoothing=0.05 → no_miss_val_acc=0.766, no_miss_val_spe=0.560, val_AUC=0.924 → discard
+- [x] **PFDF-08**: 基于前 7 次最佳方向的组合实验（沿用最佳 lr=5e-5，并恢复 baseline label_smoothing=0.0）→ no_miss_val_acc=0.755, no_miss_val_spe=0.540, val_AUC=0.916 → discard
+
+---
+
+## 阶段 9：Cross-View Feature Interaction Fusion (CVFI) 🔴 当前执行中
+
+> **论文创新点**：跨视角特征交互融合。
+> 在标准特征拼接（一阶）的基础上，增加视角两两之间的**逐元素乘积交互项**（二阶），
+> 通过投影层压缩到 128 维。交互项显式建模跨视角特征通道的共激活模式，
+> 让分类器能利用视角间的一致性/不一致性信号。
+> concat([v1, v2, v3, proj(v1⊙v2), proj(v2⊙v3), proj(v1⊙v3)]) = 1920D → MLP → 2
+> 基线配置：share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3, fusion_hidden_dim=256
+
+### 阶段 9A：CVFI 超参搜索（8 次 proxy）
+
+- [ ] **CVFI-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
+- [ ] **CVFI-02**: lr=5e-5
+- [ ] **CVFI-03**: lr=7e-5
+- [ ] **CVFI-04**: dropout=0.2
+- [ ] **CVFI-05**: dropout=0.4
+- [ ] **CVFI-06**: label_smoothing=0.05
+- [ ] **CVFI-07**: lr=5e-5 + label_smoothing=0.05
+- [ ] **CVFI-08**: 基于前 7 次最佳方向的组合实验
 
 ---
 
@@ -162,7 +184,7 @@
 
 - 暂无高优先级待办
 
-### 阶段 3：论文就绪验证
+### 阶段 3：论文就绪验证 🔴 当前最高优先级
 
 - [ ] **多 seed 验证**（seed=42, 123, 456）
 - [ ] **Bootstrap 置信区间**（1000 次重采样）

@@ -34,18 +34,18 @@
 
 ## 研究策略
 
-**当前阶段**：Progressive Feature Distillation Fusion 实验（阶段 8）
+**当前阶段**：Cross-View Feature Interaction Fusion 实验（阶段 9）
 
-前阶段（阶段 4/5/6/7）的架构创新（VRG / ASF / AttentionPooling / HHF / UWDF / DGAF）
+前阶段（阶段 4/5/6/7/8）的架构创新（VRG / ASF / AttentionPooling / HHF / UWDF / DGAF / PFDF）
 已各完成多轮实验但均未超过当前最优 0.798。
-现阶段实现 **PFDF（渐进式特征蒸馏融合）**：通过两阶段两两交叉注意力渐进融合三个视角特征，
-分类器只需处理 512 维（而非 1536 维），降低过拟合风险。
+现阶段实现 **CVFI（跨视角特征交互融合）**：在标准特征拼接的基础上，
+增加视角两两之间的逐元素乘积交互项，显式建模二阶特征交互。
 
-### PFDF 核心设计
-- **渐进式融合**：Stage 1: Fuse(axial, coronal) → 512D；Stage 2: Fuse(result, sagittal) → 512D
-- **PairwiseFusionUnit**：双向交叉注意力（4 heads）+ 拼接投影，让两个视角互相对齐后融合
-- **轻量分类头**：LayerNorm → Linear(512,256) → ReLU → Dropout → Linear(256,2)
-- 通过 `fusion_type: decision` 启用（PFDF 实现在 decision 入口点下）
+### CVFI 核心设计
+- **一阶特征**：concat([v1, v2, v3]) = 1536D（与标准 Feature Fusion 相同）
+- **二阶交互项**：每对视角的 512 维逐元素乘积，通过 Linear+ReLU 压缩到 128 维
+- **总维度**：1536 + 3×128 = 1920D → LayerNorm → MLP → 2
+- 通过 `fusion_type: decision` 启用（CVFI 实现在 decision 入口点下）
 - 执行顺序：8 次 proxy 超参搜索
 
 
@@ -252,22 +252,26 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 （6/8 次 proxy 实验已完成，全 discard，跳过 DGAF-07/08 转入 PFDF）
 
-### 阶段 8：PFDF（Progressive Feature Distillation Fusion）🔴 当前执行中
+### 阶段 8：PFDF（Progressive Feature Distillation Fusion）✅ 已完成
 
-> 渐进式两两交叉注意力融合：Stage 1 融合 axial+coronal，Stage 2 融合结果+sagittal。
-> 分类器只处理 512 维（而非暴力拼接的 1536 维），降低过拟合风险。
+（8/8 次 proxy 实验全 discard，已完结）
+
+### 阶段 9：CVFI（Cross-View Feature Interaction Fusion）🔴 当前执行中
+
+> 在标准特征拼接（一阶）基础上增加视角两两之间的逐元素乘积交互项（二阶）。
+> 每个交互项通过 Linear+ReLU 压缩到 128 维，总融合维度 = 1920D。
 > 基线配置沿用当前最佳策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3`
 
-#### 阶段 8A：PFDF 超参搜索（8 次 proxy）
+#### 阶段 9A：CVFI 超参搜索（8 次 proxy）
 
-1. **PFDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3）
-2. **PFDF-02**: lr=5e-5
-3. **PFDF-03**: lr=7e-5
-4. **PFDF-04**: dropout=0.2
-5. **PFDF-05**: dropout=0.4
-6. **PFDF-06**: label_smoothing=0.05
-7. **PFDF-07**: lr=5e-5 + label_smoothing=0.05
-8. **PFDF-08**: 基于前 7 次最佳方向的组合实验
+1. **CVFI-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3）
+2. **CVFI-02**: lr=5e-5
+3. **CVFI-03**: lr=7e-5
+4. **CVFI-04**: dropout=0.2
+5. **CVFI-05**: dropout=0.4
+6. **CVFI-06**: label_smoothing=0.05
+7. **CVFI-07**: lr=5e-5 + label_smoothing=0.05
+8. **CVFI-08**: 基于前 7 次最佳方向的组合实验
 
 
 ## 可使用的训练策略配置项
