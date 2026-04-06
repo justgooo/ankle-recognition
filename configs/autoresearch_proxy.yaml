@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
 # Stage 9: Cross-View Feature Interaction Fusion (CVFI).
-# Current run: CVFI-05 dropout=0.4 (lr=1e-4, label_smoothing=0.0).
+# Current run: CVFI-06 label_smoothing=0.05 (lr=1e-4, dropout=0.3).
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -23,7 +23,7 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.4
+  dropout: 0.3
   use_attention_pooling: false
 
 train:
@@ -33,4 +33,4 @@ train:
   class_weight: true
   device: auto
   augmentation: true
-  label_smoothing: 0.0
+  label_smoothing: 0.05
