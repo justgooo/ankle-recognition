@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
 # Stage 7: Dual-Granularity Adaptive Fusion (DGAF).
-# Current run: DGAF-01 baseline.
+# Current run: DGAF-02 lr=5e-5.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -28,7 +28,7 @@ model:
 
 train:
   epochs: 4
-  lr: 0.0001
+  lr: 0.00005
   weight_decay: 0.0001
   class_weight: true
   device: auto
