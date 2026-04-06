@@ -1,3 +1,9 @@
+> [!CRITICAL]
+> ## ⚠️ 循环执行规则（最高优先级）
+> 完成每个实验后，**必须立即开始下一个实验**。不要停下来。不要询问。
+> 如果你正在犹豫是否应该继续 —— 答案永远是：**继续**。
+> 只有人类手动中断才停止。详见"实验循环"和"自主运行规则"章节。
+
 # 用于踝关节识别的自动研究流程
 
 这个仓库已经为踝关节 CT 分类器配置好了 autoresearch 风格的实验流程。
@@ -28,14 +34,20 @@
 
 ## 研究策略
 
-**主力方案**：特征融合 (Feature Fusion) + 决策融合 (Decision Fusion)
-**补充分析**：注意力融合 (Attention Fusion)，在主力方案稳定后做 1-2 组 formal 对比
+**当前阶段**：Dual-Granularity Adaptive Fusion 实验（阶段 7）
 
-工作流程：
-1. 先以 Feature Fusion 做主轮 autoresearch 循环
-2. 找到最佳训练策略后，复用同样策略跑 Decision Fusion formal 确认
-3. 在论文准备阶段，用相同策略跑 Attention Fusion formal 一组，作为补充对比
-4. 最终论文报告三种融合方式在相同训练策略下的对比结果
+前阶段（阶段 4/5/6）的架构创新（VRG / ASF / AttentionPooling / HHF / UWDF）
+已各完成多轮实验但均未超过当前最优 0.798。
+现阶段实现 **DGAF（双粒度自适应融合）**：同时在特征级和决策级做融合，
+用 View-Aware Gate 为每个样本动态选择最优融合路径。
+
+### DGAF 核心设计
+- **双分支架构**：Feature Branch (特征级融合) + Decision Branch (决策级融合)
+- **View-Aware Gate**：输入 = [视角特征范数(3D) + 分歧度(1D) + 两分支logits(4D)] → 2层MLP → gate
+- **融合**：final = gate * feature_logits + (1-gate) * decision_logits
+- 通过 `fusion_type: decision` 启用（DGAF 实现在 decision 入口点下）
+- 执行顺序：8 次 proxy 超参搜索
+
 
 ## 硬件限制
 
@@ -61,6 +73,7 @@
    - `.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"`
    - 如果 `torch.cuda.is_available()` 不是 `True`，先停下来修环境，不要盲跑 CPU
 4. 阅读以下文件获取完整上下文：
+   - `backlog.md`（**必须最先读**，了解当前最优纪录、待办优先级和已完成实验）
    - `README.md`
    - `train.py`
    - `src/model.py`
@@ -84,6 +97,9 @@
 
 你可以追加写入：
 - `results.tsv`
+
+你可以读取和更新（按维护规则）：
+- `backlog.md`（实验待办清单，每次实验后必须更新）
 
 不要修改：
 - `train.py`（训练策略增强已内置，通过配置控制）
@@ -161,6 +177,12 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 完成准备后，持续循环执行：
 
+> **重要**：每完成一个实验后，必须更新 `backlog.md`：
+> - keep 的实验：更新“当前最优纪录”表格，将实验从待办移到“已完成”并标注结果
+> - discard 的实验：将实验移到“已完成”并标注结果
+> - 如果结果带来新的实验思路，添加到 backlog 对应优先级
+> - 连续 3 个 discard 后，重新审视 backlog 待办清单
+
 1. 检查当前分支和提交。
 2. 在允许修改的范围内做一项实验性改动。
 3. 在运行前先提交这次实验改动。
@@ -210,24 +232,36 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 ## 实验优先级
 
-以 Feature Fusion 为主，优先做高信号、低风险的实验：
+### 阶段 4A：方案 2 — 视角可靠度门控 (View Reliability Gating) ✅ 已完成
 
-1. 学习率调优（5e-5 / 7e-5 / 1e-4 / 3e-4）
-2. Dropout 比率（0.2 / 0.3 / 0.4 / 0.5）
-3. CosineAnnealingLR 调度器（搭配 eta_min 参数）
-4. 数据增强开关（`train.augmentation: true`）
-5. 梯度裁剪（`train.gradient_clip_norm: 1.0 / 0.5`）
-6. Label Smoothing（`train.label_smoothing: 0.05 / 0.1`）
-7. EarlyStopping（`train.early_stopping_patience: 5 / 10 / 15`）
-8. 权重衰减（`train.weight_decay: 1e-4 / 5e-4 / 1e-3`）
-9. `fusion_hidden_dim`（128 / 256 / 384）
-10. 增加 proxy epochs 至 6（如果 4 epochs 信号不稳定）
+（10 次 proxy 实验已完结）
 
-当 Feature Fusion 优化告一段落后，对 Decision Fusion 做对比：
-- 用 Feature Fusion 找到的最佳超参（lr、dropout、scheduler 等）
-- 直接切换 `fusion_type` 为 `decision`，跑一组 formal 确认
+### 阶段 4B：方案 6 — 非对称安全融合 (Asymmetric Safety-Biased Fusion) ✅ 已完成
 
-避免一次改动太多内容。
+（10 次 proxy 实验已完结）
+
+### 阶段 5：AttentionPooling 增强 ❌ 已放弃
+
+（AP-FF 前 3 次全部 discard，用户决定放弃）
+
+### 阶段 6：UWDF（Uncertainty-Weighted Decision Fusion）🔴 当前执行中
+
+> 每个视角的分类头同时输出 logits 和不确定性 (log σ²)。
+> 融合权重 = softmax(precision)，precision = exp(-log_var)。
+> 训练损失 = CE(fused) + heteroscedastic aux loss。
+> 基线配置沿用当前最佳策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3`
+
+#### 阶段 6A：UWDF 超参搜索（8 次 proxy）
+
+1. **UWDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3）
+2. **UWDF-02**: lr=5e-5
+3. **UWDF-03**: lr=7e-5
+4. **UWDF-04**: dropout=0.2
+5. **UWDF-05**: dropout=0.4
+6. **UWDF-06**: label_smoothing=0.05
+7. **UWDF-07**: lr=5e-5 + label_smoothing=0.05
+8. **UWDF-08**: 基于前 7 次最佳方向的组合实验
+
 
 ## 可使用的训练策略配置项
 
@@ -242,6 +276,9 @@ train:
   early_stopping_patience: 10    # 早停的耐心值（默认不启用）
   label_smoothing: 0.1           # 标签平滑（默认 0.0）
   augmentation: true             # 数据增强：随机翻转+旋转±10°（默认 false）
+
+model:
+  use_attention_pooling: true     # 注意力池化（默认 false，替代 mean pooling）
 ```
 
 ## 如果陷入瓶颈

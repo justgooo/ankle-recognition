@@ -9,3 +9,7 @@ results.tsv
 run.log
 proxy.log
 formal.log
+*.err.log
+autoresearch_logs/
+_staging/
+start_dgaf.ps1

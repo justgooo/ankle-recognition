@@ -1,0 +1,23 @@
+Using device: cuda
+Dataset split: train=263 (69.9%), val=94 (25.0%), test=19 (5.1%)
+Loaded weights from: runs\autoresearch_proxy\best.pt
+
+=== Validation Set (threshold=0.157015) ===
+  Accuracy:    0.5745
+  F1:          0.6875
+  Sensitivity: 1.0000
+  Specificity: 0.2000
+  FN:          0
+
+=== Test Set (threshold=0.157015) ===
+  Accuracy:    0.5789
+  F1:          0.6667
+  Sensitivity: 0.8889
+  Specificity: 0.3000
+  FN:          1
+
+Results saved to: runs\autoresearch_proxy\threshold_eval.json
+
+no_miss_threshold=0.157015
+no_miss_val_acc=0.574468
+no_miss_val_spe=0.200000

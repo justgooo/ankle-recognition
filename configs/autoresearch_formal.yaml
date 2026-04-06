@@ -1,5 +1,5 @@
 # Slower confirmation config for promising proxy winners.
-# Primary: Feature Fusion with non-shared backbone.
+# Formal mirror for the Stage 7 Dual-Granularity Adaptive Fusion (DGAF) family.
 experiment_name: autoresearch_formal
 output_dir: runs/autoresearch_formal
 seed: 42
@@ -18,11 +18,12 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: feature
+  fusion_type: decision  # DGAF is implemented under the decision entry point.
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.4
+  use_attention_pooling: false
 
 train:
   epochs: 15
@@ -30,3 +31,5 @@ train:
   weight_decay: 0.0001
   class_weight: true
   device: auto
+  augmentation: true
+  label_smoothing: 0.0
