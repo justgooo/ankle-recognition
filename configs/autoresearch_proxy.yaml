@@ -1,9 +1,9 @@
 # Fast proxy config for autoresearch-style iteration.
-# Targeted rerun campaign: Plan 2 / View Reliability Gating.
-# Stage 3 multi-seed verification: current best VRG config with seed=456.
+# Stage 3 Bootstrap CI: rerun the current best View Reliability Gating config
+# with seed=42 to regenerate the paper-ready checkpoint before resampling.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
-seed: 456
+seed: 42
 
 data:
   csv_path: data/realdata/metadata.csv
