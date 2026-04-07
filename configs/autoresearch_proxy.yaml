@@ -1,7 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 3 formal-geometry stabilization probe for clipped VRG.
-# Mirror formal image geometry while trimming more edge slices so
-# the 32-slice setting preserves the best proxy's central-span ratio.
+# Stage 3 formal-geometry stabilization probe for clipped VRG:
+# combine trim_edge_slices=2 with cosine scheduler under 256x32 geometry.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -36,3 +35,4 @@ train:
   augmentation: true
   label_smoothing: 0.0
   gradient_clip_norm: 1.0
+  scheduler: cosine
