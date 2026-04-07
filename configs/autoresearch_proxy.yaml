@@ -1,6 +1,7 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 10A VR-02:
-# clipped VRG + freeze_layers=3 + LayerNorm on native 192x16 geometry.
+# Stage 10A VR-05:
+# clipped VRG + freeze_layers=3 + LayerNorm on native 192x16 geometry;
+# dropout raised to 0.4 for variance-reduction regularization probe.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -23,12 +24,12 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.4
   use_attention_pooling: false
 
 train:
   epochs: 4
-  lr: 0.0001
+  lr: 0.00005
   weight_decay: 0.0001
   class_weight: true
   device: auto
