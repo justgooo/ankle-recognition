@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 3 formal-comparison prep: Decision Fusion proxy gate / sanity rerun
-# using the current best View Reliability Gating (VRG) recipe before formal.
+# Stage 3 formal-comparison prep: Attention Fusion proxy gate
+# using the historical best attention recipe as the paper-compare candidate.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -19,18 +19,19 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision  # Decision Fusion = current best VRG variant
-  share_backbone: false
+  fusion_type: attention  # Attention Fusion candidate for Stage 3 formal compare
+  share_backbone: true
   use_pretrained: true
   fusion_hidden_dim: 256
   dropout: 0.3
-  use_attention_pooling: false
+  cross_view_heads: 4
+  cross_view_layers: 2
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
   device: auto
-  augmentation: true
+  augmentation: false
   label_smoothing: 0.0
