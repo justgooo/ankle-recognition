@@ -27,8 +27,14 @@ from torchvision.models import ResNet18_Weights, resnet18  # type: ignore[import
 
 from .attention_pooling import AttentionPooling  # 可学习注意力池化模块
 
+# ==================== 方差控制：Backbone 冻结 ====================
+# 冻结 ResNet18 的前 N 个 layer block，保留 ImageNet 预训练权重。
+# 设为 0 表示不冻结（原始行为），设为 3 表示只训练 layer4 + 分类头。
+# autoresearch Agent 通过修改此常量来实验不同冻结策略。
+DEFAULT_FREEZE_LAYERS = 3  # 推荐值：3（冻结 conv1+layer1+layer2+layer3）
 
-def build_resnet18_encoder(use_pretrained: bool) -> nn.Module:
+
+def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:
     """
     构建一个 ResNet18 特征提取器（编码器）。
 
@@ -41,6 +47,9 @@ def build_resnet18_encoder(use_pretrained: bool) -> nn.Module:
         use_pretrained: 是否使用在 ImageNet 上预训练好的权重。
             - True:  使用预训练权重（迁移学习，通常效果更好）
             - False: 随机初始化权重（从零开始学习）
+        freeze_layers: 冻结前 N 个 layer block（0=不冻结，1=冻结到 layer1，
+            2=冻结到 layer2，3=冻结到 layer3）。冻结的层不参与训练，
+            保留 ImageNet 预训练权重，大幅减少可训练参数和 seed 方差。
 
     返回：
         改造后的 ResNet18 模型，输入灰度图，输出 512 维特征向量。
@@ -72,6 +81,26 @@ def build_resnet18_encoder(use_pretrained: bool) -> nn.Module:
     # 原来 ResNet18 最后有一个全连接层 fc，把 512 维特征映射到 1000 个类别
     # 我们只需要 512 维的特征，不需要分类，所以用 Identity() 替换（即什么都不做，直接输出）
     backbone.fc = nn.Identity()
+
+    # ---------- 第 4 步：冻结前 N 个 layer block ----------
+    # ResNet18 结构: conv1 → bn1 → layer1 → layer2 → layer3 → layer4 → avgpool → fc
+    # 冻结目的：保留 ImageNet 预训练的通用视觉特征（边缘/纹理等），
+    # 大幅减少可训练参数数量（从 ~11M/backbone 降到 ~2.6M），降低 seed 方差。
+    if freeze_layers >= 1:
+        for param in backbone.conv1.parameters():
+            param.requires_grad = False
+        for param in backbone.bn1.parameters():
+            param.requires_grad = False
+        for param in backbone.layer1.parameters():
+            param.requires_grad = False
+    if freeze_layers >= 2:
+        for param in backbone.layer2.parameters():
+            param.requires_grad = False
+    if freeze_layers >= 3:
+        for param in backbone.layer3.parameters():
+            param.requires_grad = False
+    # layer4 始终可训练（高级语义特征需要适配 CT 域）
+
     return backbone
 
 
@@ -97,6 +126,7 @@ class MultiViewEncoder(nn.Module):
         share_backbone: bool = True,    # 3 个视角是否共享同一个 ResNet18
         use_pretrained: bool = False,    # 是否使用预训练权重
         use_attention_pooling: bool = False,  # 是否使用注意力池化替代 mean pooling
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
     ) -> None:
         """
         参数：
@@ -107,6 +137,9 @@ class MultiViewEncoder(nn.Module):
             use_attention_pooling: 是否使用 AttentionPooling？
                 - True：用可学习注意力对切片加权聚合（能自动聚焦关键切片）
                 - False（默认）：用简单 mean pooling（对所有切片取平均）
+            freeze_layers: 冻结 backbone 前 N 个 layer block（0-3）
+                - 0（默认）：所有层都可训练
+                - 3（推荐小数据集）：只训练 layer4 + 分类头
         """
         super().__init__()
         self.share_backbone = share_backbone
@@ -115,11 +148,15 @@ class MultiViewEncoder(nn.Module):
 
         if share_backbone:
             # 共享模式：只创建一个 ResNet18，3 个视角都用它
-            self.shared_encoder = build_resnet18_encoder(use_pretrained=use_pretrained)
+            self.shared_encoder = build_resnet18_encoder(
+                use_pretrained=use_pretrained, freeze_layers=freeze_layers,
+            )
         else:
             # 独立模式：创建 3 个独立的 ResNet18，每个视角用自己的
             self.view_encoders = nn.ModuleList(
-                [build_resnet18_encoder(use_pretrained=use_pretrained) for _ in range(3)]
+                [build_resnet18_encoder(
+                    use_pretrained=use_pretrained, freeze_layers=freeze_layers,
+                ) for _ in range(3)]
             )
 
         # ---------- 切片池化方式 ----------
@@ -208,11 +245,13 @@ class MultiViewCTClassifier(MultiViewEncoder):
         fusion_hidden_dim: int = 256,    # 分类器隐藏层的维度
         dropout: float = 0.3,           # Dropout 比率（防止过拟合）
         use_attention_pooling: bool = False,  # 是否使用注意力池化
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
+            freeze_layers=freeze_layers,
         )
         # 3 个视角拼接后的总维度：512 * 3 = 1536
         fused_dim = self.feature_dim * 3
@@ -267,16 +306,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         fusion_hidden_dim: int = 256,
         dropout: float = 0.3,
         use_attention_pooling: bool = False,  # 是否使用注意力池化
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
+            freeze_layers=freeze_layers,
         )
         # 每个视角有一个独立的分类器（共 3 个）
+        # LayerNorm 在分类器前面稳定特征分布，减少不同 seed 之间的输出尺度差异
         self.view_classifiers = nn.ModuleList(
             [
                 nn.Sequential(
+                    nn.LayerNorm(self.feature_dim),                  # 稳定特征分布
                     nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 -> 256
                     nn.ReLU(inplace=True),
                     nn.Dropout(dropout),

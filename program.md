@@ -34,12 +34,12 @@
 
 ## 研究策略
 
-**当前阶段**：Cross-View Feature Interaction Fusion 实验（阶段 9）
+**当前阶段**：方差缩减 / Variance Reduction 实验（阶段 10）
 
-前阶段（阶段 4/5/6/7/8）的架构创新（VRG / ASF / AttentionPooling / HHF / UWDF / DGAF / PFDF）
-已各完成多轮实验但均未超过当前最优 0.798。
-现阶段实现 **CVFI（跨视角特征交互融合）**：在标准特征拼接的基础上，
-增加视角两两之间的逐元素乘积交互项，显式建模二阶特征交互。
+前阶段（阶段 4-9）的架构创新已完成，Decision Fusion formal 达到 0.915。
+但模型在不同 seed 下方差极大（标准差 ~0.19），论文不可接受。
+现阶段通过 **Backbone 冻结 + LayerNorm** 缩减方差：
+冻结 ResNet18 前 3 个 layer block，只训练 layer4 + 分类头，大幅减少可训练参数。
 
 ### CVFI 核心设计
 - **一阶特征**：concat([v1, v2, v3]) = 1536D（与标准 Feature Fusion 相同）
@@ -256,7 +256,36 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 （8/8 次 proxy 实验全 discard，已完结）
 
-### 阶段 9：CVFI（Cross-View Feature Interaction Fusion）🔴 当前执行中
+### 阶段 9：CVFI（Cross-View Feature Interaction Fusion）✅ 已完成
+
+
+### 阶段 10：Variance Reduction（方差缩减）🔴 当前执行中
+
+> Backbone 冻结 + LayerNorm，缩减 seed 方差。
+> 通过修改 DEFAULT_FREEZE_LAYERS 常量控制冻结策略。
+> 基线配置沿用当前最优 VRG 配方（decision fusion + gradient_clip_norm=1.0）。
+
+#### 阶段 10A：freeze_layers=3 超参搜索（8 次 proxy）
+
+1. **VR-01**: baseline（freeze=3, lr=5e-5, dropout=0.3）
+2. **VR-02**: lr=1e-4
+3. **VR-03**: lr=3e-5
+4. **VR-04**: dropout=0.2
+5. **VR-05**: dropout=0.4
+6. **VR-06**: weight_decay=0.001
+7. **VR-07**: lr=1e-4 + dropout=0.2
+8. **VR-08**: 基于前 7 次最佳方向的组合实验
+
+#### 阶段 10B：freeze_layers=2 超参搜索（8 次 proxy）
+
+1. **VR-09**: baseline（freeze=2, lr=5e-5, dropout=0.3）
+2. **VR-10**: lr=1e-4
+3. **VR-11**: lr=3e-5
+4. **VR-12**: dropout=0.2
+5. **VR-13**: dropout=0.4
+6. **VR-14**: weight_decay=0.001
+7. **VR-15**: lr=1e-4 + dropout=0.2
+8. **VR-16**: 基于前 7 次最佳方向的组合实验
 
 > 在标准特征拼接（一阶）基础上增加视角两两之间的逐元素乘积交互项（二阶）。
 > 每个交互项通过 Linear+ReLU 压缩到 128 维，总融合维度 = 1920D。
