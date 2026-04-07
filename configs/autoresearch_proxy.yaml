@@ -1,9 +1,9 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 3 formal-comparison prep: Decision Fusion proxy stabilization probe
-# restoring the current best VRG recipe and adding gradient clipping.
+# Stage 3 formal-comparison prep: Decision Fusion proxy stability rerun
+# on the clipped VRG winner using alternate seed=123.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
-seed: 42
+seed: 123
 
 data:
   csv_path: data/realdata/metadata.csv
