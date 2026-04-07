@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 3 formal-comparison prep: Decision Fusion proxy stabilization probe
-# restoring the current best VRG recipe and adding gradient clipping.
+# Stage 3 formal-preflight: Decision Fusion proxy smoke test
+# using the current best clipped VRG recipe with formal data geometry.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -8,8 +8,8 @@ seed: 42
 data:
   csv_path: data/realdata/metadata.csv
   base_dir: .
-  image_size: 192
-  num_slices_per_view: 16
+  image_size: 256
+  num_slices_per_view: 32
   trim_edge_slices: 1
   batch_size: 2
   num_workers: 0
