@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 3 Bootstrap CI: rerun the current best View Reliability Gating config
-# with seed=42 to regenerate the paper-ready checkpoint before resampling.
+# Stage 3 formal-comparison prep: Feature Fusion proxy gate
+# using the best historical Feature Fusion training recipe.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -19,7 +19,7 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision
+  fusion_type: feature
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
@@ -28,9 +28,9 @@ model:
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.0001
   weight_decay: 0.0001
   class_weight: true
   device: auto
   augmentation: true
-  label_smoothing: 0.0
+  label_smoothing: 0.05
