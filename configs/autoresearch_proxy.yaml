@@ -1,6 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 3 formal-comparison prep: Decision Fusion proxy gate / stability rerun
-# using the current best View Reliability Gating (VRG) recipe before formal.
+# Stage 3 formal-comparison prep: Decision Fusion proxy stability rerun #4
+# restoring the canonical sigmoid-gated View Reliability Gating (VRG) recipe.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
