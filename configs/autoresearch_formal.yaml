@@ -1,6 +1,6 @@
 # Slower confirmation config for promising proxy winners.
-# Stage 3 paper-ready formal mirror for Attention Fusion
-# using the historical best attention recipe.
+# Stage 3 paper-ready formal mirror for Decision Fusion
+# using the current best View Reliability Gating (VRG) recipe.
 experiment_name: autoresearch_formal
 output_dir: runs/autoresearch_formal
 seed: 42
@@ -19,19 +19,18 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: attention  # Attention Fusion candidate for Stage 3 formal compare
-  share_backbone: true
+  fusion_type: decision  # Decision Fusion = current best VRG variant
+  share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
   dropout: 0.3
-  cross_view_heads: 4
-  cross_view_layers: 2
+  use_attention_pooling: false
 
 train:
   epochs: 15
-  lr: 0.0001
+  lr: 0.00005
   weight_decay: 0.0001
   class_weight: true
   device: auto
-  augmentation: false
+  augmentation: true
   label_smoothing: 0.0
