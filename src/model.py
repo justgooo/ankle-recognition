@@ -286,14 +286,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             ]
         )
         # 视角可靠度门控：每个视角一个 confidence head
-        # 输入 512 维特征 → 输出 1 个标量（经 sigmoid 映射到 0~1）
-        # 3 个 confidence 经 softmax 归一化后作为动态融合权重
+        # 输入 512 维特征 → 输出 1 个未归一化标量（logit）
+        # 3 个 confidence logits 经 softmax 归一化后作为动态融合权重
         self.confidence_heads = nn.ModuleList(
             [
-                nn.Sequential(
-                    nn.Linear(self.feature_dim, 1),  # 512 → 1
-                    nn.Sigmoid(),                    # 映射到 (0, 1)
-                )
+                nn.Linear(self.feature_dim, 1)  # 512 → 1
                 for _ in range(3)
             ]
         )
