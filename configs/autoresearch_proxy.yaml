@@ -1,7 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
 # Stage 3 formal-comparison prep: Decision Fusion proxy stabilization probe
-# keeping the canonical sigmoid-gated View Reliability Gating (VRG) recipe
-# and adding cosine LR scheduling as the first training-stability probe.
+# restoring the current best VRG recipe and adding gradient clipping.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -35,5 +34,4 @@ train:
   device: auto
   augmentation: true
   label_smoothing: 0.0
-  scheduler: cosine
-  scheduler_t_max: 4
+  gradient_clip_norm: 1.0
