@@ -1,7 +1,7 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 10A VR-06:
+# Stage 10A VR-07:
 # clipped VRG + freeze_layers=3 + LayerNorm on native 192x16 geometry;
-# stronger weight decay probe for variance-reduction regularization.
+# combine higher lr with lower dropout after VR-06 weight decay probe.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -24,13 +24,13 @@ model:
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
-  dropout: 0.4
+  dropout: 0.2
   use_attention_pooling: false
 
 train:
   epochs: 4
-  lr: 0.00005
-  weight_decay: 0.001
+  lr: 0.0001
+  weight_decay: 0.0001
   class_weight: true
   device: auto
   augmentation: true
