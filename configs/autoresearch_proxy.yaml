@@ -1,7 +1,6 @@
 # Fast proxy config for autoresearch-style iteration.
-# Stage 10A VR-08:
-# clipped VRG + freeze_layers=3 + LayerNorm on native 192x16 geometry;
-# combine higher lr with stronger weight decay regularization.
+# Stage 10B VR-09 baseline:
+# clipped VRG + freeze_layers=2 + LayerNorm on native 192x16 geometry.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
@@ -29,8 +28,8 @@ model:
 
 train:
   epochs: 4
-  lr: 0.0001
-  weight_decay: 0.001
+  lr: 0.00005
+  weight_decay: 0.0001
   class_weight: true
   device: auto
   augmentation: true

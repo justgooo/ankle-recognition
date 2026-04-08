@@ -31,7 +31,7 @@ from .attention_pooling import AttentionPooling  # 可学习注意力池化模�
 # 冻结 ResNet18 的前 N 个 layer block，保留 ImageNet 预训练权重。
 # 设为 0 表示不冻结（原始行为），设为 3 表示只训练 layer4 + 分类头。
 # autoresearch Agent 通过修改此常量来实验不同冻结策略。
-DEFAULT_FREEZE_LAYERS = 3  # 推荐值：3（冻结 conv1+layer1+layer2+layer3）
+DEFAULT_FREEZE_LAYERS = 2  # Stage 10B VR-09：冻结 conv1+layer1+layer2，训练 layer3+layer4+head
 
 
 def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:
