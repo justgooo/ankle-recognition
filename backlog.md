@@ -12,11 +12,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | 阶段 3：Decision Fusion formal run（VRG + gradient_clip_norm=1.0，native 192x16 geometry，15 epochs） |
-| 上次结果 | keep ✅（`d63b49a`; no_miss_val_acc=**0.915**, no_miss_val_spe=0.840, val_AUC=0.968；较 proxy 最优 `814f491` 的 0.872 大幅提升 0.043） |
-| 下一步 | 阶段 10：方差缩减实验（backbone 冻结 + LayerNorm）—— 当前最高优先级 |
-| 连续 discard 计数 | 0（formal keep，计数重置） |
-| 累计 proxy keep 数 | 5（不变） |
+| 上次实验 | 阶段 10B：VR-16 proxy（freeze_layers=2，baseline lr=5e-5 / dropout=0.3 + weight_decay=0.001，VRG + LayerNorm，192x16 geometry） |
+| 上次结果 | discard（`9293915`; no_miss_val_acc=0.872, no_miss_val_spe=0.760, val_AUC=0.969；较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.032，但较同配方前次 `VR-14` / `c059aa6` 的 0.830 回升 0.042、较 freeze=2 baseline `fc760cb` 的 0.883 仅差 0.011；说明 freeze=2 + weight_decay=0.001 仍有回弹空间，但整体仍落后于 freeze=3 winner） |
+| 下一步 | 阶段 10C：VR-MS-01~03（对阶段 10 当前最优 `f6f4ed8` / VR-01 做 multi-seed 验证）—— VR-16 rerun 已基本确认 freeze=2 路线即使回弹也仍低于 0.904，后续应转向量化 freeze=3 baseline 的 seed 方差 |
+| 连续 discard 计数 | 15（VR-02~VR-16 连续 discard；VR-16 较 `VR-14` 明显回升，但仍未打破 `f6f4ed8` 的 0.904） |
+| 累计 proxy keep 数 | 6（不变） |
 
 ---
 
@@ -37,7 +37,7 @@
 > seed=42 -> 0.915 (formal)，seed=123 -> 0.787 (proxy)，seed=456 -> 0.521 (proxy)。
 > 3-seed 标准差约 0.19，论文不可接受。
 >
-> **方差根因**：3 x ResNet18 = 3300 万参数，仅 75 个训练样本。不同 seed 初始化
+> **方差根因**：当前固定 split 下训练集是 263 个病例样本（`metadata.csv`），而 3 x ResNet18 决策融合模型总参数约 3391 万；按总参数计参数/样本比约 12.9 万:1（若按当前 freeze=2 设置的可训练参数 3188 万计，约 12.1 万:1）。不同 seed 初始化
 > 在巨大的参数空间中收敛到完全不同的局部最优。
 >
 > **解决方案**：
@@ -50,36 +50,36 @@
 > share_backbone=false, aug=true, lr=5e-5, dropout=0.3, label_smoothing=0.0, gradient_clip_norm=1.0, 192x16
 >
 > **判定规则**：
-> - keep 判定：no_miss_val_acc > 当前 proxy 最优 0.872（814f491）
-> - 即使单次 proxy 略低于 0.872，如果后续 multi-seed 验证显示方差显著缩小也算成功
+> - keep 判定：no_miss_val_acc > 当前 proxy 最优 0.904（f6f4ed8）
+> - 即使单次 proxy 略低于 0.904，如果后续 multi-seed 验证显示方差显著缩小也算成功
 
 ### 阶段 10A：freeze_layers=3 超参搜索（8 次 proxy）
 
 > DEFAULT_FREEZE_LAYERS = 3（冻结 conv1 + layer1 + layer2 + layer3，只训练 layer4 + head）
 > 配合 LayerNorm（已内置）
 
-- [ ] **VR-01**: baseline（freeze=3, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）
-- [ ] **VR-02**: lr=1e-4（冻结后可能需要更高 lr，因为可训练参数更少）
-- [ ] **VR-03**: lr=3e-5（更保守的 lr）
-- [ ] **VR-04**: dropout=0.2（冻结后过拟合风险降低，dropout 可减小）
-- [ ] **VR-05**: dropout=0.4
-- [ ] **VR-06**: weight_decay=0.001（更强正则化，配合冻结进一步约束参数）
-- [ ] **VR-07**: lr=1e-4 + dropout=0.2（冻结后最可能的最优组合）
-- [ ] **VR-08**: 基于前 7 次最佳方向的组合实验
+- [x] **VR-01**: baseline（freeze=3, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）→ no_miss_val_acc=0.904, no_miss_val_spe=0.820, val_AUC=0.968 → keep ✅（新阶段 10 proxy 最优；超过 `814f491` 的 0.872）
+- [x] **VR-02**: lr=1e-4（冻结后可能需要更高 lr，因为可训练参数更少）→ no_miss_val_acc=0.830, no_miss_val_spe=0.680, val_AUC=0.970 → discard（AUC 略升，但零漏诊 val_acc 明显低于当前 proxy 最优 0.904）
+- [x] **VR-03**: lr=3e-5（更保守的 lr）→ no_miss_val_acc=0.819, no_miss_val_spe=0.660, val_AUC=0.958 → discard（较当前 proxy 最优 0.904 下降 0.085，未见更低 lr 带来的稳定性收益）
+- [x] **VR-04**: dropout=0.2（冻结后过拟合风险降低，dropout 可减小）→ no_miss_val_acc=0.809, no_miss_val_spe=0.640, val_AUC=0.966 → discard（较当前 proxy 最优 0.904 下降 0.096；降低 dropout 未能提升零漏诊表现，且特异度回落）
+- [x] **VR-05**: dropout=0.4 → no_miss_val_acc=0.872, no_miss_val_spe=0.760, val_AUC=0.965 → discard（较 `VR-04` 回升 0.063、特异度回升 0.120，但仍低于当前 proxy 最优 `f6f4ed8` 的 0.904；说明更强 dropout 只能部分修复性能下滑）
+- [x] **VR-06**: weight_decay=0.001（更强正则化，配合冻结进一步约束参数）→ no_miss_val_acc=0.883, no_miss_val_spe=0.780, val_AUC=0.966 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.021，但较 `VR-05` 小幅回升 0.011；更强 weight_decay 略有帮助，但仍未恢复到 freeze=3 baseline）
+- [x] **VR-07**: lr=1e-4 + dropout=0.2（冻结后最可能的最优组合）→ no_miss_val_acc=0.904, no_miss_val_spe=0.820, val_AUC=0.968 → discard（与当前 proxy 最优 `f6f4ed8` 的零漏诊 val_acc / val_AUC / val_spe 全部追平，按简洁性原则保留更简单的 `VR-01` baseline）
+- [x] **VR-08**: 基于前 7 次最佳方向的组合实验（lr=1e-4 + weight_decay=0.001，保留 baseline dropout=0.3）→ no_miss_val_acc=0.883, no_miss_val_spe=0.780, val_AUC=0.964 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.021；与 `VR-06` 零漏诊指标完全持平但 AUC 更低，说明高 lr + 更强 weight_decay 组合未带来额外收益）
 
 ### 阶段 10B：freeze_layers=2 超参搜索（8 次 proxy）
 
 > DEFAULT_FREEZE_LAYERS = 2（冻结 conv1 + layer1 + layer2，训练 layer3 + layer4 + head）
 > 配合 LayerNorm（已内置）
 
-- [ ] **VR-09**: baseline（freeze=2, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）
-- [ ] **VR-10**: lr=1e-4
-- [ ] **VR-11**: lr=3e-5
-- [ ] **VR-12**: dropout=0.2
-- [ ] **VR-13**: dropout=0.4
-- [ ] **VR-14**: weight_decay=0.001
-- [ ] **VR-15**: lr=1e-4 + dropout=0.2
-- [ ] **VR-16**: 基于前 7 次（VR-09~VR-15）最佳方向的组合实验
+- [x] **VR-09**: baseline（freeze=2, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）→ no_miss_val_acc=0.883, no_miss_val_spe=0.780, val_AUC=0.961 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.021；说明仅减少一层冻结并不能自动带来收益，后续转向 lr 调整验证可塑性是否仍可释放）
+- [x] **VR-10**: lr=1e-4 → no_miss_val_acc=0.564, no_miss_val_spe=0.180, val_AUC=0.927 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.340；更高 lr 在 freeze=2 设置下显著压低零漏诊阈值至 0.019，导致 41 个假阳性、特异度崩塌）
+- [x] **VR-11**: lr=3e-5 → no_miss_val_acc=0.809, no_miss_val_spe=0.640, val_AUC=0.962 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.096，且较 freeze=2 baseline `fc760cb` 的 0.883 再降 0.074；说明进一步下调 lr 不能释放 layer3 的额外可塑性，反而扩大假阳性）
+- [x] **VR-12**: dropout=0.2 → no_miss_val_acc=0.787, no_miss_val_spe=0.600, val_AUC=0.955 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.117，且较 `VR-11` 再降 0.021；说明在 freeze=2 设置下减弱 dropout 会进一步放大假阳性，下一步转测 dropout=0.4）
+- [x] **VR-13**: dropout=0.4 → no_miss_val_acc=0.766, no_miss_val_spe=0.560, val_AUC=0.961 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.138，较 freeze=2 baseline `fc760cb` 的 0.883 下降 0.117，且较 `VR-12` 再降 0.021；说明更强 dropout 仍未抑制 layer3 解冻后的假阳性，下一步转测 weight_decay=0.001）
+- [x] **VR-14**: weight_decay=0.001 → no_miss_val_acc=0.830, no_miss_val_spe=0.680, val_AUC=0.960 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.074，较 freeze=2 baseline `fc760cb` 的 0.883 下降 0.053，但较 `VR-13` 的 0.766 回升 0.064；说明更强 L2 正则能部分抑制假阳性，但仍未恢复到 freeze=3/2 baseline 水平）
+- [x] **VR-15**: lr=1e-4 + dropout=0.2 → no_miss_val_acc=0.628, no_miss_val_spe=0.300, val_AUC=0.948 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.277，较 freeze=2 baseline `fc760cb` 的 0.883 下降 0.255，且仅较 `VR-10` 的 0.564 回升 0.064；说明 freeze=2 路线对高 lr 仍极敏感，减小 dropout 不能修复假阳性崩塌）
+- [x] **VR-16**: 基于前 7 次（VR-09~VR-15）最佳方向的组合实验（回到 baseline lr=5e-5 / dropout=0.3，并保留最佳正则 `weight_decay=0.001`）→ no_miss_val_acc=0.872, no_miss_val_spe=0.760, val_AUC=0.969 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.032，但较同配方前次 `VR-14` / `c059aa6` 的 0.830 回升 0.042、较 freeze=2 baseline `fc760cb` 的 0.883 仅差 0.011；说明 regularized freeze=2 rerun 能显著回弹，但仍不足以取代 freeze=3 baseline，下一步转入最优配置 multi-seed 验证）
 
 ### 阶段 10C：Multi-seed 验证（最优配置 x 3 seeds）
 
@@ -129,7 +129,7 @@
 > seed=42 -> 0.915 (formal)，seed=123 -> 0.787 (proxy)，seed=456 -> 0.521 (proxy)。
 > 3-seed 标准差约 0.19，论文不可接受。
 >
-> **方差根因**：3 x ResNet18 = 3300 万参数，仅 75 个训练样本。不同 seed 初始化
+> **方差根因**：当前固定 split 下训练集是 263 个病例样本（`metadata.csv`），而 3 x ResNet18 决策融合模型总参数约 3391 万；按总参数计参数/样本比约 12.9 万:1（若按当前 freeze=2 设置的可训练参数 3188 万计，约 12.1 万:1）。不同 seed 初始化
 > 在巨大的参数空间中收敛到完全不同的局部最优。
 >
 > **解决方案**：
@@ -142,36 +142,36 @@
 > share_backbone=false, aug=true, lr=5e-5, dropout=0.3, label_smoothing=0.0, gradient_clip_norm=1.0, 192x16
 >
 > **判定规则**：
-> - keep 判定：no_miss_val_acc > 当前 proxy 最优 0.872（814f491）
-> - 即使单次 proxy 略低于 0.872，如果后续 multi-seed 验证显示方差显著缩小也算成功
+> - keep 判定：no_miss_val_acc > 当前 proxy 最优 0.904（f6f4ed8）
+> - 即使单次 proxy 略低于 0.904，如果后续 multi-seed 验证显示方差显著缩小也算成功
 
 ### 阶段 10A：freeze_layers=3 超参搜索（8 次 proxy）
 
 > DEFAULT_FREEZE_LAYERS = 3（冻结 conv1 + layer1 + layer2 + layer3，只训练 layer4 + head）
 > 配合 LayerNorm（已内置）
 
-- [ ] **VR-01**: baseline（freeze=3, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）
-- [ ] **VR-02**: lr=1e-4（冻结后可能需要更高 lr，因为可训练参数更少）
-- [ ] **VR-03**: lr=3e-5（更保守的 lr）
-- [ ] **VR-04**: dropout=0.2（冻结后过拟合风险降低，dropout 可减小）
-- [ ] **VR-05**: dropout=0.4
-- [ ] **VR-06**: weight_decay=0.001（更强正则化，配合冻结进一步约束参数）
-- [ ] **VR-07**: lr=1e-4 + dropout=0.2（冻结后最可能的最优组合）
-- [ ] **VR-08**: 基于前 7 次最佳方向的组合实验
+- [x] **VR-01**: baseline（freeze=3, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）→ no_miss_val_acc=0.904, no_miss_val_spe=0.820, val_AUC=0.968 → keep ✅（新阶段 10 proxy 最优；超过 `814f491` 的 0.872）
+- [x] **VR-02**: lr=1e-4（冻结后可能需要更高 lr，因为可训练参数更少）→ no_miss_val_acc=0.830, no_miss_val_spe=0.680, val_AUC=0.970 → discard（AUC 略升，但零漏诊 val_acc 明显低于当前 proxy 最优 0.904）
+- [x] **VR-03**: lr=3e-5（更保守的 lr）→ no_miss_val_acc=0.819, no_miss_val_spe=0.660, val_AUC=0.958 → discard（较当前 proxy 最优 0.904 下降 0.085，未见更低 lr 带来的稳定性收益）
+- [x] **VR-04**: dropout=0.2（冻结后过拟合风险降低，dropout 可减小）→ no_miss_val_acc=0.809, no_miss_val_spe=0.640, val_AUC=0.966 → discard（较当前 proxy 最优 0.904 下降 0.096；降低 dropout 未能提升零漏诊表现，且特异度回落）
+- [x] **VR-05**: dropout=0.4 → no_miss_val_acc=0.872, no_miss_val_spe=0.760, val_AUC=0.965 → discard（较 `VR-04` 回升 0.063、特异度回升 0.120，但仍低于当前 proxy 最优 `f6f4ed8` 的 0.904；说明更强 dropout 只能部分修复性能下滑）
+- [x] **VR-06**: weight_decay=0.001（更强正则化，配合冻结进一步约束参数）→ no_miss_val_acc=0.883, no_miss_val_spe=0.780, val_AUC=0.966 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.021，但较 `VR-05` 小幅回升 0.011；更强 weight_decay 略有帮助，但仍未恢复到 freeze=3 baseline）
+- [x] **VR-07**: lr=1e-4 + dropout=0.2（冻结后最可能的最优组合）→ no_miss_val_acc=0.904, no_miss_val_spe=0.820, val_AUC=0.968 → discard（与当前 proxy 最优 `f6f4ed8` 的零漏诊 val_acc / val_AUC / val_spe 全部追平，按简洁性原则保留更简单的 `VR-01` baseline）
+- [x] **VR-08**: 基于前 7 次最佳方向的组合实验（lr=1e-4 + weight_decay=0.001，保留 baseline dropout=0.3）→ no_miss_val_acc=0.883, no_miss_val_spe=0.780, val_AUC=0.964 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.021；与 `VR-06` 零漏诊指标完全持平但 AUC 更低，说明高 lr + 更强 weight_decay 组合未带来额外收益）
 
 ### 阶段 10B：freeze_layers=2 超参搜索（8 次 proxy）
 
 > DEFAULT_FREEZE_LAYERS = 2（冻结 conv1 + layer1 + layer2，训练 layer3 + layer4 + head）
 > 配合 LayerNorm（已内置）
 
-- [ ] **VR-09**: baseline（freeze=2, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）
-- [ ] **VR-10**: lr=1e-4
-- [ ] **VR-11**: lr=3e-5
-- [ ] **VR-12**: dropout=0.2
-- [ ] **VR-13**: dropout=0.4
-- [ ] **VR-14**: weight_decay=0.001
-- [ ] **VR-15**: lr=1e-4 + dropout=0.2
-- [ ] **VR-16**: 基于前 7 次（VR-09~VR-15）最佳方向的组合实验
+- [x] **VR-09**: baseline（freeze=2, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）→ no_miss_val_acc=0.883, no_miss_val_spe=0.780, val_AUC=0.961 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.021；说明仅减少一层冻结并不能自动带来收益，后续转向 lr 调整验证可塑性是否仍可释放）
+- [x] **VR-10**: lr=1e-4 → no_miss_val_acc=0.564, no_miss_val_spe=0.180, val_AUC=0.927 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.340；更高 lr 在 freeze=2 设置下显著压低零漏诊阈值至 0.019，导致 41 个假阳性、特异度崩塌）
+- [x] **VR-11**: lr=3e-5 → no_miss_val_acc=0.809, no_miss_val_spe=0.640, val_AUC=0.962 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.096，且较 freeze=2 baseline `fc760cb` 的 0.883 再降 0.074；说明进一步下调 lr 不能释放 layer3 的额外可塑性，反而扩大假阳性）
+- [x] **VR-12**: dropout=0.2 → no_miss_val_acc=0.787, no_miss_val_spe=0.600, val_AUC=0.955 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.117，且较 `VR-11` 再降 0.021；说明在 freeze=2 设置下减弱 dropout 会进一步放大假阳性，下一步转测 dropout=0.4）
+- [x] **VR-13**: dropout=0.4 → no_miss_val_acc=0.766, no_miss_val_spe=0.560, val_AUC=0.961 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.138，较 freeze=2 baseline `fc760cb` 的 0.883 下降 0.117，且较 `VR-12` 再降 0.021；说明更强 dropout 仍未抑制 layer3 解冻后的假阳性，下一步转测 weight_decay=0.001）
+- [x] **VR-14**: weight_decay=0.001 → no_miss_val_acc=0.830, no_miss_val_spe=0.680, val_AUC=0.960 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.074，较 freeze=2 baseline `fc760cb` 的 0.883 下降 0.053，但较 `VR-13` 的 0.766 回升 0.064；说明更强 L2 正则能部分抑制假阳性，但仍未恢复到 freeze=3/2 baseline 水平）
+- [x] **VR-15**: lr=1e-4 + dropout=0.2 → no_miss_val_acc=0.628, no_miss_val_spe=0.300, val_AUC=0.948 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.277，较 freeze=2 baseline `fc760cb` 的 0.883 下降 0.255，且仅较 `VR-10` 的 0.564 回升 0.064；说明 freeze=2 路线对高 lr 仍极敏感，减小 dropout 不能修复假阳性崩塌）
+- [x] **VR-16**: 基于前 7 次（VR-09~VR-15）最佳方向的组合实验（回到 baseline lr=5e-5 / dropout=0.3，并保留最佳正则 `weight_decay=0.001`）→ no_miss_val_acc=0.872, no_miss_val_spe=0.760, val_AUC=0.969 → discard（较当前 proxy 最优 `f6f4ed8` 的 0.904 下降 0.032，但较同配方前次 `VR-14` / `c059aa6` 的 0.830 回升 0.042、较 freeze=2 baseline `fc760cb` 的 0.883 仅差 0.011；说明 regularized freeze=2 rerun 能显著回弹，但仍不足以取代 freeze=3 baseline，下一步转入最优配置 multi-seed 验证）
 
 ### 阶段 10C：Multi-seed 验证（最优配置 x 3 seeds）
 

@@ -1,6 +1,7 @@
 # Slower confirmation config for promising proxy winners.
-# Stage 3 paper-ready formal run for Decision Fusion (VRG + gradient clip).
-# Data geometry matches the proxy config that produced the 0.872 best record (814f491).
+# Stage 3 paper-ready formal: Decision Fusion with clipped VRG.
+# Using native proxy geometry (192x16) per user decision — 256x32 caused
+# significant performance degradation that 5 stabilization probes could not fix.
 experiment_name: autoresearch_formal
 output_dir: runs/autoresearch_formal
 seed: 42
