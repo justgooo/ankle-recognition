@@ -15,7 +15,7 @@ model.py — 多视角 CT 分类模型
     - build_resnet18_encoder(): 构建 ResNet18 特征提取器
     - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征，支持 mean pooling 或 AttentionPooling）
     - MultiViewCTClassifier: 特征融合分类器（拼接 3 个视角特征后分类）
-    - MultiViewDecisionFusionClassifier: 双粒度自适应融合分类器 (DGAF)
+    - MultiViewDecisionFusionClassifier: 决策融合分类器（每个视角单独分类后加权投票）
 """
 
 from __future__ import annotations
@@ -27,8 +27,14 @@ from torchvision.models import ResNet18_Weights, resnet18  # type: ignore[import
 
 from .attention_pooling import AttentionPooling  # 可学习注意力池化模块
 
+# ==================== 方差控制：Backbone 冻结 ====================
+# 冻结 ResNet18 的前 N 个 layer block，保留 ImageNet 预训练权重。
+# 设为 0 表示不冻结（原始行为），设为 3 表示只训练 layer4 + 分类头。
+# autoresearch Agent 通过修改此常量来实验不同冻结策略。
+DEFAULT_FREEZE_LAYERS = 3  # Stage 10C VR-MS：冻结 conv1+layer1+layer2+layer3，只训练 layer4+head
 
-def build_resnet18_encoder(use_pretrained: bool) -> nn.Module:
+
+def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:
     """
     构建一个 ResNet18 特征提取器（编码器）。
 
@@ -41,6 +47,9 @@ def build_resnet18_encoder(use_pretrained: bool) -> nn.Module:
         use_pretrained: 是否使用在 ImageNet 上预训练好的权重。
             - True:  使用预训练权重（迁移学习，通常效果更好）
             - False: 随机初始化权重（从零开始学习）
+        freeze_layers: 冻结前 N 个 layer block（0=不冻结，1=冻结到 layer1，
+            2=冻结到 layer2，3=冻结到 layer3）。冻结的层不参与训练，
+            保留 ImageNet 预训练权重，大幅减少可训练参数和 seed 方差。
 
     返回：
         改造后的 ResNet18 模型，输入灰度图，输出 512 维特征向量。
@@ -72,6 +81,26 @@ def build_resnet18_encoder(use_pretrained: bool) -> nn.Module:
     # 原来 ResNet18 最后有一个全连接层 fc，把 512 维特征映射到 1000 个类别
     # 我们只需要 512 维的特征，不需要分类，所以用 Identity() 替换（即什么都不做，直接输出）
     backbone.fc = nn.Identity()
+
+    # ---------- 第 4 步：冻结前 N 个 layer block ----------
+    # ResNet18 结构: conv1 → bn1 → layer1 → layer2 → layer3 → layer4 → avgpool → fc
+    # 冻结目的：保留 ImageNet 预训练的通用视觉特征（边缘/纹理等），
+    # 大幅减少可训练参数数量（从 ~11M/backbone 降到 ~2.6M），降低 seed 方差。
+    if freeze_layers >= 1:
+        for param in backbone.conv1.parameters():
+            param.requires_grad = False
+        for param in backbone.bn1.parameters():
+            param.requires_grad = False
+        for param in backbone.layer1.parameters():
+            param.requires_grad = False
+    if freeze_layers >= 2:
+        for param in backbone.layer2.parameters():
+            param.requires_grad = False
+    if freeze_layers >= 3:
+        for param in backbone.layer3.parameters():
+            param.requires_grad = False
+    # layer4 始终可训练（高级语义特征需要适配 CT 域）
+
     return backbone
 
 
@@ -97,6 +126,7 @@ class MultiViewEncoder(nn.Module):
         share_backbone: bool = True,    # 3 个视角是否共享同一个 ResNet18
         use_pretrained: bool = False,    # 是否使用预训练权重
         use_attention_pooling: bool = False,  # 是否使用注意力池化替代 mean pooling
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
     ) -> None:
         """
         参数：
@@ -107,6 +137,9 @@ class MultiViewEncoder(nn.Module):
             use_attention_pooling: 是否使用 AttentionPooling？
                 - True：用可学习注意力对切片加权聚合（能自动聚焦关键切片）
                 - False（默认）：用简单 mean pooling（对所有切片取平均）
+            freeze_layers: 冻结 backbone 前 N 个 layer block（0-3）
+                - 0（默认）：所有层都可训练
+                - 3（推荐小数据集）：只训练 layer4 + 分类头
         """
         super().__init__()
         self.share_backbone = share_backbone
@@ -115,11 +148,15 @@ class MultiViewEncoder(nn.Module):
 
         if share_backbone:
             # 共享模式：只创建一个 ResNet18，3 个视角都用它
-            self.shared_encoder = build_resnet18_encoder(use_pretrained=use_pretrained)
+            self.shared_encoder = build_resnet18_encoder(
+                use_pretrained=use_pretrained, freeze_layers=freeze_layers,
+            )
         else:
             # 独立模式：创建 3 个独立的 ResNet18，每个视角用自己的
             self.view_encoders = nn.ModuleList(
-                [build_resnet18_encoder(use_pretrained=use_pretrained) for _ in range(3)]
+                [build_resnet18_encoder(
+                    use_pretrained=use_pretrained, freeze_layers=freeze_layers,
+                ) for _ in range(3)]
             )
 
         # ---------- 切片池化方式 ----------
@@ -208,11 +245,13 @@ class MultiViewCTClassifier(MultiViewEncoder):
         fusion_hidden_dim: int = 256,    # 分类器隐藏层的维度
         dropout: float = 0.3,           # Dropout 比率（防止过拟合）
         use_attention_pooling: bool = False,  # 是否使用注意力池化
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
+            freeze_layers=freeze_layers,
         )
         # 3 个视角拼接后的总维度：512 * 3 = 1536
         fused_dim = self.feature_dim * 3
@@ -245,37 +284,19 @@ class MultiViewCTClassifier(MultiViewEncoder):
 
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     """
-    双粒度自适应融合分类器 (Dual-Granularity Adaptive Fusion, DGAF)。
+    决策融合分类器 - 视角可靠度门控版 (View Reliability Gating)。
 
-    核心思想：
-        同时在「特征级」和「决策级」两个粒度做融合，
-        并用一个样本自适应的门控机制为每个样本动态选择最优融合路径。
+    与原版 Decision Fusion 的关键区别：
+        - 原版：3 个视角共用一组固定的全局权重（nn.Parameter(zeros(3))）
+        - 本版：每个视角有一个 confidence head，根据当前样本的特征动态计算权重
+          → 不同病人的融合权重不同，能适应"某个视角拍得不清楚"等个体差异
 
-    两个融合粒度：
-        1. 特征级融合 (Feature Branch)：
-           拼接 3 个视角的 512 维特征 → MLP → feature_logits
-           优势：保留跨视角交互信息
-           劣势：容易受到噪声视角干扰
-
-        2. 决策级融合 (Decision Branch)：
-           每个视角独立分类 → 加权平均 → decision_logits
-           优势：对单视角噪声鲁棒
-           劣势：缺乏跨视角交互
-
-    自适应门控 (View-Aware Gate)：
-        输入 = [视角特征置信度(3D) + 视角间分歧度(1D) + 两分支logits(4D)]
-        → 2 层 MLP → sigmoid → gate ∈ [0, 1]
-        → final = gate * feature_logits + (1 - gate) * decision_logits
-
-    与 Hierarchical Hybrid Fusion (HHF) 的改进：
-        - HHF：gate 输入只有 4D (两分支 logits)，单层线性 → 表达力不足，9 次全 discard
-        - DGAF：gate 输入 8D (含视角置信度 + 分歧度)，2 层 MLP → 更强的上下文感知
-
-    论文创新点：
-        "We propose Dual-Granularity Adaptive Fusion (DGAF), which operates
-        simultaneously at both feature and decision levels, using view-level
-        confidence and inter-view disagreement to dynamically weight the
-        contribution of each fusion pathway on a per-sample basis."
+    工作流程：
+        1. 用父类 MultiViewEncoder 提取 3 个视角的特征
+        2. 每个视角各自通过自己的分类器，得到各自的分类分数
+        3. 每个视角的 confidence head 输出可信度 (0~1)
+        4. 3 个可信度经 softmax 归一化后作为融合权重
+        5. 用动态权重对 3 个视角的分类结果加权平均
     """
 
     def __init__(
@@ -284,106 +305,73 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         use_pretrained: bool = False,
         fusion_hidden_dim: int = 256,
         dropout: float = 0.3,
-        use_attention_pooling: bool = False,
+        use_attention_pooling: bool = False,  # 是否使用注意力池化
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
+            freeze_layers=freeze_layers,
         )
-        fused_dim = self.feature_dim * 3  # 512 * 3 = 1536
-
-        # ===== 分支 1：特征级融合 =====
-        self.feature_classifier = nn.Sequential(
-            nn.Linear(fused_dim, fusion_hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(fusion_hidden_dim, 2),
-        )
-
-        # ===== 分支 2：决策级融合 =====
-        # 每个视角独立的分类头
+        # 每个视角有一个独立的分类器（共 3 个）
+        # LayerNorm 在分类器前面稳定特征分布，减少不同 seed 之间的输出尺度差异
         self.view_classifiers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(self.feature_dim, fusion_hidden_dim),
+                    nn.LayerNorm(self.feature_dim),                  # 稳定特征分布
+                    nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 -> 256
                     nn.ReLU(inplace=True),
                     nn.Dropout(dropout),
-                    nn.Linear(fusion_hidden_dim, 2),
+                    nn.Linear(fusion_hidden_dim, 2),  # 256 -> 2（正常/异常）
+                )
+                for _ in range(3)  # 创建 3 个分类器
+            ]
+        )
+        # 视角可靠度门控：每个视角一个 confidence head
+        # 输入 512 维特征 → 输出 1 个标量（经 sigmoid 映射到 0~1）
+        # 3 个 confidence 经 softmax 归一化后作为动态融合权重
+        self.confidence_heads = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.feature_dim, 1),  # 512 → 1
+                    nn.Sigmoid(),                    # 映射到 (0, 1)
                 )
                 for _ in range(3)
             ]
         )
-        # 可学习的视角权重（用于 Decision Branch 的加权平均）
-        self.view_weight_logits = nn.Parameter(torch.zeros(3))
-
-        # ===== 自适应门控 (View-Aware Gate) =====
-        # 输入维度：
-        #   - 3 个视角的归一化特征范数 (3D) — 视角级置信度
-        #   - 视角间分歧度 (1D) — 各视角预测的方差
-        #   - Feature Branch logits (2D)
-        #   - Decision Branch logits (2D)
-        #   共 8 维
-        gate_input_dim = 3 + 1 + 2 + 2  # = 8
-        self.gate_net = nn.Sequential(
-            nn.Linear(gate_input_dim, 32),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.1),
-            nn.Linear(32, 1),
-        )
-        # 初始化门控输出 ≈ 0 → sigmoid(0) = 0.5 → 初始两分支等权
-        nn.init.zeros_(self.gate_net[-1].weight)
-        nn.init.zeros_(self.gate_net[-1].bias)
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
-        前向传播：双粒度融合 + 自适应门控。
+        前向传播：每个视角独立分类，用动态可信度权重融合。
 
         参数：
             images: (B, 3, S, H, W) 的 CT 图像张量
 
         返回：
-            logits: (B, 2) 的张量，自适应融合后的分类结果
+            logits: (B, 2) 的张量，3 个视角动态加权投票后的分类结果
         """
         # 第 1 步：提取 3 个视角的特征
-        view_features = self.encode_views(images)  # 3 × (B, 512)
+        view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：Feature Branch — 特征级融合
-        fused_feature = torch.cat(view_features, dim=1)  # (B, 1536)
-        feature_logits = self.feature_classifier(fused_feature)  # (B, 2)
+        # 第 2 步：每个视角分别做分类
+        view_logits = torch.stack(
+            [classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)],
+            dim=1,
+        )  # (B, 3, 2)
 
-        # 第 3 步：Decision Branch — 决策级融合
-        view_logits_list = [
-            clf(feat) for clf, feat in zip(self.view_classifiers, view_features)
-        ]
-        view_logits_stacked = torch.stack(view_logits_list, dim=1)  # (B, 3, 2)
-        fusion_weights = torch.softmax(self.view_weight_logits, dim=0).view(1, 3, 1)
-        decision_logits = (view_logits_stacked * fusion_weights).sum(dim=1)  # (B, 2)
+        # 第 3 步：计算每个视角的动态可信度
+        confidences = torch.stack(
+            [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
+            dim=1,
+        )  # (B, 3, 1)
 
-        # 第 4 步：计算门控输入特征
-        # (a) 视角置信度：每个视角特征的 L2 范数（归一化到 [0,1] 范围）
-        view_norms = torch.stack(
-            [feat.norm(dim=1) for feat in view_features], dim=1
-        )  # (B, 3)
-        # 对范数做 min-max 归一化（逐样本），避免量级差异影响门控
-        norm_min = view_norms.min(dim=1, keepdim=True).values
-        norm_max = view_norms.max(dim=1, keepdim=True).values
-        view_conf = (view_norms - norm_min) / (norm_max - norm_min + 1e-8)  # (B, 3)
+        # softmax 归一化：3 个可信度 → 和为 1 的融合权重
+        fusion_weights = torch.softmax(confidences, dim=1)  # (B, 3, 1)
 
-        # (b) 视角间分歧度：各视角异常概率的方差
-        view_probs = torch.stack(
-            [torch.softmax(vl, dim=1)[:, 1] for vl in view_logits_list], dim=1
-        )  # (B, 3) — 每个视角的异常概率
-        disagreement = view_probs.var(dim=1, keepdim=True)  # (B, 1)
-
-        # (c) 拼接门控输入
-        gate_input = torch.cat(
-            [view_conf, disagreement, feature_logits, decision_logits], dim=1
-        )  # (B, 8)
-
-        # 第 5 步：门控融合
-        gate = torch.sigmoid(self.gate_net(gate_input))  # (B, 1)
-        return gate * feature_logits + (1.0 - gate) * decision_logits
+        # 第 4 步：动态加权求和
+        # (B, 3, 2) × (B, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
+        return (view_logits * fusion_weights).sum(dim=1)
 
 
 class MultiViewAttentionClassifier(nn.Module):

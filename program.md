@@ -34,18 +34,18 @@
 
 ## 研究策略
 
-**当前阶段**：Dual-Granularity Adaptive Fusion 实验（阶段 7）
+**当前阶段**：方差缩减 / Variance Reduction 实验（阶段 10）
 
-前阶段（阶段 4/5/6）的架构创新（VRG / ASF / AttentionPooling / HHF / UWDF）
-已各完成多轮实验但均未超过当前最优 0.798。
-现阶段实现 **DGAF（双粒度自适应融合）**：同时在特征级和决策级做融合，
-用 View-Aware Gate 为每个样本动态选择最优融合路径。
+前阶段（阶段 4-9）的架构创新已完成，Decision Fusion formal 达到 0.915。
+但模型在不同 seed 下方差极大（标准差 ~0.19），论文不可接受。
+现阶段通过 **Backbone 冻结 + LayerNorm** 缩减方差：
+冻结 ResNet18 前 3 个 layer block，只训练 layer4 + 分类头，大幅减少可训练参数。
 
-### DGAF 核心设计
-- **双分支架构**：Feature Branch (特征级融合) + Decision Branch (决策级融合)
-- **View-Aware Gate**：输入 = [视角特征范数(3D) + 分歧度(1D) + 两分支logits(4D)] → 2层MLP → gate
-- **融合**：final = gate * feature_logits + (1-gate) * decision_logits
-- 通过 `fusion_type: decision` 启用（DGAF 实现在 decision 入口点下）
+### CVFI 核心设计
+- **一阶特征**：concat([v1, v2, v3]) = 1536D（与标准 Feature Fusion 相同）
+- **二阶交互项**：每对视角的 512 维逐元素乘积，通过 Linear+ReLU 压缩到 128 维
+- **总维度**：1536 + 3×128 = 1920D → LayerNorm → MLP → 2
+- 通过 `fusion_type: decision` 启用（CVFI 实现在 decision 入口点下）
 - 执行顺序：8 次 proxy 超参搜索
 
 
@@ -244,23 +244,63 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 
 （AP-FF 前 3 次全部 discard，用户决定放弃）
 
-### 阶段 6：UWDF（Uncertainty-Weighted Decision Fusion）🔴 当前执行中
+### 阶段 6：UWDF（Uncertainty-Weighted Decision Fusion）✅ 已完成
 
-> 每个视角的分类头同时输出 logits 和不确定性 (log σ²)。
-> 融合权重 = softmax(precision)，precision = exp(-log_var)。
-> 训练损失 = CE(fused) + heteroscedastic aux loss。
+（8 次 proxy 实验全 discard，已完结）
+
+### 阶段 7：DGAF（Dual-Granularity Adaptive Fusion）✅ 已完成（跳过末尾 2 次）
+
+（6/8 次 proxy 实验已完成，全 discard，跳过 DGAF-07/08 转入 PFDF）
+
+### 阶段 8：PFDF（Progressive Feature Distillation Fusion）✅ 已完成
+
+（8/8 次 proxy 实验全 discard，已完结）
+
+### 阶段 9：CVFI（Cross-View Feature Interaction Fusion）✅ 已完成
+
+
+### 阶段 10：Variance Reduction（方差缩减）🔴 当前执行中
+
+> Backbone 冻结 + LayerNorm，缩减 seed 方差。
+> 通过修改 DEFAULT_FREEZE_LAYERS 常量控制冻结策略。
+> 基线配置沿用当前最优 VRG 配方（decision fusion + gradient_clip_norm=1.0）。
+
+#### 阶段 10A：freeze_layers=3 超参搜索（8 次 proxy）
+
+1. **VR-01**: baseline（freeze=3, lr=5e-5, dropout=0.3）
+2. **VR-02**: lr=1e-4
+3. **VR-03**: lr=3e-5
+4. **VR-04**: dropout=0.2
+5. **VR-05**: dropout=0.4
+6. **VR-06**: weight_decay=0.001
+7. **VR-07**: lr=1e-4 + dropout=0.2
+8. **VR-08**: 基于前 7 次最佳方向的组合实验
+
+#### 阶段 10B：freeze_layers=2 超参搜索（8 次 proxy）
+
+1. **VR-09**: baseline（freeze=2, lr=5e-5, dropout=0.3）
+2. **VR-10**: lr=1e-4
+3. **VR-11**: lr=3e-5
+4. **VR-12**: dropout=0.2
+5. **VR-13**: dropout=0.4
+6. **VR-14**: weight_decay=0.001
+7. **VR-15**: lr=1e-4 + dropout=0.2
+8. **VR-16**: 基于前 7 次最佳方向的组合实验
+
+> 在标准特征拼接（一阶）基础上增加视角两两之间的逐元素乘积交互项（二阶）。
+> 每个交互项通过 Linear+ReLU 压缩到 128 维，总融合维度 = 1920D。
 > 基线配置沿用当前最佳策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3`
 
-#### 阶段 6A：UWDF 超参搜索（8 次 proxy）
+#### 阶段 9A：CVFI 超参搜索（8 次 proxy）
 
-1. **UWDF-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3）
-2. **UWDF-02**: lr=5e-5
-3. **UWDF-03**: lr=7e-5
-4. **UWDF-04**: dropout=0.2
-5. **UWDF-05**: dropout=0.4
-6. **UWDF-06**: label_smoothing=0.05
-7. **UWDF-07**: lr=5e-5 + label_smoothing=0.05
-8. **UWDF-08**: 基于前 7 次最佳方向的组合实验
+1. **CVFI-01**: baseline（fusion_type=decision, lr=1e-4, dropout=0.3）
+2. **CVFI-02**: lr=5e-5
+3. **CVFI-03**: lr=7e-5
+4. **CVFI-04**: dropout=0.2
+5. **CVFI-05**: dropout=0.4
+6. **CVFI-06**: label_smoothing=0.05
+7. **CVFI-07**: lr=5e-5 + label_smoothing=0.05
+8. **CVFI-08**: 基于前 7 次最佳方向的组合实验
 
 
 ## 可使用的训练策略配置项

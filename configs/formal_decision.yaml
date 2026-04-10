@@ -1,10 +1,7 @@
-# Fast proxy config for autoresearch-style iteration.
-# Stage 10B VR-16:
-# clipped VRG + freeze_layers=2 + LayerNorm on native 192x16 geometry;
-# closing the freeze=2 sweep by rerunning the strongest regularized baseline
-# direction (baseline lr/dropout + weight_decay=0.001).
-experiment_name: autoresearch_proxy
-output_dir: runs/autoresearch_proxy
+# Formal comparison: Decision Fusion with freeze=3 (Stage 10C best config)
+# Re-run formal with the same freeze=3 + LayerNorm config that won proxy
+experiment_name: formal_decision
+output_dir: runs/formal_decision
 seed: 42
 
 data:
@@ -21,7 +18,7 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision  # Decision Fusion = current best VRG variant
+  fusion_type: decision
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
@@ -29,9 +26,9 @@ model:
   use_attention_pooling: false
 
 train:
-  epochs: 4
+  epochs: 15
   lr: 0.00005
-  weight_decay: 0.001
+  weight_decay: 0.0001
   class_weight: true
   device: auto
   augmentation: true

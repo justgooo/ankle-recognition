@@ -1,9 +1,9 @@
-# Slower confirmation config for promising proxy winners.
-# Stage 3 paper-ready formal: Decision Fusion with clipped VRG.
-# Using native proxy geometry (192x16) per user decision — 256x32 caused
-# significant performance degradation that 5 stabilization probes could not fix.
-experiment_name: autoresearch_formal
-output_dir: runs/autoresearch_formal
+# Formal comparison: Attention Fusion
+# Same training strategy as the best Decision Fusion formal (d63b49a)
+# Note: Attention Fusion uses its own attention pooling + cross-view attention;
+# freeze_layers is NOT applied (MultiViewAttentionClassifier has its own backbone init)
+experiment_name: formal_attention
+output_dir: runs/formal_attention
 seed: 42
 
 data:
@@ -20,12 +20,13 @@ data:
 
 model:
   backbone: resnet18
-  fusion_type: decision  # Decision Fusion = current best VRG variant
+  fusion_type: attention
   share_backbone: false
   use_pretrained: true
   fusion_hidden_dim: 256
   dropout: 0.3
-  use_attention_pooling: false
+  cross_view_heads: 4
+  cross_view_layers: 2
 
 train:
   epochs: 15

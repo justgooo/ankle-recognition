@@ -1,0 +1,42 @@
+# K-Fold CV + Ensemble 配置
+# 使用当前最优 formal 配方: Decision Fusion (VRG) + freeze=3 + gradient_clip
+experiment_name: kfold_ensemble
+output_dir: runs/kfold_ensemble
+seed: 42  # base seed, actual seeds are [42, 123, 456]
+
+# K-Fold + Ensemble 专用参数
+kfold:
+  n_splits: 5              # 5-fold 交叉验证
+  seeds: [42, 123, 456]    # 每个 fold 用这 3 个 seed 训练
+  inner_val_ratio: 0.2     # fold 内部取 20% 做 validation
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 192
+  num_slices_per_view: 16
+  trim_edge_slices: 1
+  batch_size: 2
+  num_workers: 0
+  val_ratio: 0.25   # 不使用（K-Fold 自己划分），保留兼容性
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnet18
+  fusion_type: decision    # Decision Fusion = current best VRG variant
+  share_backbone: false
+  use_pretrained: true
+  fusion_hidden_dim: 256
+  dropout: 0.3
+  use_attention_pooling: false
+
+train:
+  epochs: 15               # formal 级别训练
+  lr: 0.00005
+  weight_decay: 0.0001
+  class_weight: true
+  device: auto
+  augmentation: true
+  label_smoothing: 0.0
+  gradient_clip_norm: 1.0
