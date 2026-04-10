@@ -2,8 +2,10 @@
 __pycache__/
 *.pyc
 runs/
-data/demo/
-data/realdata/
+data/demo/*
+!data/demo/*.csv
+data/realdata/*
+!data/realdata/*.csv
 .torch-cache/
 results.tsv
 run.log
