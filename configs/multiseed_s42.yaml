@@ -1,0 +1,35 @@
+# Multi-seed validation: seed=42, freeze=3, VR-01 best config (proxy)
+experiment_name: multiseed_s42
+output_dir: runs/multiseed_s42
+seed: 42
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 192
+  num_slices_per_view: 16
+  trim_edge_slices: 1
+  batch_size: 2
+  num_workers: 0
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnet18
+  fusion_type: decision
+  share_backbone: false
+  use_pretrained: true
+  fusion_hidden_dim: 256
+  dropout: 0.3
+  use_attention_pooling: false
+
+train:
+  epochs: 4
+  lr: 0.00005
+  weight_decay: 0.0001
+  class_weight: true
+  device: auto
+  augmentation: true
+  label_smoothing: 0.0
+  gradient_clip_norm: 1.0
