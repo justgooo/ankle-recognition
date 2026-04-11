@@ -7,7 +7,6 @@ data/demo/*
 data/realdata/*
 !data/realdata/*.csv
 .torch-cache/
-results.tsv
 run.log
 proxy.log
 formal.log
