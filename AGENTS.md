@@ -14,7 +14,7 @@
 - 每个实验结束后更新 `backlog.md`（包括 Agent 状态表格）
 - 每个实验结束后追加 `results.tsv`
 - 遵守 `program.md` 中的超时规则和资源保护规则
-- 使用 `.\.venv\Scripts\python.exe` 执行所有 Python 命令
+- 使用 `.venv/bin/python` 执行所有 Python 命令
 
 ## NEVER
 
@@ -46,9 +46,9 @@ LOOP:
 
 ## 技术环境
 
-- OS: Windows，Shell: PowerShell
-- Python: `.\.venv\Scripts\python.exe`（torch 2.10.0+cu130）
-- GPU: NVIDIA RTX 2070 SUPER（8GB VRAM）
+- OS: Ubuntu，Shell: Bash
+- Python: `.venv/bin/python`（torch 2.2.0+cu121）
+- GPU: NVIDIA RTX 4090（24GB VRAM，GPU index=1，使用 CUDA_VISIBLE_DEVICES=1）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
 
 ## 关键文件
