@@ -8,28 +8,31 @@
 
 这个仓库已经为踝关节 CT 分类器配置好了 autoresearch 风格的实验流程。
 整体思路与 `karpathy/autoresearch` 相同，但适配了这个医学影像项目、
-它的评估指标，以及当前这台 Windows + NVIDIA CUDA 工作站环境。
+它的评估指标，以及当前这台 Ubuntu + NVIDIA CUDA 服务器环境。
 
-本文中的命令默认都在仓库根目录的 PowerShell 中执行，并统一使用
-`.\.venv\Scripts\python.exe`。不要直接使用系统 PATH 里的 `python.exe`：
-当前系统 Python 没有安装 `torch`，训练环境在项目 `.venv` 里。
+本文中的命令默认都在仓库根目录的 Bash shell 中执行，并统一使用
+`.venv/bin/python`。不要使用系统 PATH 里的 `python`：
+训练环境在项目 `.venv` 里。
+
+> [!IMPORTANT]
+> **指标体系切换说明**
+> 本项目已从「零漏诊 (zero-miss / no_miss)」指标体系切换到「验证集准确率 (val_acc)」指标体系。
+> 旧实验记录（阶段 1–10）使用 `no_miss_val_acc` 评估，这些历史数据保留不变。
+> 从本版本起，所有新实验使用 `best_val.accuracy`（来自 `summary.json`）作为主指标。
 
 ## 目标
 
-主目标：在**验证集 FN=0（零漏诊）约束**下，最大化验证集准确率。
+主目标：**最大化验证集准确率 (val_acc)**。
 
 具体做法：
-1. 训练完成后，对 best.pt 在验证集上计算每个样本的正类概率
-2. 找到「零漏诊阈值」= 验证集所有阳性样本中的最小正类概率
-3. 用该阈值计算验证集 Accuracy
-4. 以该 Accuracy 作为模型选择的主指标
+1. 训练完成后，从 `runs/<experiment>/summary.json` 中读取 `best_val.accuracy`
+2. 以该 val_acc 作为模型选择的主指标
 
 辅助指标（跟踪但不作为主选择标准）：
 - `best_val.auc`
 - `best_val.f1`
-- 零漏诊阈值下的验证集 Specificity
 
-保留或丢弃实验时，使用零漏诊 Accuracy 做主决策，AUC 做辅助参考。
+保留或丢弃实验时，使用 val_acc 做主决策，AUC 做辅助参考。
 **绝对不要**用测试集指标来做模型选择。
 
 ## 研究策略
@@ -51,15 +54,13 @@
 
 ## 硬件限制
 
-- 操作系统：Windows，Shell：PowerShell
-- CPU：13th Gen Intel(R) Core(TM) i5-13490F（10 核 / 16 线程）
-- GPU：NVIDIA GeForce RTX 2070 SUPER（8GB 显存，CUDA 可用，驱动 581.80）
-- 系统内存：32GB
-- 训练默认走 `.venv` 中的 PyTorch CUDA 环境（`torch 2.10.0+cu130`，`device: auto` 会选 `cuda`）
-- proxy 实验（4 epochs，feature fusion，非共享 backbone）预计：peak_vram ≈ 2 GB，约 30 分钟
-- formal 实验（15 epochs，feature fusion，非共享 backbone）预计：peak_vram ≈ 5.5 GB，约 90-120 分钟
-- 在当前 8GB 显存设备上，`batch_size=2` 已验证可稳定运行
-- 每次实验前确认 `runs/` 下没有残留的大 checkpoint 文件，并顺手检查 C 盘剩余空间
+- 操作系统：Ubuntu，Shell：Bash
+- GPU：NVIDIA GeForce RTX 4090（24GB 显存，GPU index=1，使用 `CUDA_VISIBLE_DEVICES=1`）
+- 训练默认走 `.venv` 中的 PyTorch CUDA 环境
+- proxy 实验（4 epochs，feature fusion，非共享 backbone）预计：约 30 分钟
+- formal 实验（15 epochs，feature fusion，非共享 backbone）预计：约 90-120 分钟
+- `batch_size=4` 已验证可稳定运行（24GB 显存可支持更大 batch）
+- 每次实验前确认 `runs/` 下没有残留的大 checkpoint 文件，并顺手检查磁盘剩余空间
 
 ## 准备工作
 
@@ -69,8 +70,8 @@
 2. 基于当前主分支创建一个新的分支：
    - `git checkout -b autoresearch/<tag>`
 3. 先确认训练环境可用：
-   - `Test-Path .\.venv\Scripts\python.exe`
-   - `.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"`
+   - `test -f .venv/bin/python && echo OK`
+   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"`
    - 如果 `torch.cuda.is_available()` 不是 `True`，先停下来修环境，不要盲跑 CPU
 4. 阅读以下文件获取完整上下文：
    - `backlog.md`（**必须最先读**，了解当前最优纪录、待办优先级和已完成实验）
@@ -94,6 +95,9 @@
 - `src/cross_view_attention.py`
 - `configs/autoresearch_proxy.yaml`
 - `configs/autoresearch_formal.yaml`
+- `configs/optuna_proxy_search.yaml`
+- `configs/optuna_main_search.yaml`
+- `scripts/`（Optuna 工作流脚本）
 
 你可以追加写入：
 - `results.tsv`
@@ -109,27 +113,19 @@
 - 任何 CSV 数据文件
 - 评估逻辑
 
-不要新增依赖。
+可以新增依赖（限 `optuna` 等实验工具），但需记录在 `requirements.txt` 中。
 
 ## 基线
 
 第一次运行必须是没有任何实验性改动的基线版本：
 
-```powershell
-.\.venv\Scripts\python.exe train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
+```bash
+CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
 ```
 
 然后读取：
 - `runs/autoresearch_proxy/summary.json`
-- `run.log`
-
-接着运行阈值评估：
-```powershell
-.\.venv\Scripts\python.exe tools/evaluate_threshold.py --run_dir runs/autoresearch_proxy --config configs/autoresearch_proxy.yaml
-```
-
-然后读取：
-- `runs/autoresearch_proxy/threshold_eval.json`
+- `run.log`（只读最后 30 行：`tail -30 run.log`）
 
 `train.py` 日志行：
 - `best_val_auc=...`
@@ -138,10 +134,10 @@
 - `peak_vram_mb=...`
 - `total_seconds=...`
 
-`evaluate_threshold.py` 日志行：
-- `no_miss_threshold=...`
-- `no_miss_val_acc=...`
-- `no_miss_val_spe=...`
+（可选）运行阈值评估获取辅助参考指标：
+```bash
+CUDA_VISIBLE_DEVICES=1 .venv/bin/python tools/evaluate_threshold.py --run_dir runs/autoresearch_proxy --config configs/autoresearch_proxy.yaml
+```
 
 在开始长时间无人值守运行之前：
 - 先确保手动执行的一次基线运行能够顺利完成
@@ -153,23 +149,21 @@
 `results.tsv` 使用制表符分隔，表头如下：
 
 ```tsv
-commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_gb	status	config	description
+commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
 ```
 
 规则：
 - `commit`：短 git hash
-- `val_auc`：如果崩溃，记为 `0.000000`
-- `val_f1`：如果崩溃，记为 `0.000000`
-- `no_miss_threshold`：验证集零漏诊阈值；如果崩溃或未计算，记为空
-- `no_miss_val_acc`：零漏诊阈值下的验证集准确率；如果崩溃或未计算，记为空
-- `no_miss_val_spe`：零漏诊阈值下的验证集特异度；如果崩溃或未计算，记为空
+- `val_acc`：`summary.json` 中的 `best_val.accuracy`；如果崩溃，记为 `0.000000`
+- `val_auc`：`summary.json` 中的 `best_val.auc`；如果崩溃，记为 `0.000000`
+- `val_f1`：`summary.json` 中的 `best_val.f1`；如果崩溃，记为 `0.000000`
 - `memory_gb`：用 `runtime.peak_vram_mb` 除以 `1024`，保留一位小数；如果崩溃则记为 `0.0`
 - `status`：只能是 `keep`、`discard`、`crash` 之一
 - `config`：`proxy` 或 `formal`
 - `description`：实验的简短描述
 
 旧的 results.tsv 记录保留，新实验追加到末尾。
-旧行没有 `no_miss_*` 列是正常的。
+旧行使用 `no_miss_*` 列是正常的（历史指标体系）。
 
 不要提交 `results.tsv`。
 
@@ -178,8 +172,8 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 完成准备后，持续循环执行：
 
 > **重要**：每完成一个实验后，必须更新 `backlog.md`：
-> - keep 的实验：更新“当前最优纪录”表格，将实验从待办移到“已完成”并标注结果
-> - discard 的实验：将实验移到“已完成”并标注结果
+> - keep 的实验：更新"当前最优纪录"表格，将实验从待办移到"已完成"并标注结果
+> - discard 的实验：将实验移到"已完成"并标注结果
 > - 如果结果带来新的实验思路，添加到 backlog 对应优先级
 > - 连续 3 个 discard 后，重新审视 backlog 待办清单
 
@@ -187,29 +181,26 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 2. 在允许修改的范围内做一项实验性改动。
 3. 在运行前先提交这次实验改动。
 4. 运行 proxy 实验：
-   - `.\.venv\Scripts\python.exe train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1`
+   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1`
 5. 如果运行崩溃：
-   - 用 `Get-Content run.log -Tail 30` 查看最后几行（不要读整个日志）
+   - 用 `tail -30 run.log` 查看最后几行（不要读整个日志）
    - OOM → 标记为 `crash`
    - 代码 bug → 修复后重跑一次（最多重试 1 次）
    - 数据问题 → 立即停止
    - 其他 → 标记为 `crash`，写入 `results.tsv`，回退
 6. 如果运行成功：
    - 读取 `runs/autoresearch_proxy/summary.json`
-   - 运行阈值评估：`.\.venv\Scripts\python.exe tools/evaluate_threshold.py --run_dir runs/autoresearch_proxy --config configs/autoresearch_proxy.yaml`
-   - 读取 `runs/autoresearch_proxy/threshold_eval.json`
-   - 将零漏诊 `val_acc` 与当前保留的最佳结果比较
-   - 只有当零漏诊 `val_acc` 提升时，才保留这个提交
-   - 如果零漏诊 `val_acc` 持平，优先选择 `val_auc` 更高的版本
+   - 将 `best_val.accuracy` 与当前保留的最佳结果比较
+   - 只有当 val_acc 提升时，才保留这个提交
+   - 如果 val_acc 持平，优先选择 `val_auc` 更高的版本
    - 如果两者都持平，优先选择更简单的代码
    - 否则回退这次实验
 7. 每出现 3 次 proxy 胜出后，做一次 formal 确认：
-   - `.\.venv\Scripts\python.exe train.py --config configs/autoresearch_formal.yaml > formal.log 2>&1`
-   - `.\.venv\Scripts\python.exe tools/evaluate_threshold.py --run_dir runs/autoresearch_formal --config configs/autoresearch_formal.yaml`
+   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_formal.yaml > formal.log 2>&1`
    - 如果 formal 也提升了，视为新的 formal 最优结果
    - 如果 proxy 提升但 formal 退化，优先保留上一个 formal 最优
    - formal 结果也记入 `results.tsv`
-   - 额外：如果 proxy 零漏诊 acc 单次提升超过 0.03，可以立即做 formal
+   - 额外：如果 proxy val_acc 单次提升超过 0.03，可以立即做 formal
 
 ## 超时规则
 
@@ -218,14 +209,15 @@ commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_g
 - formal 实验（15 epochs）预计约 **90-120 分钟**
 - 超时阈值：**180 分钟**
 - 使用以下方式监控运行时间：
-  ```powershell
-  $proc = Start-Process .\.venv\Scripts\python.exe -ArgumentList "train.py","--config","configs/autoresearch_proxy.yaml" -RedirectStandardOutput run.log -RedirectStandardError err.log -PassThru
-  if (-not $proc.WaitForExit(3600000)) { $proc.Kill(); Write-Host "TIMEOUT" }
+  ```bash
+  timeout 3600 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
+  EXIT_CODE=$?
+  if [ $EXIT_CODE -eq 124 ]; then echo "TIMEOUT"; fi
   ```
 
 ## 简洁性原则
 
-在零漏诊 val_acc 相同或差距极小（< 0.005）时：
+在 val_acc 相同或差距极小（< 0.005）时：
 - 代码行数更少的版本胜出
 - 微小提升（< 0.003）但增加了大量复杂代码？放弃
 - 永远追求更少的特殊逻辑、更干净的模型结构
@@ -335,10 +327,10 @@ model:
 
 ## 上下文管理
 
-- 读日志时只读最后 30 行：`Get-Content run.log -Tail 30`
+- 读日志时只读最后 30 行：`tail -30 run.log`
 - 不要把整个日志或完整代码文件粘贴到对话中
 - 只在排错时才读更多内容
-- 每次实验只关注：`summary.json` + `threshold_eval.json` 的指标 + 简短的 diff 描述
+- 每次实验只关注：`summary.json` 的指标 + 简短的 diff 描述
 - 大约每 15-20 次实验后，Agent 上下文可能接近饱和，此时需要重启 Agent
 
 ## 自主运行规则
@@ -362,7 +354,7 @@ model:
 - 如果系统内存使用率超过 90%，标记为 crash 并回退
 - 如果训练 loss 在前 2 个 epoch 完全没有下降，可以提前终止该实验
 - 每次实验结束后确认 `runs/` 目录下没有残留的大 checkpoint 积累
-- 定期检查磁盘空间：`Get-PSDrive C | Select-Object Free`
+- 定期检查磁盘空间：`df -h .`
 
 ## 论文就绪验证阶段
 
@@ -370,11 +362,11 @@ model:
 1. 用 3 个不同 seed（42, 123, 456）分别训练，报告均值 ± 标准差
 2. 对测试集做 Bootstrap 置信区间（1000 次重采样）
 3. 用最佳训练策略分别跑 Feature / Decision / Attention 三种融合的 formal
-4. 统一使用零漏诊阈值评估，生成论文用表格
+4. 使用验证集准确率评估，生成论文用表格
 
 ## 实践经验
 
 - 大多数实验都会失败或被丢弃，这是正常现象。
 - 关键杠杆点是 `program.md`，不是在每次运行之间随意手工调整。
-- 说明应该具体、简单，并且始终围绕可衡量的零漏诊 val_acc 变化。
+- 说明应该具体、简单，并且始终围绕可衡量的 val_acc 变化。
 - 如果某条实验路线反复失败，就换个方向，不要硬推下去。

@@ -14,7 +14,7 @@
 - 每个实验结束后更新 `backlog.md`（包括 Agent 状态表格）
 - 每个实验结束后追加 `results.tsv`
 - 遵守 `program.md` 中的超时规则和资源保护规则
-- 使用 `.venv/bin/python` 执行所有 Python 命令
+- 使用 `CUDA_VISIBLE_DEVICES=1 .venv/bin/python` 执行所有 Python 命令
 
 ## NEVER
 
@@ -22,9 +22,8 @@
 - ❌ 不要用测试集指标做模型选择
 - ❌ 不要修改 `train.py`、`src/dataset.py`、`src/utils.py`、`tools/`
 - ❌ 不要修改数据文件或数据集划分
-- ❌ 不要新增依赖
 - ❌ 不要把整个日志粘贴到对话中（只读最后 30 行）
-- ❌ 不要用系统 PATH 里的 python.exe
+- ❌ 不要用系统 PATH 里的 python
 
 ## ASK FIRST
 
@@ -39,7 +38,7 @@ LOOP:
   2. 在允许范围内做代码改动
   3. git commit
   4. 运行 proxy 实验
-  5. 评估结果（summary.json + threshold_eval.json）
+  5. 评估结果（summary.json → val_acc）
   6. 更新 results.tsv 和 backlog.md
   7. → GOTO 1（不要停！）
 ```
@@ -47,9 +46,19 @@ LOOP:
 ## 技术环境
 
 - OS: Ubuntu，Shell: Bash
-- Python: `.venv/bin/python`（torch 2.2.0+cu121）
+- Python: `CUDA_VISIBLE_DEVICES=1 .venv/bin/python`（torch 2.2.0+cu121）
 - GPU: NVIDIA RTX 4090（24GB VRAM，GPU index=1，使用 CUDA_VISIBLE_DEVICES=1）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
+
+## 允许修改的范围
+
+- `src/model.py`、`src/attention_pooling.py`、`src/cross_view_attention.py`
+- `configs/autoresearch_proxy.yaml`、`configs/autoresearch_formal.yaml`
+- `configs/optuna_*.yaml`（Optuna 搜索配置）
+- `scripts/`（Optuna 工作流脚本）
+- `backlog.md`（实验待办，每次实验后必须更新）
+- `results.tsv`（只追加）
+- 可新增依赖（限 `optuna` 等实验工具，需记录在 `requirements.txt`）
 
 ## 关键文件
 
@@ -61,3 +70,5 @@ LOOP:
 | `configs/autoresearch_proxy.yaml` | proxy 实验配置（可修改） |
 | `configs/autoresearch_formal.yaml` | formal 实验配置（可修改） |
 | `src/model.py` | 模型代码（可修改） |
+| `scripts/run_optuna_proxy.py` | Optuna proxy 超参搜索（可修改） |
+| `scripts/monitor_optuna.py` | Optuna 结果监控（可修改） |

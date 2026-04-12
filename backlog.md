@@ -3,6 +3,10 @@
 > **本文件由 autoresearch Agent 维护。**
 > Agent 在每次实验循环启动时必须阅读本文件，并在完成实验后根据结果更新。
 > 人类也可以直接编辑本文件来添加想法或调整优先级。
+>
+> **⚠️ 指标体系切换**：本项目已从「零漏诊 (no_miss_val_acc)」切换到「验证集准确率 (val_acc)」。
+> 旧实验记录使用 `no_miss_val_acc`，保留不变。新实验使用 `summary.json` 中的 `best_val.accuracy`。
+> 新实验的 keep 判定基于 val_acc，不再使用 evaluate_threshold.py 作为主评估工具。
 
 ---
 
@@ -22,12 +26,13 @@
 
 ## 当前最优纪录
 
-| 指标 | 值 | 来源 commit | 配置 |
-|------|---:|-------------|------|
-| **零漏诊 val_Acc** | **0.915** | `d63b49a` (formal) | VRG Decision Fusion, non-shared, lr=5e-5, d=0.3, aug=true, ls=0.0, gradient_clip_norm=1.0, 192x16, 15 epochs |
-| 零漏诊 val_Spe | 0.840 | `d63b49a` (formal) | 同上 |
-| 不漏诊阈值 | 0.173 | `d63b49a` (formal) | 同上 |
-| val_AUC (参考) | 0.968 | `d63b49a` (formal) | 同上 |
+> 注：旧纪录基于零漏诊指标体系。新基线需用 accuracy 指标重新确立。
+
+| 指标 | 值 | 来源 commit | 配置 | 备注 |
+|------|---:|-------------|------|------|
+| **val_Acc** | **待重新确立** | — | — | 需运行 1 次基线确立新指标体系的 best |
+| val_AUC (参考) | 0.968 | `d63b49a` (formal) | VRG Decision Fusion, non-shared, lr=5e-5, d=0.3, aug=true, ls=0.0, gradient_clip_norm=1.0, 192x16, 15 epochs | 旧体系数据 |
+| ~~旧：零漏诊 val_Acc~~ | ~~0.915~~ | `d63b49a` (formal) | 同上 | 旧指标，仅供参考 |
 
 ---
 
@@ -49,9 +54,10 @@
 > **基线配置**：沿用当前最优 VRG 配方：
 > share_backbone=false, aug=true, lr=5e-5, dropout=0.3, label_smoothing=0.0, gradient_clip_norm=1.0, 192x16
 >
-> **判定规则**：
-> - keep 判定：no_miss_val_acc > 当前 proxy 最优 0.904（f6f4ed8）
-> - 即使单次 proxy 略低于 0.904，如果后续 multi-seed 验证显示方差显著缩小也算成功
+> **判定规则**（新指标体系）：
+> - keep 判定：val_acc（来自 summary.json 的 best_val.accuracy）> 当前最优
+> - 新基线需先运行 1 次基线实验确立 val_acc 基准值
+> - 即使单次 proxy 略低，如果后续 multi-seed 验证显示方差显著缩小也算成功
 
 ### 阶段 10A：freeze_layers=3 超参搜索（8 次 proxy）
 
@@ -142,8 +148,9 @@
 > share_backbone=false, aug=true, lr=5e-5, dropout=0.3, label_smoothing=0.0, gradient_clip_norm=1.0, 192x16
 >
 > **判定规则**：
-> - keep 判定：no_miss_val_acc > 当前 proxy 最优 0.904（f6f4ed8）
-> - 即使单次 proxy 略低于 0.904，如果后续 multi-seed 验证显示方差显著缩小也算成功
+> - keep 判定：val_acc（来自 summary.json 的 best_val.accuracy）> 当前最优
+> - 新基线需先运行 1 次基线实验确立 val_acc 基准值
+> - 即使单次 proxy 略低，如果后续 multi-seed 验证显示方差显著缩小也算成功
 
 ### 阶段 10A：freeze_layers=3 超参搜索（8 次 proxy）
 

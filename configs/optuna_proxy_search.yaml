@@ -1,0 +1,59 @@
+study:
+  name: autoresearch_proxy_tuning
+  phase: proxy
+  base_config: configs/autoresearch_proxy.yaml
+  study_root: runs/optuna_proxy
+  direction: maximize
+  n_trials: 12
+  timeout_minutes: 240
+  trial_timeout_minutes: 70
+  failed_score: -1.0
+  sampler: tpe
+  sampler_seed: 42
+  startup_trials: 4
+  pruner: none
+  objective_metric: val_accuracy
+  enqueue_current_template: true
+
+python_candidates:
+  - .venv/bin/python
+  - python3
+  - python
+
+fixed_overrides: {}
+
+search_space:
+  train.lr:
+    type: float
+    low: 3.0e-5
+    high: 1.0e-4
+    log: true
+  train.weight_decay:
+    type: categorical
+    choices: [1.0e-4, 5.0e-4, 1.0e-3]
+  model.dropout:
+    type: categorical
+    choices: [0.2, 0.3, 0.4]
+  train.gradient_clip_norm:
+    type: categorical
+    choices: [0.5, 1.0, 2.0]
+  train.label_smoothing:
+    type: categorical
+    choices: [0.0, 0.02, 0.05]
+  train.augmentation:
+    type: categorical
+    choices: [true, false]
+  train.scheduler:
+    type: categorical
+    choices: ["none", "cosine"]
+  train.scheduler_t_max:
+    type: categorical
+    choices: [4, 6]
+    condition:
+      train.scheduler: ["cosine"]
+  train.early_stopping_patience:
+    type: categorical
+    choices: [null, 2, 3]
+  data.batch_size:
+    type: categorical
+    choices: [2, 4]

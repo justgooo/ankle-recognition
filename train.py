@@ -261,14 +261,20 @@ def build_model(config: dict):
     if fusion_type == "decision":
         return MultiViewDecisionFusionClassifier(**common_kwargs)
     if fusion_type == "attention":
-        # 注意力融合模式额外支持 cross_view_heads / cross_view_layers 配置
+        backbone = model_cfg.get("backbone", "resnet18")
+        if backbone != "resnet18":
+            raise ValueError(
+                "Attention fusion currently supports model.backbone='resnet18' only."
+            )
+        # 注意力融合模式内部固定使用 AttentionPooling，只透传实际支持的参数
         attention_kwargs = {
-            **common_kwargs,
+            "share_backbone": model_cfg["share_backbone"],
+            "use_pretrained": model_cfg["use_pretrained"],
+            "fusion_hidden_dim": model_cfg["fusion_hidden_dim"],
+            "dropout": model_cfg["dropout"],
             "cross_view_heads": model_cfg.get("cross_view_heads", 8),
             "cross_view_layers": model_cfg.get("cross_view_layers", 2),
         }
-        # MultiViewAttentionClassifier 内部自带 AttentionPooling，不需要此参数
-        attention_kwargs.pop("use_attention_pooling", None)
         return MultiViewAttentionClassifier(**attention_kwargs)
 
     raise ValueError(
@@ -477,13 +483,10 @@ def score_for_model_selection(metrics: dict) -> float:
     """
     计算一个分数，用于选择"最佳模型"。
 
-    优先用 AUC 作为选择标准（AUC 越高越好）。
-    如果 AUC 不可用（比如验证集只有一个类别），则退而求其次用准确率。
+    主指标迁移后，统一只使用验证集 accuracy 选择 best.pt。
+    AUC / F1 仍然记录到 summary.json 里，但不再参与 best model 选择。
     """
-    auc = metrics.get("auc", float("nan"))
-    if np.isnan(auc):
-        return metrics["accuracy"]
-    return auc
+    return float(metrics["accuracy"])
 
 
 # ==================== 主训练流程 ====================
@@ -569,7 +572,7 @@ def main() -> None:
 
     # ---------- 第 6 步：训练循环 ----------
     history = []         # 记录每个 epoch 的训练历史
-    best_score = -1.0    # 记录历史最佳分数
+    best_score = float("-inf")    # 记录历史最佳分数
     best_path = output_dir / "best.pt"  # 最佳模型的保存路径
 
     for epoch in range(1, config["train"]["epochs"] + 1):
@@ -642,6 +645,7 @@ def main() -> None:
     if val_loader is not None:
         _, final_val_metrics = evaluate(model, val_loader, criterion, device)
         summary["best_val"] = final_val_metrics
+        summary["model_selection"] = "best_val_accuracy"
     else:
         summary["model_selection"] = "lowest_train_loss"
 
