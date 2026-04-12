@@ -148,5 +148,3 @@ NA	0.532	NA	NA	NA	discard	NA	ASF-02: temperature=1.0
 NA	0.617	NA	NA	NA	discard	NA	ASF-03: temperature=0.3
 NA	0.649	NA	NA	NA	discard	NA	ASF-04: temperature=2.0
 NA	0.660	NA	NA	NA	discard	NA	ASF-05: temperature=0.5 + lr=5e-5
-a60c3e0	0.882979	0.931818	0.876404	14.4	keep	proxy	VRG-LOGIT-01: pre-merge training-branch winner; fresh proxy Optuna winner=trial 0 after 4 completed trials
-066ab57	0.840426	0.918182	0.819277	14.4	discard	proxy	MAIN-SYNC-01: merged origin/main@f4e6d53 code + candidate proxy trial0 config validated successfully; below pre-merge winner
