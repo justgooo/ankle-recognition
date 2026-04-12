@@ -73,12 +73,53 @@
 ## 硬件限制
 
 - 操作系统：Ubuntu，Shell：Bash
-- GPU：NVIDIA GeForce RTX 4090（24GB 显存，GPU index=1，使用 `CUDA_VISIBLE_DEVICES=1`）
+- CPU：Intel Xeon Silver 4310 @ 2.10GHz × 12 核（⚠️ 其他进程已占用 ~70%，需低 CPU 模式）
+- RAM：128GB
 - 训练默认走 `.venv` 中的 PyTorch CUDA 环境
 - proxy 实验（4 epochs，feature fusion，非共享 backbone）预计：约 30 分钟
 - formal 实验（15 epochs，feature fusion，非共享 backbone）预计：约 90-120 分钟
 - `batch_size=4` 已验证可稳定运行（24GB 显存可支持更大 batch）
+- `num_workers=1`（CPU 已繁忙，不要提高此值）
 - 每次实验前确认 `runs/` 下没有残留的大 checkpoint 文件，并顺手检查磁盘剩余空间
+
+### 双卡并行模式
+
+服务器配备两张 GPU，支持双进程并行训练以加速研究：
+
+| 项目 | Slot 0 | Slot 1 |
+|------|--------|--------|
+| GPU | RTX 3090 (24GB) | RTX 4090 (24GB) |
+| GPU index | 0 | 1 |
+| CUDA_VISIBLE_DEVICES | 0 | 1 |
+| proxy config | `configs/autoresearch_proxy_slot0.yaml` | `configs/autoresearch_proxy.yaml` |
+| formal config | `configs/autoresearch_formal_slot0.yaml` | `configs/autoresearch_formal.yaml` |
+| output_dir (proxy) | `runs/autoresearch_proxy_slot0` | `runs/autoresearch_proxy` |
+| output_dir (formal) | `runs/autoresearch_formal_slot0` | `runs/autoresearch_formal` |
+
+**并行规则**：
+- 两个 slot 各自运行同等优先级的独立实验，从 `backlog.md` 中取不同任务
+- 两个 slot 共享 `results.tsv`，写入时通过 `flock` 互斥：
+  ```bash
+  flock -x /tmp/ankle_results.lock -c 'echo -e "LINE" >> results.tsv'
+  ```
+- 两个 slot 使用不同的 `output_dir`，checkpoint 不冲突
+- 在 `results.tsv` 的 `description` 列中标注 `[slot0/3090]` 或 `[slot1/4090]` 以便区分
+- `num_workers=1` 是硬限制——CPU 已被其他进程占用 ~70%，不要提高
+
+**单卡模式**：
+- 仍可使用 `CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml`（沿用 slot 1 / 4090）
+
+**并行启动**：
+```bash
+# 方式 1：手动启动两个训练进程
+./scripts/parallel_train.sh
+
+# 方式 2：双进程 autoresearch 自动循环
+./autoresearch_parallel_loop.sh --max-iterations 25
+
+# 监控状态
+./scripts/parallel_status.sh
+```
 
 ## 准备工作
 
@@ -113,9 +154,11 @@
 - `src/cross_view_attention.py`
 - `configs/autoresearch_proxy.yaml`
 - `configs/autoresearch_formal.yaml`
+- `configs/autoresearch_proxy_slot0.yaml`
+- `configs/autoresearch_formal_slot0.yaml`
 - `configs/optuna_proxy_search.yaml`
 - `configs/optuna_main_search.yaml`
-- `scripts/`（Optuna 工作流脚本）
+- `scripts/`（Optuna 工作流脚本 + 并行训练脚本）
 - `train.py`（仅限为保证当前主线可复现、配置显式化、best-model 选择规则一致所必需的改动）
 
 你可以追加写入：

@@ -14,7 +14,9 @@
 - 每个实验结束后更新 `backlog.md`（包括 Agent 状态表格）
 - 每个实验结束后追加 `results.tsv`
 - 遵守 `program.md` 中的超时规则和资源保护规则
-- 使用 `CUDA_VISIBLE_DEVICES=1 .venv/bin/python` 执行所有 Python 命令
+- 使用分配给你的 GPU 执行 Python 命令（slot 0: `CUDA_VISIBLE_DEVICES=0`，slot 1: `CUDA_VISIBLE_DEVICES=1`）
+- 如果未明确分配 slot，默认使用 `CUDA_VISIBLE_DEVICES=1`（slot 1 / RTX 4090）
+- 并行模式下，写 `results.tsv` 时使用 `flock -x /tmp/ankle_results.lock`
 
 ## NEVER
 
@@ -24,6 +26,8 @@
 - ❌ 不要修改数据文件或数据集划分
 - ❌ 不要把整个日志粘贴到对话中（只读最后 30 行）
 - ❌ 不要用系统 PATH 里的 python
+- ❌ 不要在并行模式下使用另一个 slot 的 output_dir
+- ❌ 不要将 `num_workers` 设为大于 1（CPU 已被其他进程占用 ~70%）
 
 ## ASK FIRST
 
@@ -46,16 +50,22 @@ LOOP:
 ## 技术环境
 
 - OS: Ubuntu，Shell: Bash
-- Python: `CUDA_VISIBLE_DEVICES=1 .venv/bin/python`（torch 2.2.0+cu121）
-- GPU: NVIDIA RTX 4090（24GB VRAM，GPU index=1，使用 CUDA_VISIBLE_DEVICES=1）
+- Python: `.venv/bin/python`（torch 2.2.0+cu121）
+- CPU: Intel Xeon Silver 4310 @ 2.10GHz × 12 核（⚠️ 其他进程已占 ~70%，需低 CPU 模式）
+- RAM: 128GB
+- GPU 0: NVIDIA RTX 3090（24GB VRAM）→ Slot 0，`CUDA_VISIBLE_DEVICES=0`
+- GPU 1: NVIDIA RTX 4090（24GB VRAM）→ Slot 1，`CUDA_VISIBLE_DEVICES=1`
+- `num_workers=1`（硬限制，不要提高）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
 
 ## 允许修改的范围
 
 - `src/model.py`、`src/attention_pooling.py`、`src/cross_view_attention.py`
 - `configs/autoresearch_proxy.yaml`、`configs/autoresearch_formal.yaml`
+- `configs/autoresearch_proxy_slot0.yaml`、`configs/autoresearch_formal_slot0.yaml`
 - `configs/optuna_*.yaml`（Optuna 搜索配置）
-- `scripts/`（Optuna 工作流脚本）
+- `scripts/`（Optuna 工作流脚本 + 并行训练脚本）
+- `autoresearch_parallel_loop.sh`（双进程自动循环）
 - `backlog.md`（实验待办，每次实验后必须更新）
 - `results.tsv`（只追加）
 - 可新增依赖（限 `optuna` 等实验工具，需记录在 `requirements.txt`）
@@ -66,9 +76,14 @@ LOOP:
 |------|------|
 | `program.md` | 完整实验协议（必读） |
 | `backlog.md` | 实验待办清单 + 当前最优纪录 + Agent 状态（必读、必更新） |
-| `results.tsv` | 实验结果记录（只追加） |
-| `configs/autoresearch_proxy.yaml` | proxy 实验配置（可修改） |
-| `configs/autoresearch_formal.yaml` | formal 实验配置（可修改） |
+| `results.tsv` | 实验结果记录（只追加，并行时加 flock） |
+| `configs/autoresearch_proxy.yaml` | Slot 1 (4090) proxy 配置 |
+| `configs/autoresearch_formal.yaml` | Slot 1 (4090) formal 配置 |
+| `configs/autoresearch_proxy_slot0.yaml` | Slot 0 (3090) proxy 配置 |
+| `configs/autoresearch_formal_slot0.yaml` | Slot 0 (3090) formal 配置 |
 | `src/model.py` | 模型代码（可修改） |
+| `scripts/parallel_train.sh` | 双 GPU 并行训练启动器 |
+| `scripts/parallel_status.sh` | 双槽位状态监控 |
+| `autoresearch_parallel_loop.sh` | 双进程 autoresearch 自动循环 |
 | `scripts/run_optuna_proxy.py` | Optuna proxy 超参搜索（可修改） |
 | `scripts/monitor_optuna.py` | Optuna 结果监控（可修改） |
