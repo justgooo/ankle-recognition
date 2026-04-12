@@ -27,7 +27,7 @@
 - ❌ 不要把整个日志粘贴到对话中（只读最后 30 行）
 - ❌ 不要用系统 PATH 里的 python
 - ❌ 不要在并行模式下使用另一个 slot 的 output_dir
-- ❌ 不要将 `num_workers` 设为大于 1（CPU 已被其他进程占用 ~70%）
+- ❌ 不要盲目把 `num_workers` 设得太高（必须先评估 CPU 占用。如果 CPU 占用不高，可以自动调高 `num_workers` 的水平）
 
 ## ASK FIRST
 
@@ -51,11 +51,11 @@ LOOP:
 
 - OS: Ubuntu，Shell: Bash
 - Python: `.venv/bin/python`（torch 2.2.0+cu121）
-- CPU: Intel Xeon Silver 4310 @ 2.10GHz × 12 核（⚠️ 其他进程已占 ~70%，需低 CPU 模式）
+- CPU: Intel Xeon Silver 4310 @ 2.10GHz × 12 核（⚠️ 注意监控 CPU 占用率，占用不高时可尝试调高 num_workers）
 - RAM: 128GB
 - GPU 0: NVIDIA RTX 3090（24GB VRAM）→ Slot 0，`CUDA_VISIBLE_DEVICES=0`
 - GPU 1: NVIDIA RTX 4090（24GB VRAM）→ Slot 1，`CUDA_VISIBLE_DEVICES=1`
-- `num_workers=1`（硬限制，不要提高）
+- `num_workers`: 默认 1（注意：如果 CPU 占用不高，Agent 可以自动调整 num_workers 的水平以加速训练）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
 
 ## 允许修改的范围

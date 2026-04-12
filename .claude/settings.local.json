@@ -8,6 +8,8 @@
       "Bash(nslookup:*)",
       "Bash(qodercli --version)",
       "Bash(git:*)"
-    ]
+    ],
+    "defaultMode": "bypassPermissions",
+    "skipDangerousModePermissionPrompt": true
   }
 }
