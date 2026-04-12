@@ -328,14 +328,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 视角可靠度门控：每个视角一个 confidence head
-        # 输入 512 维特征 → 输出 1 个标量（经 sigmoid 映射到 0~1）
-        # 3 个 confidence 经 softmax 归一化后作为动态融合权重
+        # 视角可靠度门控：每个视角一个 reliability head
+        # 直接输出未压缩的 reliability logits，再由 softmax 归一化。
+        # 这样不同视角之间可以拉开更大的权重差距，而不会被 sigmoid 压缩到窄范围。
         self.confidence_heads = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(self.feature_dim, 1),  # 512 → 1
-                    nn.Sigmoid(),                    # 映射到 (0, 1)
+                    nn.LayerNorm(self.feature_dim),
+                    nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
                 )
                 for _ in range(3)
             ]
@@ -360,7 +360,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 3 步：计算每个视角的动态可信度
+        # 第 3 步：计算每个视角的动态可靠度 logits
         confidences = torch.stack(
             [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
             dim=1,
