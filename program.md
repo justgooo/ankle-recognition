@@ -37,19 +37,37 @@
 
 ## 研究策略
 
-**当前阶段**：方差缩减 / Variance Reduction 实验（阶段 10）
+**当前阶段**：主线校准 + 可复现实验 workflow 对齐
 
-前阶段（阶段 4-9）的架构创新已完成，Decision Fusion formal 达到 0.915。
-但模型在不同 seed 下方差极大（标准差 ~0.19），论文不可接受。
-现阶段通过 **Backbone 冻结 + LayerNorm** 缩减方差：
-冻结 ResNet18 前 3 个 layer block，只训练 layer4 + 分类头，大幅减少可训练参数。
+当前 canonical baseline 不再是旧的 `192x16 + stage-10 freeze` 叙事，而是：
 
-### CVFI 核心设计
-- **一阶特征**：concat([v1, v2, v3]) = 1536D（与标准 Feature Fusion 相同）
-- **二阶交互项**：每对视角的 512 维逐元素乘积，通过 Linear+ReLU 压缩到 128 维
-- **总维度**：1536 + 3×128 = 1920D → LayerNorm → MLP → 2
-- 通过 `fusion_type: decision` 启用（CVFI 实现在 decision 入口点下）
-- 执行顺序：8 次 proxy 超参搜索
+- 单张 CT 切片先进入以 **ResNet18** 为编码器的 **ResUNet**
+- 通过 **3 个 Attention Gate** 强化病灶区域
+- 每个视角的 **16 张切片** 由 **AttentionPooling** 聚合为视角特征
+- 3 个视角最后通过 **VRG / decision fusion** 做可靠度加权融合
+
+当前工作重点不是继续沿旧 backlog 语义比较 `no_miss_*` 记录，而是先保证：
+
+1. 文档、配置、训练选择规则一致
+2. `model.freeze_layers` 由 YAML 显式控制，可复现
+3. Optuna fresh / resume 语义清晰，不混入旧 trial
+4. monitor 仅把训练故障视为 fatal，`threshold_eval` 只做辅助 warning
+
+### 当前模型选择规则
+
+- 主指标：`summary.json -> best_val.accuracy`
+- 辅助指标：`best_val.auc`、`best_val.f1`
+- keep / discard：先比较 `val_acc`
+- 如果 `val_acc` 持平，优先选择 `val_auc` 更高的版本
+- 如果 `val_acc` 与 `val_auc` 都持平，优先更简单的代码或配置
+
+### 当前 baseline / Optuna 对齐规则
+
+- `configs/autoresearch_proxy.yaml` 与 `configs/autoresearch_formal.yaml` 是当前 baseline 真值来源
+- `model.freeze_layers` 必须在 YAML 中显式声明，不再依赖修改源码常量
+- Optuna baseline trial 必须基于 **effective config**（包含 runtime 默认值），不能只复制 base YAML 中显式写出的键
+- dataset preflight 可以报告路径修复，但默认不应静默改写训练输入 CSV
+- Optuna 必须使用项目 `.venv`，找不到就直接报错
 
 
 ## 硬件限制
@@ -98,6 +116,7 @@
 - `configs/optuna_proxy_search.yaml`
 - `configs/optuna_main_search.yaml`
 - `scripts/`（Optuna 工作流脚本）
+- `train.py`（仅限为保证当前主线可复现、配置显式化、best-model 选择规则一致所必需的改动）
 
 你可以追加写入：
 - `results.tsv`
@@ -106,7 +125,6 @@
 - `backlog.md`（实验待办清单，每次实验后必须更新）
 
 不要修改：
-- `train.py`（训练策略增强已内置，通过配置控制）
 - `src/dataset.py`
 - `src/utils.py`
 - `tools/`
@@ -251,13 +269,13 @@ commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
 ### 阶段 9：CVFI（Cross-View Feature Interaction Fusion）✅ 已完成
 
 
-### 阶段 10：Variance Reduction（方差缩减）🔴 当前执行中
+### 阶段 10：legacy 方差缩减记录（已冻结）
 
-> Backbone 冻结 + LayerNorm，缩减 seed 方差。
-> 通过修改 DEFAULT_FREEZE_LAYERS 常量控制冻结策略。
-> 基线配置沿用当前最优 VRG 配方（decision fusion + gradient_clip_norm=1.0）。
+> 以下内容保留作历史参考。
+> 其中的 `freeze_layers=2/3`、`DEFAULT_FREEZE_LAYERS`、旧 stage-10 试验顺序，都不再代表当前执行口径。
+> 当前执行口径以上文“主线校准 + 可复现实验 workflow 对齐”为准。
 
-#### 阶段 10A：freeze_layers=3 超参搜索（8 次 proxy）
+#### legacy：freeze_layers=3 超参搜索（8 次 proxy）
 
 1. **VR-01**: baseline（freeze=3, lr=5e-5, dropout=0.3）
 2. **VR-02**: lr=1e-4
@@ -268,7 +286,7 @@ commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
 7. **VR-07**: lr=1e-4 + dropout=0.2
 8. **VR-08**: 基于前 7 次最佳方向的组合实验
 
-#### 阶段 10B：freeze_layers=2 超参搜索（8 次 proxy）
+#### legacy：freeze_layers=2 超参搜索（8 次 proxy）
 
 1. **VR-09**: baseline（freeze=2, lr=5e-5, dropout=0.3）
 2. **VR-10**: lr=1e-4
@@ -279,9 +297,7 @@ commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
 7. **VR-15**: lr=1e-4 + dropout=0.2
 8. **VR-16**: 基于前 7 次最佳方向的组合实验
 
-> 在标准特征拼接（一阶）基础上增加视角两两之间的逐元素乘积交互项（二阶）。
-> 每个交互项通过 Linear+ReLU 压缩到 128 维，总融合维度 = 1920D。
-> 基线配置沿用当前最佳策略：`share_backbone=false, aug=true, lr=1e-4, label_smoothing=0.0, dropout=0.3`
+> 下方 CVFI 记录同样属于历史阶段总结，不代表当前 canonical baseline。
 
 #### 阶段 9A：CVFI 超参搜索（8 次 proxy）
 

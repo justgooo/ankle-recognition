@@ -48,6 +48,12 @@ FAILURE_PATTERNS = {
 }
 
 
+RUNTIME_PARAM_DEFAULTS: dict[str, Any] = {
+    "train.scheduler": "none",
+    "train.early_stopping_patience": None,
+}
+
+
 @dataclass
 class TrialOutcome:
     trial_number: int
@@ -199,6 +205,7 @@ def prepare_dataset_inputs(
     config: dict[str, Any],
     study_root: Path,
     max_missing: int = 5,
+    allow_csv_rewrite: bool = False,
 ) -> dict[str, Any]:
     data_cfg = config.get("data", {})
     csv_path = resolve_path(data_cfg["csv_path"])
@@ -270,9 +277,10 @@ def prepare_dataset_inputs(
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-        config = copy.deepcopy(config)
-        config.setdefault("data", {})
-        config["data"]["csv_path"] = str(resolved_csv)
+        if allow_csv_rewrite:
+            config = copy.deepcopy(config)
+            config.setdefault("data", {})
+            config["data"]["csv_path"] = str(resolved_csv)
     return config
 
 
@@ -320,7 +328,7 @@ def current_template_params(base_config: dict[str, Any], search_space: dict[str,
     for key, spec in search_space.items():
         if not is_active_param(spec, params):
             continue
-        value = get_nested(base_config, key)
+        value = get_nested(base_config, key, RUNTIME_PARAM_DEFAULTS.get(key))
         if value is None:
             continue
         params[key] = normalize_choice(value)
@@ -335,28 +343,15 @@ def build_env(study_cfg: dict[str, Any]) -> dict[str, str]:
 
 
 def detect_python_executable(candidates: list[str] | None = None) -> str:
-    ordered_candidates: list[str] = [
-        str(REPO_ROOT / ".venv" / "bin" / "python"),
-        str(REPO_ROOT / ".venv" / "Scripts" / "python.exe"),
-        sys.executable,
+    del candidates
+    venv_candidates = [
+        (REPO_ROOT / ".venv" / "bin" / "python").resolve(),
+        (REPO_ROOT / ".venv" / "Scripts" / "python.exe").resolve(),
     ]
-    if candidates:
-        ordered_candidates.extend(str(item) for item in candidates)
-    ordered_candidates.extend(["python3", "python"])
-
-    seen: set[str] = set()
-    for candidate in ordered_candidates:
-        if not candidate or candidate in seen:
+    for candidate_path in venv_candidates:
+        if not candidate_path.exists():
             continue
-        seen.add(candidate)
-        candidate_to_run = candidate
-        candidate_path = Path(candidate)
-        looks_like_path = candidate_path.is_absolute() or any(token in candidate for token in ("/", "\\"))
-        if looks_like_path and not candidate_path.is_absolute():
-            candidate_path = (REPO_ROOT / candidate_path).resolve()
-            candidate_to_run = str(candidate_path)
-        if looks_like_path and not candidate_path.exists():
-            continue
+        candidate_to_run = str(candidate_path)
         try:
             subprocess.run(
                 [candidate_to_run, "-c", "import sys; print(sys.executable)"],
@@ -370,8 +365,8 @@ def detect_python_executable(candidates: list[str] | None = None) -> str:
         except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             continue
     raise RuntimeError(
-        "Could not find a usable Python command. Tried .venv/bin/python, "
-        "the current interpreter, python3, and python."
+        "Could not find a usable project virtualenv Python. Expected one of: "
+        "./.venv/bin/python or ./.venv/Scripts/python.exe"
     )
 
 
@@ -406,17 +401,21 @@ def choose_pruner(optuna_module, study_cfg: dict[str, Any]):
     return optuna_module.pruners.NopPruner()
 
 
-def build_study(optuna_module, search_cfg: dict[str, Any], study_root: Path):
+def build_study(optuna_module, search_cfg: dict[str, Any], study_root: Path, resume: bool = False):
     study_cfg = search_cfg["study"]
     study_root.mkdir(parents=True, exist_ok=True)
     storage_name = study_cfg.get("storage", "study.sqlite3")
     storage_path = study_root / str(storage_name)
     storage_url = f"sqlite:///{storage_path.as_posix()}"
+    if storage_path.exists() and not resume:
+        raise FileExistsError(
+            f"Study storage already exists at {storage_path}. Use --resume to continue this study or choose a fresh study_root."
+        )
     return optuna_module.create_study(
         study_name=str(study_cfg["name"]),
         direction=str(study_cfg.get("direction", "maximize")),
         storage=storage_url,
-        load_if_exists=True,
+        load_if_exists=resume,
         sampler=choose_sampler(optuna_module, study_cfg),
         pruner=choose_pruner(optuna_module, study_cfg),
     )
@@ -809,11 +808,29 @@ def load_trial_records(study_root: Path) -> list[dict[str, Any]]:
     return records
 
 
+def metric_tuple(record: dict[str, Any], primary_key: str = "val_accuracy") -> tuple[float, float] | None:
+    primary = coerce_float(record.get(primary_key))
+    if primary is None:
+        return None
+    auc = coerce_float(record.get("val_auc"))
+    if auc is None:
+        auc = float("-inf")
+    return primary, auc
+
+
 def best_record(records: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
-    valid = [record for record in records if record.get("status") in VALID_TRIAL_STATUSES and record.get(key) is not None]
+    valid = [record for record in records if record.get("status") in VALID_TRIAL_STATUSES]
     if not valid:
         return None
-    return max(valid, key=lambda item: item[key])
+    if key == "val_accuracy":
+        ranked = [record for record in valid if metric_tuple(record, "val_accuracy") is not None]
+        if not ranked:
+            return None
+        return max(ranked, key=lambda item: metric_tuple(item, "val_accuracy"))
+    ranked = [record for record in valid if record.get(key) is not None]
+    if not ranked:
+        return None
+    return max(ranked, key=lambda item: item[key])
 
 
 def save_study_status(study_root: Path, search_cfg: dict[str, Any], records: list[dict[str, Any]], state: str) -> None:
@@ -827,6 +844,7 @@ def save_study_status(study_root: Path, search_cfg: dict[str, Any], records: lis
         "total_trials": len(records),
         "valid_trials": len(valid_records),
         "failure_counts": {},
+        "selection_rule": "val_accuracy_then_val_auc",
     }
     for record in records:
         status = str(record.get("status", "unknown"))
@@ -834,6 +852,7 @@ def save_study_status(study_root: Path, search_cfg: dict[str, Any], records: lis
     if best:
         payload["best_trial_number"] = best.get("trial_number")
         payload["best_val_accuracy"] = best.get("val_accuracy")
+        payload["best_val_auc"] = best.get("val_auc")
         payload["best_params"] = best.get("params", {})
     save_json(study_root / "study_status.json", payload)
 
@@ -846,8 +865,12 @@ def enqueue_template_trial(study, base_config: dict[str, Any], search_space: dic
 
 def load_top_trial_params(source_study_dir: Path, top_k: int) -> list[dict[str, Any]]:
     records = load_trial_records(source_study_dir)
-    valid = [record for record in records if record.get("status") in VALID_TRIAL_STATUSES and record.get("val_accuracy") is not None]
-    valid.sort(key=lambda item: (item.get("val_accuracy", -math.inf), item.get("val_auc") or -math.inf), reverse=True)
+    valid = [
+        record
+        for record in records
+        if record.get("status") in VALID_TRIAL_STATUSES and metric_tuple(record, "val_accuracy") is not None
+    ]
+    valid.sort(key=lambda item: metric_tuple(item, "val_accuracy"), reverse=True)
     return [record.get("params", {}) for record in valid[:top_k]]
 
 
@@ -859,7 +882,11 @@ def enqueue_source_trials(study, source_study_dir: Path, top_k: int, search_spac
 
 
 def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
-    valid = [record for record in records if record.get("status") in VALID_TRIAL_STATUSES and record.get("val_accuracy") is not None]
+    valid = [
+        record
+        for record in records
+        if record.get("status") in VALID_TRIAL_STATUSES and metric_tuple(record, "val_accuracy") is not None
+    ]
     best_acc = best_record(records, "val_accuracy")
     best_auc = best_record(records, "val_auc")
     fastest = None
@@ -884,6 +911,7 @@ def run_study(
     source_study_dir: str | Path | None = None,
     top_k: int = 0,
     max_trials_override: int | None = None,
+    resume: bool = False,
 ) -> Path:
     optuna = import_optuna()
     config_path, search_cfg = load_search_config(search_config_path)
@@ -904,7 +932,11 @@ def run_study(
     (study_root / "trials").mkdir(parents=True, exist_ok=True)
     preflight_config = apply_overrides(base_config, search_cfg.get("fixed_overrides", {}))
     if bool(study_cfg.get("validate_dataset", True)):
-        preflight_config = prepare_dataset_inputs(preflight_config, study_root)
+        preflight_config = prepare_dataset_inputs(
+            preflight_config,
+            study_root,
+            allow_csv_rewrite=bool(study_cfg.get("rewrite_dataset_csv", False)),
+        )
         base_config = copy.deepcopy(base_config)
         base_config["data"]["csv_path"] = preflight_config["data"]["csv_path"]
 
@@ -914,13 +946,17 @@ def run_study(
             "config_path": str(config_path),
             "search_config": search_cfg,
             "python_executable": python_executable,
+            "resume": resume,
         },
     )
 
-    study = build_study(optuna, search_cfg, study_root)
-    if bool(study_cfg.get("enqueue_current_template", True)):
-        enqueue_template_trial(study, base_config, search_space)
-    if source_study_dir and top_k > 0:
+    study = build_study(optuna, search_cfg, study_root, resume=resume)
+    existing_trials = len(study.trials)
+    target_trials = int(max_trials_override or study_cfg.get("n_trials", 10))
+    remaining_trials = max(0, target_trials - existing_trials)
+    if bool(study_cfg.get("enqueue_current_template", True)) and existing_trials == 0:
+        enqueue_template_trial(study, preflight_config, search_space)
+    if source_study_dir and top_k > 0 and existing_trials == 0:
         enqueue_source_trials(study, resolve_path(source_study_dir), top_k, search_space)
     save_study_status(study_root, search_cfg, load_trial_records(study_root), state="running")
 
@@ -957,8 +993,28 @@ def run_study(
         records = load_trial_records(study_root)
         save_study_status(study_root, search_cfg, records, state="running")
 
+    if remaining_trials <= 0:
+        records = load_trial_records(study_root)
+        save_study_status(study_root, search_cfg, records, state="completed")
+        summary = summarize_records(records)
+        save_json(
+            study_root / "study_summary.json",
+            {
+                "study_name": study_cfg["name"],
+                "updated_at": now_iso(),
+                "search_config": str(config_path),
+                "source_study_dir": str(source_study_dir) if source_study_dir else None,
+                "selection_rule": "val_accuracy_then_val_auc",
+                "target_trials": target_trials,
+                "existing_trials": existing_trials,
+                "remaining_trials": 0,
+                "summary": summary,
+            },
+        )
+        return study_root
+
     optimize_kwargs: dict[str, Any] = {
-        "n_trials": int(max_trials_override or study_cfg.get("n_trials", 10)),
+        "n_trials": remaining_trials,
         "callbacks": [callback],
     }
     if study_cfg.get("timeout_minutes") is not None:
@@ -984,6 +1040,10 @@ def run_study(
             "updated_at": now_iso(),
             "search_config": str(config_path),
             "source_study_dir": str(source_study_dir) if source_study_dir else None,
+            "selection_rule": "val_accuracy_then_val_auc",
+            "target_trials": target_trials,
+            "existing_trials": existing_trials,
+            "remaining_trials": remaining_trials,
             "summary": summary,
         },
     )
@@ -1012,6 +1072,11 @@ def build_cli(default_config: str, description: str) -> argparse.Namespace:
         "--trials",
         type=int,
         default=None,
-        help="Optional override for study.n_trials in the YAML.",
+        help="Optional override for total study.n_trials target in the YAML.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume an existing study in study_root instead of requiring a fresh study directory.",
     )
     return parser.parse_args()

@@ -13,6 +13,7 @@ def main() -> None:
         source_study_dir=args.source_study_dir,
         top_k=args.top_k,
         max_trials_override=args.trials,
+        resume=args.resume,
     )
     print(f"Study finished: {study_root}")
 

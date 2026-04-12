@@ -20,7 +20,8 @@ python_candidates:
   - python3
   - python
 
-fixed_overrides: {}
+fixed_overrides:
+  model.freeze_layers: 3
 
 search_space:
   train.lr:

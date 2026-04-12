@@ -249,6 +249,7 @@ def build_model(config: dict):
     common_kwargs = {
         "share_backbone": model_cfg["share_backbone"],       # 是否共享 backbone
         "use_pretrained": model_cfg["use_pretrained"],       # 是否使用预训练权重
+        "freeze_layers": int(model_cfg.get("freeze_layers", 3)),  # 显式冻结层配置
         "fusion_hidden_dim": model_cfg["fusion_hidden_dim"], # 分类器隐藏层维度
         "dropout": model_cfg["dropout"],                     # Dropout 比率
         "use_attention_pooling": model_cfg.get("use_attention_pooling", False),  # 注意力池化
@@ -270,6 +271,7 @@ def build_model(config: dict):
         attention_kwargs = {
             "share_backbone": model_cfg["share_backbone"],
             "use_pretrained": model_cfg["use_pretrained"],
+            "freeze_layers": int(model_cfg.get("freeze_layers", 3)),
             "fusion_hidden_dim": model_cfg["fusion_hidden_dim"],
             "dropout": model_cfg["dropout"],
             "cross_view_heads": model_cfg.get("cross_view_heads", 8),
@@ -479,14 +481,14 @@ def collect_attention_output(model, loader, device, view_index: int):
     }
 
 
-def score_for_model_selection(metrics: dict) -> float:
+def score_for_model_selection(metrics: dict) -> tuple[float, float]:
     """
     计算一个分数，用于选择"最佳模型"。
 
-    主指标迁移后，统一只使用验证集 accuracy 选择 best.pt。
-    AUC / F1 仍然记录到 summary.json 里，但不再参与 best model 选择。
+    主指标是验证集 accuracy；当 val_acc 持平时，用 val_auc 作为 tie-break。
+    返回的 tuple 会按 (accuracy, auc) 的字典序比较。
     """
-    return float(metrics["accuracy"])
+    return float(metrics["accuracy"]), float(metrics.get("auc", float("-inf")))
 
 
 # ==================== 主训练流程 ====================
@@ -572,7 +574,10 @@ def main() -> None:
 
     # ---------- 第 6 步：训练循环 ----------
     history = []         # 记录每个 epoch 的训练历史
-    best_score = float("-inf")    # 记录历史最佳分数
+    if val_loader is not None:
+        best_score: tuple[float, float] | float = (float("-inf"), float("-inf"))
+    else:
+        best_score = float("-inf")
     best_path = output_dir / "best.pt"  # 最佳模型的保存路径
 
     for epoch in range(1, config["train"]["epochs"] + 1):
@@ -645,7 +650,7 @@ def main() -> None:
     if val_loader is not None:
         _, final_val_metrics = evaluate(model, val_loader, criterion, device)
         summary["best_val"] = final_val_metrics
-        summary["model_selection"] = "best_val_accuracy"
+        summary["model_selection"] = "best_val_accuracy_then_auc"
     else:
         summary["model_selection"] = "lowest_train_loss"
 

@@ -6,7 +6,8 @@
       "Bash(node:*)",
       "Bash(curl:*)",
       "Bash(nslookup:*)",
-      "Bash(qodercli --version)"
+      "Bash(qodercli --version)",
+      "Bash(git:*)"
     ]
   }
 }

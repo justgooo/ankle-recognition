@@ -633,6 +633,7 @@ class MultiViewAttentionClassifier(nn.Module):
         self,
         share_backbone: bool = True,
         use_pretrained: bool = False,
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,
         fusion_hidden_dim: int = 256,
         dropout: float = 0.3,
         cross_view_heads: int = 8,
@@ -644,10 +645,19 @@ class MultiViewAttentionClassifier(nn.Module):
 
         # ---------- Backbone ----------
         if share_backbone:
-            self.shared_encoder = build_resnet18_encoder(use_pretrained=use_pretrained)
+            self.shared_encoder = build_resnet18_encoder(
+                use_pretrained=use_pretrained,
+                freeze_layers=freeze_layers,
+            )
         else:
             self.view_encoders = nn.ModuleList(
-                [build_resnet18_encoder(use_pretrained=use_pretrained) for _ in range(3)]
+                [
+                    build_resnet18_encoder(
+                        use_pretrained=use_pretrained,
+                        freeze_layers=freeze_layers,
+                    )
+                    for _ in range(3)
+                ]
             )
 
         # ---------- Attention Pooling（逐视角） ----------

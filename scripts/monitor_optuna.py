@@ -111,21 +111,22 @@ def watchdog_snapshot(study_dir: Path) -> dict[str, Any]:
 
     failure_signals: list[str] = []
     timeout_signals: list[str] = []
+    threshold_warning_signals: list[str] = []
     for record in running:
         paths = record.get("paths", {})
-        combined_tail = "\n".join(
-            part
-            for part in (
-                read_text_tail(resolve_path(paths.get("train_log", ""))) if paths.get("train_log") else "",
-                read_text_tail(resolve_path(paths.get("threshold_log", ""))) if paths.get("threshold_log") else "",
-            )
-            if part
-        )
-        lowered = combined_tail.lower()
-        if "timeout" in lowered:
+        train_tail = read_text_tail(resolve_path(paths.get("train_log", ""))) if paths.get("train_log") else ""
+        train_lowered = train_tail.lower()
+        if "timeout" in train_lowered:
             timeout_signals.append(str(record.get("trial_number", "-")))
-        if "exit_code=" in lowered or "traceback" in lowered:
+        if "exit_code=" in train_lowered or "traceback" in train_lowered:
             failure_signals.append(str(record.get("trial_number", "-")))
+
+        threshold_tail = read_text_tail(resolve_path(paths.get("threshold_log", ""))) if paths.get("threshold_log") else ""
+        threshold_lowered = threshold_tail.lower()
+        if threshold_lowered and (
+            "timeout" in threshold_lowered or "exit_code=" in threshold_lowered or "traceback" in threshold_lowered
+        ):
+            threshold_warning_signals.append(str(record.get("trial_number", "-")))
 
     progress_age_seconds = None
     if latest_progress is not None:
@@ -137,15 +138,36 @@ def watchdog_snapshot(study_dir: Path) -> dict[str, Any]:
         "progress_age_seconds": progress_age_seconds,
         "timeout_signals": timeout_signals,
         "failure_signals": failure_signals,
+        "threshold_warning_signals": threshold_warning_signals,
     }
 
 
+def metric_tuple(record: dict[str, Any], primary_metric: str = "val_accuracy") -> tuple[float, float] | None:
+    primary = numeric_or_none(record.get(primary_metric))
+    if primary is None:
+        return None
+    auc = numeric_or_none(record.get("val_auc"))
+    if auc is None:
+        auc = float("-inf")
+    return primary, auc
+
+
 def best_record(records: list[dict[str, Any]], metric: str, fastest: bool = False) -> dict[str, Any] | None:
+    if fastest:
+        candidates = [record for record in records if numeric_or_none(record.get(metric)) is not None]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda item: float(item[metric]))
+
+    if metric == "val_accuracy":
+        candidates = [record for record in records if metric_tuple(record, "val_accuracy") is not None]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: metric_tuple(item, "val_accuracy"))
+
     candidates = [record for record in records if numeric_or_none(record.get(metric)) is not None]
     if not candidates:
         return None
-    if fastest:
-        return min(candidates, key=lambda item: float(item[metric]))
     return max(candidates, key=lambda item: float(item[metric]))
 
 
@@ -281,8 +303,14 @@ def build_report(study_dir: Path) -> tuple[str, dict[str, Any]]:
         "best_by_auc": best_auc,
         "fastest_valid": fastest,
         "crashes": crashes,
+        "threshold_warnings": [
+            record
+            for record in records
+            if record.get("threshold_status") in {"crash", "timeout"}
+        ],
         "degraded_trials": degraded,
         "suggestions": build_suggestions(records),
+        "selection_rule": "val_accuracy_then_val_auc",
     }
 
     parts = []
@@ -298,6 +326,7 @@ def build_report(study_dir: Path) -> tuple[str, dict[str, Any]]:
         parts.append(
             "Best by accuracy: "
             f"trial {best_accuracy['trial_number']} | val_acc={best_accuracy['val_accuracy']:.4f} | "
+            f"val_auc={short_value(best_accuracy.get('val_auc'))} | "
             f"params={best_accuracy.get('params', {})}"
         )
     if best_auc:
@@ -319,6 +348,16 @@ def build_report(study_dir: Path) -> tuple[str, dict[str, Any]]:
         for record in crashes:
             parts.append(
                 f"- trial {record['trial_number']}: status={record['status']} | reason={record.get('failure_reason', '-')}"
+            )
+
+    threshold_warnings = report["threshold_warnings"]
+    if threshold_warnings:
+        parts.append("")
+        parts.append("Auxiliary threshold warnings")
+        for record in threshold_warnings:
+            parts.append(
+                f"- trial {record['trial_number']}: threshold_status={record.get('threshold_status', '-')} | "
+                f"reason={record.get('threshold_failure_reason', '-')}"
             )
 
     if degraded:
@@ -386,6 +425,10 @@ def main() -> None:
             joined = ", ".join(watchdog["failure_signals"])
             print(f"\nWatch exit: failure signal detected in running trial logs ({joined}).")
             break
+
+        if watchdog["threshold_warning_signals"]:
+            joined = ", ".join(watchdog["threshold_warning_signals"])
+            print(f"\nWatch warning: auxiliary threshold evaluation reported issues ({joined}).")
 
         progress_age_seconds = watchdog["progress_age_seconds"]
         if progress_age_seconds is not None:
