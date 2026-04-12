@@ -1,7 +1,7 @@
 # Candidate config preserved from the training branch after syncing with main.
 # Source: 2026-04-13 fresh proxy Optuna winner (trial 0) on the local training machine.
-experiment_name: autoresearch_proxy_trial0_20260413
-output_dir: runs/candidates/autoresearch_proxy_trial0_20260413
+experiment_name: autoresearch_proxy_trial0_20260413_mainsync
+output_dir: runs/candidates/autoresearch_proxy_trial0_20260413_mainsync
 seed: 42
 
 data:

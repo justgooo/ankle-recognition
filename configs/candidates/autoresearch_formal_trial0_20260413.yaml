@@ -1,7 +1,7 @@
 # Candidate formal confirmation config preserved from the training branch.
 # It keeps the proxy winner hyperparameters separate from the official formal config.
-experiment_name: autoresearch_formal_trial0_20260413
-output_dir: runs/candidates/autoresearch_formal_trial0_20260413
+experiment_name: autoresearch_formal_trial0_20260413_mainsync
+output_dir: runs/candidates/autoresearch_formal_trial0_20260413_mainsync
 seed: 42
 
 data:

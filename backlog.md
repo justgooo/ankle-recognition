@@ -16,11 +16,12 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | Optuna / monitor workflow hardening（统一 `val_acc` 主指标、`val_auc` 平手决胜；`freeze_layers` 显式配置；fresh/resume 语义收紧；monitor 将 threshold_eval 故障降级为 warning） |
-| 上次结果 | keep（代码与 workflow 已对齐当前主线：ResUNet encoder + 3 个 Attention Gate + 单视角 16 张切片 AttentionPooling + 3 视角 VRG / decision fusion；新一轮比较以 `summary.json -> best_val.accuracy` 为准，平手按 `best_val.auc` 决胜） |
-| 下一步 | 先跑 1 次当前 canonical baseline / smoke train，重新确立 `val_acc` 基线；随后再基于同一配置启动 fresh Optuna proxy study，避免与历史 192x16 / no_miss 记录混比 |
-| 连续 discard 计数 | 0（当前工作以流程修复为主，不计入实验 discard） |
-| 累计 proxy keep 数 | 6（历史记录保留；等待新 `val_acc` 体系下重新建账） |
+| 上次实验 | MAIN-SYNC-01：将 `origin/main`（`f4e6d53`，含双 GPU 并行框架）合入训练分支；按“主分支代码优先、自动调参配置转 candidate”的规则保留训练线成果，并用 merged code 跑 1 次 proxy 验证 |
+| 上次结果 | discard（集成验证通过：`val_acc=0.8404`, `val_auc=0.9182`, `val_f1=0.8193`, `peak_vram=14.4 GiB`, `total_seconds=618.4`；但低于训练线 pre-merge winner `a60c3e0` 的 `val_acc=0.8830`） |
+| 下一步 | 只把已验证有效的内容择优并回 `main`：保留 official main 代码与正式配置，只并入 `configs/candidates/*`、实验记录与 main-sync 验证结论；若继续确认 trial 0 方向，优先跑 `configs/candidates/autoresearch_formal_trial0_20260413.yaml` |
+| 连续 discard 计数 | 0（本次是分支集成验证，不计入调参 discard） |
+| 累计 proxy keep 数 | 7（保留训练线 pre-merge winner `a60c3e0` 的 1 次新增 keep） |
+| 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
 ---
 
@@ -31,8 +32,9 @@
 
 | 指标 | 值 | 来源 commit | 配置 | 备注 |
 |------|---:|-------------|------|------|
-| **val_acc** | **待重新确立** | — | `configs/autoresearch_proxy.yaml` 当前主线 | 必须先跑 1 次当前 canonical baseline，读取 `summary.json -> best_val.accuracy` |
-| **tie-break** | **val_auc** | — | 统一规则 | 当 `val_acc` 持平时，按 `best_val.auc` 决胜 |
+| **val_acc** | **0.8829787234042553** | `a60c3e0` | pre-merge training branch / fresh proxy study trial 0 | 训练线本地最佳；尚未在 merged main code 上复现 |
+| **tie-break** | **0.9318181818181819** | `a60c3e0` | 与上述 winner 同一 trial | `val_acc` 持平时按此 `val_auc` 决胜 |
+| main-sync validation | 0.8404255319148937 | `066ab57` | `configs/candidates/autoresearch_proxy_trial0_20260413.yaml` on merged main code | 集成验证通过，但不胜出 |
 | legacy no_miss 参考 | 0.915 | `d63b49a` (formal) | 旧 Decision Fusion / 旧实验语义 | **legacy reference only**，不可与当前主线直接比较 |
 
 ---
@@ -68,6 +70,17 @@
 > **说明**
 > - 历史 `VR-01 ~ VR-16`、`no_miss_*`、`192x16` 记录保留供回顾，但不再作为当前主线的直接 comparator
 > - 若需要复盘旧阶段，请显式标注为 legacy campaign
+
+### 2026-04-13：pre-merge training-branch reference
+
+- [x] **Baseline rerun**：当前 canonical baseline（未加结构改动）→ `val_acc=0.8404255319148937`, `val_auc=0.9181818181818182`, `val_f1=0.8192771084337349`, `peak_vram=14.4 GiB`。
+- [x] **VRG-LOGIT-01 / winner**：pre-merge training branch 的 fresh proxy Optuna best completed trial（trial 0）→ `val_acc=0.8829787234042553`, `val_auc=0.9318181818181819`, `val_f1=0.8764044943820225` → **keep**。
+
+### 2026-04-13：MAIN-SYNC-01 主分支同步 + candidate 验证
+
+- [x] **Main merge**：将 `origin/main`（through `f4e6d53`）合入训练分支，双 GPU 并行框架与主分支训练代码全部保留；训练线的 `unsquashed reliability logits` 模型改动不直接带回主线。
+- [x] **Candidate staging**：将训练线 trial 0 配置保留为 `configs/candidates/autoresearch_proxy_trial0_20260413.yaml` 和 `configs/candidates/autoresearch_formal_trial0_20260413.yaml`，不覆盖正式 `configs/autoresearch_proxy.yaml` / `configs/autoresearch_formal.yaml`。
+- [x] **Proxy validation**：merged main code + proxy candidate 配置 → `val_acc=0.8404255319148937`, `val_auc=0.9181818181818182`, `val_f1=0.8192771084337349`, `peak_vram=14.4 GiB`, `total_seconds=618.4`。结论：**能正常工作**，但按当前指标体系对 pre-merge winner 记为 **discard**。
 
 ---
 
