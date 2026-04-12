@@ -252,6 +252,7 @@ def build_model(config: dict):
         "fusion_hidden_dim": model_cfg["fusion_hidden_dim"], # 分类器隐藏层维度
         "dropout": model_cfg["dropout"],                     # Dropout 比率
         "use_attention_pooling": model_cfg.get("use_attention_pooling", False),  # 注意力池化
+        "backbone": model_cfg.get("backbone", "resnet18"),   # backbone 类型
     }
     fusion_type = model_cfg.get("fusion_type", "feature")
 
