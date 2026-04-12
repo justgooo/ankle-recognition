@@ -7,11 +7,11 @@ seed: 42
 data:
   csv_path: data/realdata/metadata.csv
   base_dir: .
-  image_size: 192
+  image_size: 512
   num_slices_per_view: 16
   trim_edge_slices: 1
-  batch_size: 2
-  num_workers: 0
+  batch_size: 4
+  num_workers: 1
   val_ratio: 0.25
   hu_min: -1000
   hu_max: 1000

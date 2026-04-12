@@ -14,7 +14,9 @@
 - 每个实验结束后更新 `backlog.md`（包括 Agent 状态表格）
 - 每个实验结束后追加 `results.tsv`
 - 遵守 `program.md` 中的超时规则和资源保护规则
-- 使用 `.venv/bin/python` 执行所有 Python 命令
+- 使用分配给你的 GPU 执行 Python 命令（slot 0: `CUDA_VISIBLE_DEVICES=0`，slot 1: `CUDA_VISIBLE_DEVICES=1`）
+- 如果未明确分配 slot，默认使用 `CUDA_VISIBLE_DEVICES=1`（slot 1 / RTX 4090）
+- 并行模式下，写 `results.tsv` 时使用 `flock -x /tmp/ankle_results.lock`
 
 ## NEVER
 
@@ -22,9 +24,10 @@
 - ❌ 不要用测试集指标做模型选择
 - ❌ 不要修改 `train.py`、`src/dataset.py`、`src/utils.py`、`tools/`
 - ❌ 不要修改数据文件或数据集划分
-- ❌ 不要新增依赖
 - ❌ 不要把整个日志粘贴到对话中（只读最后 30 行）
-- ❌ 不要用系统 PATH 里的 python.exe
+- ❌ 不要用系统 PATH 里的 python
+- ❌ 不要在并行模式下使用另一个 slot 的 output_dir
+- ❌ 不要盲目把 `num_workers` 设得太高（必须先评估 CPU 占用。如果 CPU 占用不高，可以自动调高 `num_workers` 的水平）
 
 ## ASK FIRST
 
@@ -39,7 +42,7 @@ LOOP:
   2. 在允许范围内做代码改动
   3. git commit
   4. 运行 proxy 实验
-  5. 评估结果（summary.json + threshold_eval.json）
+  5. 评估结果（summary.json → val_acc）
   6. 更新 results.tsv 和 backlog.md
   7. → GOTO 1（不要停！）
 ```
@@ -48,8 +51,24 @@ LOOP:
 
 - OS: Ubuntu，Shell: Bash
 - Python: `.venv/bin/python`（torch 2.2.0+cu121）
-- GPU: NVIDIA RTX 4090（24GB VRAM，GPU index=1，使用 CUDA_VISIBLE_DEVICES=1）
+- CPU: Intel Xeon Silver 4310 @ 2.10GHz × 12 核（⚠️ 注意监控 CPU 占用率，占用不高时可尝试调高 num_workers）
+- RAM: 128GB
+- GPU 0: NVIDIA RTX 3090（24GB VRAM）→ Slot 0，`CUDA_VISIBLE_DEVICES=0`
+- GPU 1: NVIDIA RTX 4090（24GB VRAM）→ Slot 1，`CUDA_VISIBLE_DEVICES=1`
+- `num_workers`: 默认 1（注意：如果 CPU 占用不高，Agent 可以自动调整 num_workers 的水平以加速训练）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
+
+## 允许修改的范围
+
+- `src/model.py`、`src/attention_pooling.py`、`src/cross_view_attention.py`
+- `configs/autoresearch_proxy.yaml`、`configs/autoresearch_formal.yaml`
+- `configs/autoresearch_proxy_slot0.yaml`、`configs/autoresearch_formal_slot0.yaml`
+- `configs/optuna_*.yaml`（Optuna 搜索配置）
+- `scripts/`（Optuna 工作流脚本 + 并行训练脚本）
+- `autoresearch_parallel_loop.sh`（双进程自动循环）
+- `backlog.md`（实验待办，每次实验后必须更新）
+- `results.tsv`（只追加）
+- 可新增依赖（限 `optuna` 等实验工具，需记录在 `requirements.txt`）
 
 ## 关键文件
 
@@ -57,7 +76,14 @@ LOOP:
 |------|------|
 | `program.md` | 完整实验协议（必读） |
 | `backlog.md` | 实验待办清单 + 当前最优纪录 + Agent 状态（必读、必更新） |
-| `results.tsv` | 实验结果记录（只追加） |
-| `configs/autoresearch_proxy.yaml` | proxy 实验配置（可修改） |
-| `configs/autoresearch_formal.yaml` | formal 实验配置（可修改） |
+| `results.tsv` | 实验结果记录（只追加，并行时加 flock） |
+| `configs/autoresearch_proxy.yaml` | Slot 1 (4090) proxy 配置 |
+| `configs/autoresearch_formal.yaml` | Slot 1 (4090) formal 配置 |
+| `configs/autoresearch_proxy_slot0.yaml` | Slot 0 (3090) proxy 配置 |
+| `configs/autoresearch_formal_slot0.yaml` | Slot 0 (3090) formal 配置 |
 | `src/model.py` | 模型代码（可修改） |
+| `scripts/parallel_train.sh` | 双 GPU 并行训练启动器 |
+| `scripts/parallel_status.sh` | 双槽位状态监控 |
+| `autoresearch_parallel_loop.sh` | 双进程 autoresearch 自动循环 |
+| `scripts/run_optuna_proxy.py` | Optuna proxy 超参搜索（可修改） |
+| `scripts/monitor_optuna.py` | Optuna 结果监控（可修改） |

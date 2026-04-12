@@ -316,14 +316,14 @@ $PlanDefinitions
    c. Git commit the changes before training
    d. Run proxy training: .\.venv\Scripts\python.exe train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
    e. If crash: handle per program.md crash rules
-   f. If success: run threshold evaluation
-   g. For THIS campaign, use threshold_eval.json as the source of truth and keep a run iff no_miss_val_acc > $KeepThresholdText at the zero-miss threshold. Do NOT require beating the global best 0.787. If no_miss_val_acc <= $KeepThresholdText, mark discard.
+   f. If success: read summary.json for best_val.accuracy
+   g. For THIS campaign, keep a run iff val_acc > $KeepThresholdText. Do NOT require beating the global best. If val_acc <= $KeepThresholdText, mark discard.
    h. Record results in results.tsv
    i. Update backlog.md (rerun progress, keep/discard status, agent status table, next unfinished rerun)
 10. If all planned reruns are already complete, do NOT invent new work. Output this exact final line and exit cleanly:
    CAMPAIGN_COMPLETE: rerun queue exhausted | no action taken
 11. Otherwise output a final summary line:
-   EXPERIMENT_DONE: <status> | <description> | no_miss_val_acc=<value>
+   EXPERIMENT_DONE: <status> | <description> | val_acc=<value>
 
 CRITICAL CONSTRAINTS:
 - Use .\.venv\Scripts\python.exe for ALL Python commands (never system python)
@@ -351,11 +351,11 @@ YOUR TASK FOR THIS SESSION (do exactly ONE experiment):
    b. Git commit the changes before training
    c. Run proxy training: .\.venv\Scripts\python.exe train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
    d. If crash: handle per program.md crash rules
-   e. If success: run threshold evaluation
-   f. Compare with current best (zero-miss val_acc)
+   e. If success: read summary.json for best_val.accuracy
+   f. Compare with current best (val_acc)
    g. Record results in results.tsv
    h. Update backlog.md (move experiment to completed, update best record if keep)
-5. Output a final summary line: EXPERIMENT_DONE: <status> | <description> | no_miss_val_acc=<value>
+5. Output a final summary line: EXPERIMENT_DONE: <status> | <description> | val_acc=<value>
 
 CRITICAL CONSTRAINTS:
 - Use .\.venv\Scripts\python.exe for ALL Python commands (never system python)
@@ -676,7 +676,7 @@ if ($UseOpenAIPrimary) {
 }
 if ($TargetedRerunMode) {
     Write-Host (" Targeted rerun: {0}" -f (Format-PlanList -PlanNumbers $RerunPlanNumbers)) -ForegroundColor Cyan
-    Write-Host (" Runs per plan: {0} | keep if no_miss_val_acc > {1}" -f $RunsPerPlan, $KeepThresholdText) -ForegroundColor Cyan
+    Write-Host (" Runs per plan: {0} | keep if val_acc > {1}" -f $RunsPerPlan, $KeepThresholdText) -ForegroundColor Cyan
     if ($ResolvedImplementationPlanPath) {
         Write-Host (" Implementation plan: {0}" -f $ResolvedImplementationPlanPath) -ForegroundColor Cyan
     }

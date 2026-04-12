@@ -249,9 +249,11 @@ def build_model(config: dict):
     common_kwargs = {
         "share_backbone": model_cfg["share_backbone"],       # 是否共享 backbone
         "use_pretrained": model_cfg["use_pretrained"],       # 是否使用预训练权重
+        "freeze_layers": int(model_cfg.get("freeze_layers", 3)),  # 显式冻结层配置
         "fusion_hidden_dim": model_cfg["fusion_hidden_dim"], # 分类器隐藏层维度
         "dropout": model_cfg["dropout"],                     # Dropout 比率
         "use_attention_pooling": model_cfg.get("use_attention_pooling", False),  # 注意力池化
+        "backbone": model_cfg.get("backbone", "resnet18"),   # backbone 类型
     }
     fusion_type = model_cfg.get("fusion_type", "feature")
 
@@ -260,14 +262,21 @@ def build_model(config: dict):
     if fusion_type == "decision":
         return MultiViewDecisionFusionClassifier(**common_kwargs)
     if fusion_type == "attention":
-        # 注意力融合模式额外支持 cross_view_heads / cross_view_layers 配置
+        backbone = model_cfg.get("backbone", "resnet18")
+        if backbone != "resnet18":
+            raise ValueError(
+                "Attention fusion currently supports model.backbone='resnet18' only."
+            )
+        # 注意力融合模式内部固定使用 AttentionPooling，只透传实际支持的参数
         attention_kwargs = {
-            **common_kwargs,
+            "share_backbone": model_cfg["share_backbone"],
+            "use_pretrained": model_cfg["use_pretrained"],
+            "freeze_layers": int(model_cfg.get("freeze_layers", 3)),
+            "fusion_hidden_dim": model_cfg["fusion_hidden_dim"],
+            "dropout": model_cfg["dropout"],
             "cross_view_heads": model_cfg.get("cross_view_heads", 8),
             "cross_view_layers": model_cfg.get("cross_view_layers", 2),
         }
-        # MultiViewAttentionClassifier 内部自带 AttentionPooling，不需要此参数
-        attention_kwargs.pop("use_attention_pooling", None)
         return MultiViewAttentionClassifier(**attention_kwargs)
 
     raise ValueError(
@@ -472,17 +481,14 @@ def collect_attention_output(model, loader, device, view_index: int):
     }
 
 
-def score_for_model_selection(metrics: dict) -> float:
+def score_for_model_selection(metrics: dict) -> tuple[float, float]:
     """
     计算一个分数，用于选择"最佳模型"。
 
-    优先用 AUC 作为选择标准（AUC 越高越好）。
-    如果 AUC 不可用（比如验证集只有一个类别），则退而求其次用准确率。
+    主指标是验证集 accuracy；当 val_acc 持平时，用 val_auc 作为 tie-break。
+    返回的 tuple 会按 (accuracy, auc) 的字典序比较。
     """
-    auc = metrics.get("auc", float("nan"))
-    if np.isnan(auc):
-        return metrics["accuracy"]
-    return auc
+    return float(metrics["accuracy"]), float(metrics.get("auc", float("-inf")))
 
 
 # ==================== 主训练流程 ====================
@@ -568,7 +574,10 @@ def main() -> None:
 
     # ---------- 第 6 步：训练循环 ----------
     history = []         # 记录每个 epoch 的训练历史
-    best_score = -1.0    # 记录历史最佳分数
+    if val_loader is not None:
+        best_score: tuple[float, float] | float = (float("-inf"), float("-inf"))
+    else:
+        best_score = float("-inf")
     best_path = output_dir / "best.pt"  # 最佳模型的保存路径
 
     for epoch in range(1, config["train"]["epochs"] + 1):
@@ -641,6 +650,7 @@ def main() -> None:
     if val_loader is not None:
         _, final_val_metrics = evaluate(model, val_loader, criterion, device)
         summary["best_val"] = final_val_metrics
+        summary["model_selection"] = "best_val_accuracy_then_auc"
     else:
         summary["model_selection"] = "lowest_train_loss"
 

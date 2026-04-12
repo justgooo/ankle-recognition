@@ -5,14 +5,18 @@ model.py — 多视角 CT 分类模型
 
 整体思路：
     1. 一张 CT 扫描有 3 个视角（轴状面 / 冠状面 / 矢状面），每个视角有多张切片图像。
-    2. 用 ResNet18（一种经典的图像识别网络）把每张切片提取成一个 512 维的特征向量。
+    2. 用 encoder 把每张切片提取成一个 512 维的特征向量。
+       支持两种 backbone：
+       - ResNet18（经典分类 backbone）
+       - ResUNet + Attention Gate（空间注意力增强，关注病灶区域）
     3. 把同一个视角的所有切片特征聚合（mean pooling 或 AttentionPooling），得到该视角的代表特征。
-    4. 把 3 个视角的特征拼起来，送进分类器（一个小的全连接网络），输出 2 个值：
-       - 第 0 个值代表"正常"的概率
-       - 第 1 个值代表"异常"的概率
+    4. 多视角融合后分类，输出 2 个值：正常/异常
 
 本文件包含以下类：
     - build_resnet18_encoder(): 构建 ResNet18 特征提取器
+    - AttentionGate: Attention Gate 模块 (Oktay et al., 2018)
+    - ResUNetEncoder: ResNet18-based UNet Encoder with Attention Gates
+    - build_encoder(): 根据 backbone 类型构建 encoder
     - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征，支持 mean pooling 或 AttentionPooling）
     - MultiViewCTClassifier: 特征融合分类器（拼接 3 个视角特征后分类）
     - MultiViewDecisionFusionClassifier: 决策融合分类器（每个视角单独分类后加权投票）
@@ -104,6 +108,228 @@ def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FR
     return backbone
 
 
+# ==================== ResUNet + Attention Gate ====================
+
+
+class AttentionGate(nn.Module):
+    """Attention Gate (Oktay et al., 2018).
+
+    用 gating signal ``g`` 对 skip connection 特征 ``x`` 做空间注意力加权。
+    通过 1×1 卷积将 g 和 x 映射到共同的中间维度，
+    经 ReLU + 1×1 Conv + Sigmoid 生成 attention map，
+    对 x 的每个空间位置进行加权。
+
+    参数：
+        F_g: gating signal 的通道数（来自更深层 / bottleneck）
+        F_l: skip connection 特征的通道数（来自 encoder 同层）
+        F_int: 中间维度（一般取 F_l // 2 或 F_g // 2）
+    """
+
+    def __init__(self, F_g: int, F_l: int, F_int: int) -> None:
+        super().__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, kernel_size=1, bias=True),
+            nn.BatchNorm2d(F_int),
+        )
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, kernel_size=1, bias=True),
+            nn.BatchNorm2d(F_int),
+        )
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=1, bias=True),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid(),
+        )
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """
+        参数：
+            g: gating signal, (B, F_g, H_g, W_g) — 通常来自 bottleneck 或更深层
+            x: skip connection, (B, F_l, H_x, W_x) — 来自 encoder 同层
+
+        返回：
+            attention-gated x, 形状与 x 相同 (B, F_l, H_x, W_x)
+        """
+        # 把 g 上采样到与 x 相同的空间尺寸
+        g_up = nn.functional.interpolate(
+            g, size=x.shape[2:], mode="bilinear", align_corners=False,
+        )
+        g1 = self.W_g(g_up)   # (B, F_int, H_x, W_x)
+        x1 = self.W_x(x)      # (B, F_int, H_x, W_x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)    # (B, 1, H_x, W_x)  — spatial attention map
+        return x * psi         # element-wise gating
+
+
+class ResUNetEncoder(nn.Module):
+    """ResNet18-based UNet Encoder with Attention Gates.
+
+    复用 ResNet18 预训练权重作为 encoder，在 skip connection 上添加
+    Attention Gate 做空间注意力加权。最终通过全局平均池化输出 512 维
+    slice feature，与原 ResNet18 backbone 接口完全一致。
+
+    结构：
+        输入: (B, 1, H, W)
+
+        Encoder (ResNet18):
+            e1 = conv1 + bn1 + relu       → (B, 64, H/2, W/2)
+            e2 = maxpool + layer1          → (B, 64, H/4, W/4)
+            e3 = layer2                    → (B, 128, H/8, W/8)
+            e4 = layer3                    → (B, 256, H/16, W/16)
+
+        Bottleneck:
+            b  = layer4                    → (B, 512, H/32, W/32)
+
+        Attention Gates (用 b 作为 gating signal):
+            a4 = AG(g=b, x=e4)            → (B, 256, H/16, W/16)
+            a3 = AG(g=b, x=e3)            → (B, 128, H/8, W/8)
+            a2 = AG(g=b, x=e2)            → (B, 64, H/4, W/4)
+
+        Feature Fusion:
+            GAP(b)                         → (B, 512)
+            GAP(a4) + GAP(a3) + GAP(a2)   → 各自池化后经线性投影到 512D
+            累加到 bottleneck feature 上
+
+        输出: (B, 512)
+
+    参数：
+        use_pretrained: 是否使用 ImageNet 预训练权重
+        freeze_layers: 冻结前 N 个 encoder stage（0-3），同 build_resnet18_encoder
+    """
+
+    def __init__(
+        self,
+        use_pretrained: bool = True,
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,
+    ) -> None:
+        super().__init__()
+
+        # ---------- 加载 ResNet18 ----------
+        weights = ResNet18_Weights.DEFAULT if use_pretrained else None
+        backbone = resnet18(weights=weights)
+
+        # 1 通道灰度输入
+        old_conv = backbone.conv1
+        new_conv = nn.Conv2d(
+            1, old_conv.out_channels,
+            kernel_size=old_conv.kernel_size,
+            stride=old_conv.stride,
+            padding=old_conv.padding,
+            bias=False,
+        )
+        if weights is not None:
+            with torch.no_grad():
+                new_conv.weight.copy_(old_conv.weight.mean(dim=1, keepdim=True))
+        backbone.conv1 = new_conv
+
+        # ---------- Encoder stages ----------
+        # e1: conv1 + bn1 + relu  → (64, H/2, W/2)
+        self.enc1 = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu)
+        # e2: maxpool + layer1    → (64, H/4, W/4)
+        self.enc2 = nn.Sequential(backbone.maxpool, backbone.layer1)
+        # e3: layer2              → (128, H/8, W/8)
+        self.enc3 = backbone.layer2
+        # e4: layer3              → (256, H/16, W/16)
+        self.enc4 = backbone.layer3
+        # bottleneck: layer4      → (512, H/32, W/32)
+        self.bottleneck = backbone.layer4
+
+        # ---------- Attention Gates ----------
+        # AG4: gating=512, skip=256, int=128
+        self.ag4 = AttentionGate(F_g=512, F_l=256, F_int=128)
+        # AG3: gating=512, skip=128, int=64
+        self.ag3 = AttentionGate(F_g=512, F_l=128, F_int=64)
+        # AG2: gating=512, skip=64, int=32
+        self.ag2 = AttentionGate(F_g=512, F_l=64, F_int=32)
+
+        # ---------- 全局平均池化 ----------
+        self.gap = nn.AdaptiveAvgPool2d(1)
+
+        # ---------- Skip feature 融合投影 ----------
+        # 把 attention-gated 的多尺度特征池化后投影到 512D，累加到 bottleneck
+        self.skip_proj = nn.Sequential(
+            nn.Linear(256 + 128 + 64, 512),
+            nn.ReLU(inplace=True),
+        )
+
+        # ---------- 冻结策略 ----------
+        if freeze_layers >= 1:
+            for param in self.enc1.parameters():
+                param.requires_grad = False
+            for param in self.enc2.parameters():
+                param.requires_grad = False
+        if freeze_layers >= 2:
+            for param in self.enc3.parameters():
+                param.requires_grad = False
+        if freeze_layers >= 3:
+            for param in self.enc4.parameters():
+                param.requires_grad = False
+        # bottleneck (layer4) 始终可训练
+        # Attention Gate 模块始终可训练（无预训练权重）
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        参数：
+            x: (B, 1, H, W) 灰度 CT 切片
+
+        返回：
+            (B, 512) slice feature
+        """
+        # Encoder
+        e1 = self.enc1(x)          # (B, 64, H/2, W/2)
+        e2 = self.enc2(e1)         # (B, 64, H/4, W/4)
+        e3 = self.enc3(e2)         # (B, 128, H/8, W/8)
+        e4 = self.enc4(e3)         # (B, 256, H/16, W/16)
+        b = self.bottleneck(e4)    # (B, 512, H/32, W/32)
+
+        # Attention Gates — 用 bottleneck 作为 gating signal
+        a4 = self.ag4(g=b, x=e4)  # (B, 256, H/16, W/16)
+        a3 = self.ag3(g=b, x=e3)  # (B, 128, H/8, W/8)
+        a2 = self.ag2(g=b, x=e2)  # (B, 64, H/4, W/4)
+
+        # 全局池化 bottleneck → (B, 512)
+        feat_b = self.gap(b).flatten(1)
+
+        # 全局池化 attention-gated skip features → 投影并融合
+        feat_a4 = self.gap(a4).flatten(1)  # (B, 256)
+        feat_a3 = self.gap(a3).flatten(1)  # (B, 128)
+        feat_a2 = self.gap(a2).flatten(1)  # (B, 64)
+        feat_skip = torch.cat([feat_a4, feat_a3, feat_a2], dim=1)  # (B, 448)
+        feat_skip = self.skip_proj(feat_skip)  # (B, 512)
+
+        # 累加融合
+        return feat_b + feat_skip  # (B, 512)
+
+
+def build_encoder(
+    backbone: str = "resnet18",
+    use_pretrained: bool = True,
+    freeze_layers: int = DEFAULT_FREEZE_LAYERS,
+) -> nn.Module:
+    """根据 backbone 类型构建 encoder。
+
+    参数：
+        backbone: "resnet18" 或 "resunet"
+        use_pretrained: 是否使用 ImageNet 预训练权重
+        freeze_layers: 冻结前 N 个 encoder stage
+
+    返回：
+        encoder 模型，输出 (B, 512) 特征向量
+    """
+    if backbone == "resnet18":
+        return build_resnet18_encoder(
+            use_pretrained=use_pretrained,
+            freeze_layers=freeze_layers,
+        )
+    if backbone == "resunet":
+        return ResUNetEncoder(
+            use_pretrained=use_pretrained,
+            freeze_layers=freeze_layers,
+        )
+    raise ValueError(f"Unsupported backbone: {backbone!r}. Expected 'resnet18' or 'resunet'.")
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -123,16 +349,17 @@ class MultiViewEncoder(nn.Module):
 
     def __init__(
         self,
-        share_backbone: bool = True,    # 3 个视角是否共享同一个 ResNet18
+        share_backbone: bool = True,    # 3 个视角是否共享同一个 encoder
         use_pretrained: bool = False,    # 是否使用预训练权重
         use_attention_pooling: bool = False,  # 是否使用注意力池化替代 mean pooling
         freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
+        backbone: str = "resnet18",      # backbone 类型: "resnet18" 或 "resunet"
     ) -> None:
         """
         参数：
-            share_backbone: 是否让 3 个视角共用同一个 ResNet18？
-                - True（推荐）：3 个视角用同一个 ResNet18，参数量小，不容易过拟合
-                - False：每个视角有自己独立的 ResNet18（3 份参数），参数量更大
+            share_backbone: 是否让 3 个视角共用同一个 encoder？
+                - True（推荐）：3 个视角用同一个 encoder，参数量小，不容易过拟合
+                - False：每个视角有自己独立的 encoder（3 份参数），参数量更大
             use_pretrained: 是否使用 ImageNet 预训练权重
             use_attention_pooling: 是否使用 AttentionPooling？
                 - True：用可学习注意力对切片加权聚合（能自动聚焦关键切片）
@@ -140,21 +367,26 @@ class MultiViewEncoder(nn.Module):
             freeze_layers: 冻结 backbone 前 N 个 layer block（0-3）
                 - 0（默认）：所有层都可训练
                 - 3（推荐小数据集）：只训练 layer4 + 分类头
+            backbone: backbone 类型
+                - "resnet18"：经典 ResNet18 分类 backbone
+                - "resunet"：ResUNet + Attention Gate（空间注意力增强）
         """
         super().__init__()
         self.share_backbone = share_backbone
         self.use_attention_pooling = use_attention_pooling
-        self.feature_dim = 512  # ResNet18 输出的特征维度固定为 512
+        self.feature_dim = 512  # encoder 输出的特征维度固定为 512
 
         if share_backbone:
-            # 共享模式：只创建一个 ResNet18，3 个视角都用它
-            self.shared_encoder = build_resnet18_encoder(
+            # 共享模式：只创建一个 encoder，3 个视角都用它
+            self.shared_encoder = build_encoder(
+                backbone=backbone,
                 use_pretrained=use_pretrained, freeze_layers=freeze_layers,
             )
         else:
-            # 独立模式：创建 3 个独立的 ResNet18，每个视角用自己的
+            # 独立模式：创建 3 个独立的 encoder，每个视角用自己的
             self.view_encoders = nn.ModuleList(
-                [build_resnet18_encoder(
+                [build_encoder(
+                    backbone=backbone,
                     use_pretrained=use_pretrained, freeze_layers=freeze_layers,
                 ) for _ in range(3)]
             )
@@ -246,12 +478,14 @@ class MultiViewCTClassifier(MultiViewEncoder):
         dropout: float = 0.3,           # Dropout 比率（防止过拟合）
         use_attention_pooling: bool = False,  # 是否使用注意力池化
         freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
+        backbone: str = "resnet18",      # backbone 类型
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
             freeze_layers=freeze_layers,
+            backbone=backbone,
         )
         # 3 个视角拼接后的总维度：512 * 3 = 1536
         fused_dim = self.feature_dim * 3
@@ -307,12 +541,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         dropout: float = 0.3,
         use_attention_pooling: bool = False,  # 是否使用注意力池化
         freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
+        backbone: str = "resnet18",      # backbone 类型
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
             use_attention_pooling=use_attention_pooling,
             freeze_layers=freeze_layers,
+            backbone=backbone,
         )
         # 每个视角有一个独立的分类器（共 3 个）
         # LayerNorm 在分类器前面稳定特征分布，减少不同 seed 之间的输出尺度差异
@@ -397,6 +633,7 @@ class MultiViewAttentionClassifier(nn.Module):
         self,
         share_backbone: bool = True,
         use_pretrained: bool = False,
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,
         fusion_hidden_dim: int = 256,
         dropout: float = 0.3,
         cross_view_heads: int = 8,
@@ -408,10 +645,19 @@ class MultiViewAttentionClassifier(nn.Module):
 
         # ---------- Backbone ----------
         if share_backbone:
-            self.shared_encoder = build_resnet18_encoder(use_pretrained=use_pretrained)
+            self.shared_encoder = build_resnet18_encoder(
+                use_pretrained=use_pretrained,
+                freeze_layers=freeze_layers,
+            )
         else:
             self.view_encoders = nn.ModuleList(
-                [build_resnet18_encoder(use_pretrained=use_pretrained) for _ in range(3)]
+                [
+                    build_resnet18_encoder(
+                        use_pretrained=use_pretrained,
+                        freeze_layers=freeze_layers,
+                    )
+                    for _ in range(3)
+                ]
             )
 
         # ---------- Attention Pooling（逐视角） ----------

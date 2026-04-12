@@ -1,8 +1,8 @@
-# Slower confirmation config for promising proxy winners.
-# ResUNet + AttentionGate backbone with AttentionPooling slice aggregation
-# and VRG decision fusion.
-experiment_name: autoresearch_formal
-output_dir: runs/autoresearch_formal
+# Proxy config for slot 0 (RTX 3090, GPU index=0).
+# Identical search space to slot 1 but with independent output_dir
+# and reduced num_workers to conserve CPU on a busy server.
+experiment_name: autoresearch_proxy_slot0
+output_dir: runs/autoresearch_proxy_slot0
 seed: 42
 
 data:
@@ -12,7 +12,7 @@ data:
   num_slices_per_view: 16
   trim_edge_slices: 1
   batch_size: 4
-  num_workers: 1          # 低 CPU 占用（服务器 CPU 已被其他进程占用 ~70%）
+  num_workers: 1
   val_ratio: 0.25
   hu_min: -1000
   hu_max: 1000
@@ -28,9 +28,9 @@ model:
   use_attention_pooling: true  # AttentionPooling 聚合切片特征
 
 train:
-  epochs: 15
+  epochs: 4
   lr: 0.00005
-  weight_decay: 0.0001
+  weight_decay: 0.001
   class_weight: true
   device: auto
   augmentation: true

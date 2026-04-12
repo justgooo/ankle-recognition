@@ -1,7 +1,8 @@
-# Formal comparison: Feature Fusion with freeze=3 + LayerNorm baseline
-# Same training strategy as the best Decision Fusion formal (d63b49a)
-experiment_name: formal_feature
-output_dir: runs/formal_feature
+# Formal config for slot 0 (RTX 3090, GPU index=0).
+# Identical search space to slot 1 but with independent output_dir
+# and reduced num_workers to conserve CPU on a busy server.
+experiment_name: autoresearch_formal_slot0
+output_dir: runs/autoresearch_formal_slot0
 seed: 42
 
 data:
@@ -17,13 +18,14 @@ data:
   hu_max: 1000
 
 model:
-  backbone: resnet18
-  fusion_type: feature
+  backbone: resunet       # ResUNet + Attention Gate backbone
+  fusion_type: decision   # Decision Fusion = VRG variant
   share_backbone: false
   use_pretrained: true
+  freeze_layers: 3
   fusion_hidden_dim: 256
   dropout: 0.3
-  use_attention_pooling: false
+  use_attention_pooling: true  # AttentionPooling 聚合切片特征
 
 train:
   epochs: 15

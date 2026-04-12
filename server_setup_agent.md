@@ -1,6 +1,6 @@
 # 服务器环境配置 Agent 指令
 
-> **目标**：在一台全新的 Ubuntu + RTX 3090 服务器上，将「足踝 CT 分类」项目配置到可运行状态。
+> **目标**：在一台 Ubuntu + RTX 3090 + RTX 4090 双 GPU 服务器上，将「足踝 CT 分类」项目配置到可运行状态。
 > 项目 GitHub 仓库已克隆到服务器，数据集已传输到位。
 
 ---
@@ -8,8 +8,11 @@
 ## 前置假设
 
 - OS：Ubuntu（22.04 或更高）
-- GPU：NVIDIA RTX 3090（24GB VRAM）
-- 项目仓库已通过 `git clone` 拉取到服务器本地（分支 `autoresearch/2026-04-08-ankle-vr01`）
+- GPU 0：NVIDIA RTX 3090（24GB VRAM）
+- GPU 1：NVIDIA RTX 4090（24GB VRAM）
+- CPU：Intel Xeon Silver 4310 @ 2.10GHz × 12 核（⚠️ 其他进程已占 ~70%）
+- RAM：128GB
+- 项目仓库已通过 `git clone` 拉取到服务器本地
 - 数据集目录 `data/realdata/` 已放置在项目根目录下
 - 服务器有 sudo 权限
 
@@ -21,7 +24,7 @@
 nvidia-smi
 ```
 
-- 确认输出中能看到 **RTX 3090** 和 **Driver Version**。
+- 确认输出中能看到 **RTX 3090** 和 **RTX 4090** 以及 **Driver Version**。
 - 如果 `nvidia-smi` 不可用或驱动版本过低（< 470），需要安装/升级驱动：
 
 ```bash
@@ -80,7 +83,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 python -c "import torch; print(f'torch={torch.__version__}, cuda={torch.version.cuda}, gpu={torch.cuda.get_device_name(0)}')"
 ```
 
-预期输出应包含 `NVIDIA GeForce RTX 3090` 且 `cuda` 版本非空。
+预期输出应包含 `NVIDIA GeForce RTX 3090` 和 `RTX 4090` 且 `cuda` 版本非空。
 
 ---
 
@@ -187,19 +190,20 @@ chmod +x autoresearch_loop.sh run_paper_validation.sh
 
 ---
 
-## 第 9 步：（可选）利用 3090 显存优势调参
+## 第 9 步：调整训练参数
 
-3090 有 24GB VRAM（原 2070 Super 仅 8GB），可以在配置文件中提升以下参数以加速训练：
+服务器 CPU 已被其他进程占用约 70%，需要低 CPU 模式。
 
-修改 `configs/autoresearch_proxy.yaml` 和 `configs/autoresearch_formal.yaml`：
+修改所有 `configs/autoresearch_*.yaml`：
 
 ```yaml
 data:
-  batch_size: 6      # 原值 2，3090 可提升到 4-8
-  num_workers: 4     # 原值 0，多进程加载数据加速
+  batch_size: 4      # 24GB VRAM 足够
+  num_workers: 1     # ⚠️ 硬限制：CPU 已被占用 ~70%，不要提高
 ```
 
-> **注意**：`num_workers` 设置过高可能导致内存不足，建议从 4 开始，如果 RAM 充裕可提升到 8。
+> **注意**：`num_workers` 必须保持为 1。服务器 12 核 CPU 已被其他进程占用约 70%，
+> 特别是在双 GPU 并行模式下（两个训练进程 + 其 DataLoader 子进程），提高此值会导致 CPU 过载。
 
 ---
 
@@ -226,7 +230,24 @@ python train.py --config configs/autoresearch_proxy.yaml
 nvidia-smi
 ```
 
-确认 GPU 利用率 > 0%，且显存使用量合理（batch_size=6 时预计 8-12GB）。
+确认 GPU 利用率 > 0%，且显存使用量合理（batch_size=4 时预计 10-16GB）。
+
+### 10.3 双 GPU 并行测试
+
+```bash
+chmod +x scripts/parallel_train.sh scripts/parallel_status.sh autoresearch_parallel_loop.sh
+./scripts/parallel_train.sh
+```
+
+确认：
+- 两张 GPU 都有负载（`nvidia-smi` 显示两卡均有显存占用）
+- CPU 使用率没有飙到 100%
+- 两个进程各自的日志正常输出
+
+监控状态：
+```bash
+./scripts/parallel_status.sh
+```
 
 ---
 
@@ -234,12 +255,13 @@ nvidia-smi
 
 以下条件全部满足即视为配置成功：
 
-- [x] `nvidia-smi` 正常显示 3090
+- [x] `nvidia-smi` 正常显示 3090 和 4090
 - [x] `python -c "import torch; print(torch.cuda.is_available())"` 输出 `True`
 - [x] `pip list` 中包含 torch、torchvision、numpy、pandas、scikit-learn、Pillow、PyYAML、tqdm、pydicom
 - [x] `python train.py --config configs/autoresearch_proxy.yaml` 能完整跑完 4 个 epoch 且生成 `summary.json`
 - [x] AGENTS.md 中的路径已改为 Linux 格式
 - [x] `data/realdata/metadata.csv` 中的路径均为正斜杠格式
+- [ ] `./scripts/parallel_train.sh` 能同时在两张卡上启动训练
 
 ---
 
@@ -256,7 +278,10 @@ nvidia-smi
 | `configs/*.yaml` | 实验配置 | ✅ |
 | `tools/evaluate_threshold.py` | 阈值评估 | ❌ |
 | `requirements.txt` | Python 依赖 | ❌ |
-| `AGENTS.md` | Agent 规则 | ✅（仅路径） |
+| `AGENTS.md` | Agent 规则 | ✅ |
 | `backlog.md` | 实验待办 | ✅ |
 | `program.md` | 实验协议 | ⚠️ 需确认 |
 | `results.tsv` | 实验结果 | 只追加 |
+| `scripts/parallel_train.sh` | 双 GPU 并行训练启动器 | ✅ |
+| `scripts/parallel_status.sh` | 双槽位状态监控 | ✅ |
+| `autoresearch_parallel_loop.sh` | 双进程 autoresearch 自动循环 | ✅ |

@@ -1,4 +1,4 @@
-﻿experiment_name: formal_attention_full_ratio_26_10_2
+experiment_name: formal_attention_full_ratio_26_10_2
 output_dir: runs/formal_attention_full_ratio_26_10_2
 seed: 42
 
@@ -8,8 +8,8 @@ data:
   image_size: 256
   num_slices_per_view: 32
   trim_edge_slices: 1
-  batch_size: 2
-  num_workers: 0
+  batch_size: 4
+  num_workers: 1
   val_ratio: 0.2631578947368421
   test_ratio: 0.05263157894736842
   use_existing_split: false

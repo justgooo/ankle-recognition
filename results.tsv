@@ -1,1 +1,150 @@
-commit	val_auc	val_f1	no_miss_threshold	no_miss_val_acc	no_miss_val_spe	memory_gb	status	config	description
+commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
+NA	0.904	0.968	NA	NA	keep	freeze=3, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0	VR-01: baseline（freeze=3, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）
+NA	0.830	0.970	NA	NA	discard	冻结后可能需要更高 lr，因为可训练参数更少	VR-02: lr=1e-4（冻结后可能需要更高 lr，因为可训练参数更少）
+NA	0.819	0.958	NA	NA	discard	更保守的 lr	VR-03: lr=3e-5（更保守的 lr）
+NA	0.809	0.966	NA	NA	discard	冻结后过拟合风险降低，dropout 可减小	VR-04: dropout=0.2（冻结后过拟合风险降低，dropout 可减小）
+NA	0.872	0.965	NA	NA	discard	NA	VR-05: dropout=0.4
+NA	0.883	0.966	NA	NA	discard	更强正则化，配合冻结进一步约束参数	VR-06: weight_decay=0.001（更强正则化，配合冻结进一步约束参数）
+NA	0.904	0.968	NA	NA	discard	冻结后最可能的最优组合	VR-07: lr=1e-4 + dropout=0.2（冻结后最可能的最优组合）
+NA	0.883	0.964	NA	NA	discard	lr=1e-4 + weight_decay=0.001，保留 baseline dropout=0.3	VR-08: 基于前 7 次最佳方向的组合实验（lr=1e-4 + weight_decay=0.001，保留 baseline dropout=0.3）
+NA	0.883	0.961	NA	NA	discard	freeze=2, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0	VR-09: baseline（freeze=2, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）
+NA	0.564	0.927	NA	NA	discard	NA	VR-10: lr=1e-4
+NA	0.809	0.962	NA	NA	discard	NA	VR-11: lr=3e-5
+NA	0.787	0.955	NA	NA	discard	NA	VR-12: dropout=0.2
+NA	0.766	0.961	NA	NA	discard	NA	VR-13: dropout=0.4
+NA	0.830	0.960	NA	NA	discard	NA	VR-14: weight_decay=0.001
+NA	0.628	0.948	NA	NA	discard	NA	VR-15: lr=1e-4 + dropout=0.2
+NA	0.872	0.969	NA	NA	discard	VR-09~VR-15	VR-16: 基于前 7 次（VR-09~VR-15）最佳方向的组合实验（回到 baseline lr=5e-5 / dropout=0.3，并保留最佳正则 `weight_decay=0.001`）
+NA	0.723	0.923	NA	NA	discard	fusion_type=decision, share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0	R2-01: baseline（fusion_type=decision, share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0）
+NA	0.777	0.951	NA	NA	keep	NA	R2-02: lr=5e-5
+NA	0.723	0.946	NA	NA	discard	NA	R2-03: lr=7e-5
+NA	0.532	0.945	NA	NA	discard	NA	R2-04: dropout=0.2
+NA	0.660	0.916	NA	NA	discard	NA	R2-05: dropout=0.4
+NA	0.617	0.916	NA	NA	discard	NA	R2-06: label_smoothing=0.05
+NA	0.723	0.935	NA	NA	discard	NA	R2-07: lr=5e-5 + label_smoothing=0.05
+NA	0.798	0.960	NA	NA	keep	沿用最佳 lr=5e-5，并恢复 baseline label_smoothing=0.0	R2-08: 基于前 7 次 rerun 最佳方向的组合实验（沿用最佳 lr=5e-5，并恢复 baseline label_smoothing=0.0）
+NA	0.713	0.938	NA	NA	discard	fusion_type=decision, share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0	R6-01: temperature=0.5 baseline（fusion_type=decision, share_backbone=false, aug=true, lr=1e-4, dropout=0.3, label_smoothing=0.0）
+NA	0.681	0.939	NA	NA	discard	NA	R6-02: temperature=1.0
+NA	0.660	0.957	NA	NA	discard	NA	R6-03: temperature=0.3
+NA	0.755	0.954	NA	NA	keep	NA	R6-04: temperature=2.0
+NA	0.649	0.941	NA	NA	discard	NA	R6-05: temperature=0.5 + lr=5e-5
+NA	0.660	0.945	NA	NA	discard	NA	R6-06: temperature=0.5 + dropout=0.2
+NA	0.723	0.921	NA	NA	discard	NA	R6-07: temperature=0.5 + label_smoothing=0.05
+NA	0.670	0.935	NA	NA	discard	沿用最佳 temperature=2.0，并恢复 baseline lr=1e-4 / dropout=0.3 / label_smoothing=0.0	R6-08: 基于前 7 次 rerun 最佳方向的组合实验（沿用最佳 temperature=2.0，并恢复 baseline lr=1e-4 / dropout=0.3 / label_smoothing=0.0）
+NA	0.904	0.968	NA	NA	keep	freeze=3, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0	VR-01: baseline（freeze=3, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）
+NA	0.830	0.970	NA	NA	discard	冻结后可能需要更高 lr，因为可训练参数更少	VR-02: lr=1e-4（冻结后可能需要更高 lr，因为可训练参数更少）
+NA	0.819	0.958	NA	NA	discard	更保守的 lr	VR-03: lr=3e-5（更保守的 lr）
+NA	0.809	0.966	NA	NA	discard	冻结后过拟合风险降低，dropout 可减小	VR-04: dropout=0.2（冻结后过拟合风险降低，dropout 可减小）
+NA	0.872	0.965	NA	NA	discard	NA	VR-05: dropout=0.4
+NA	0.883	0.966	NA	NA	discard	更强正则化，配合冻结进一步约束参数	VR-06: weight_decay=0.001（更强正则化，配合冻结进一步约束参数）
+NA	0.904	0.968	NA	NA	discard	冻结后最可能的最优组合	VR-07: lr=1e-4 + dropout=0.2（冻结后最可能的最优组合）
+NA	0.883	0.964	NA	NA	discard	lr=1e-4 + weight_decay=0.001，保留 baseline dropout=0.3	VR-08: 基于前 7 次最佳方向的组合实验（lr=1e-4 + weight_decay=0.001，保留 baseline dropout=0.3）
+NA	0.883	0.961	NA	NA	discard	freeze=2, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0	VR-09: baseline（freeze=2, lr=5e-5, dropout=0.3, ls=0.0, gradient_clip_norm=1.0）
+NA	0.564	0.927	NA	NA	discard	NA	VR-10: lr=1e-4
+NA	0.809	0.962	NA	NA	discard	NA	VR-11: lr=3e-5
+NA	0.787	0.955	NA	NA	discard	NA	VR-12: dropout=0.2
+NA	0.766	0.961	NA	NA	discard	NA	VR-13: dropout=0.4
+NA	0.830	0.960	NA	NA	discard	NA	VR-14: weight_decay=0.001
+NA	0.628	0.948	NA	NA	discard	NA	VR-15: lr=1e-4 + dropout=0.2
+NA	0.872	0.969	NA	NA	discard	VR-09~VR-15	VR-16: 基于前 7 次（VR-09~VR-15）最佳方向的组合实验（回到 baseline lr=5e-5 / dropout=0.3，并保留最佳正则 `weight_decay=0.001`）
+NA	0.638	NA	NA	NA	discard	NA	R1-01: baseline
+NA	0.702	NA	NA	NA	discard	NA	R1-02: lr=5e-5
+NA	0.670	NA	NA	NA	discard	NA	R1-03: lr=7e-5
+NA	0.723	NA	NA	NA	discard	NA	R1-04: dropout=0.2
+NA	0.745	NA	NA	NA	discard	NA	R1-05: dropout=0.4
+NA	0.564	NA	NA	NA	discard	NA	R1-06: label_smoothing=0.05
+NA	0.660	NA	NA	NA	discard	NA	R1-07: lr=5e-5 + ls=0.05
+NA	0.543	NA	NA	NA	discard	NA	R1-08: fusion_hidden_dim=128
+NA	0.691	NA	NA	NA	discard	NA	R1-09: fusion_hidden_dim=384
+NA	0.574	NA	NA	NA	discard	NA	AP-FF-01
+NA	0.532	NA	NA	NA	discard	NA	AP-FF-02
+NA	0.553	NA	NA	NA	discard	NA	AP-FF-03
+NA	0.574	0.911	NA	NA	discard	fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0	UWDF-01: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
+NA	0.723	0.922	NA	NA	discard	NA	UWDF-02: lr=5e-5
+NA	0.574	0.937	NA	NA	discard	NA	UWDF-03: lr=7e-5
+NA	0.734	0.923	NA	NA	discard	NA	UWDF-04: dropout=0.2
+NA	0.596	0.913	NA	NA	discard	NA	UWDF-05: dropout=0.4
+NA	0.702	0.927	NA	NA	discard	NA	UWDF-06: label_smoothing=0.05
+NA	0.638	0.920	NA	NA	discard	NA	UWDF-07: lr=5e-5 + label_smoothing=0.05
+NA	0.660	0.926	NA	NA	discard	基于前 7 次最佳方向组合，保持 label_smoothing=0.0	UWDF-08: dropout=0.2 + lr=5e-5（基于前 7 次最佳方向组合，保持 label_smoothing=0.0）
+NA	0.755	0.930	NA	NA	discard	fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0	DGAF-01: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
+NA	0.723	0.946	NA	NA	discard	NA	DGAF-02: lr=5e-5
+NA	0.723	0.937	NA	NA	discard	NA	DGAF-03: lr=7e-5
+NA	0.777	0.933	NA	NA	discard	NA	DGAF-04: dropout=0.2
+NA	0.777	0.933	NA	NA	discard	NA	DGAF-05: dropout=0.4
+NA	0.681	0.932	NA	NA	discard	NA	DGAF-06: label_smoothing=0.05
+NA	0.702	0.946	NA	NA	discard	NA	DGAF-07: lr=5e-5 + label_smoothing=0.05
+NA	0.702	0.920	NA	NA	discard	fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0	PFDF-01: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
+NA	0.787	0.920	NA	NA	discard	NA	PFDF-02: lr=5e-5
+NA	0.670	0.893	NA	NA	discard	NA	PFDF-03: lr=7e-5
+NA	0.543	0.920	NA	NA	discard	NA	PFDF-04: dropout=0.2
+NA	0.500	0.903	NA	NA	discard	NA	PFDF-05: dropout=0.4
+NA	0.745	0.934	NA	NA	discard	NA	PFDF-06: label_smoothing=0.05
+NA	0.766	0.924	NA	NA	discard	NA	PFDF-07: lr=5e-5 + label_smoothing=0.05
+NA	0.755	0.916	NA	NA	discard	沿用最佳 lr=5e-5，并恢复 baseline label_smoothing=0.0	PFDF-08: 基于前 7 次最佳方向的组合实验（沿用最佳 lr=5e-5，并恢复 baseline label_smoothing=0.0）
+NA	0.585	0.915	NA	NA	discard	fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0	CVFI-01: baseline（fusion_type=decision, lr=1e-4, dropout=0.3, ls=0.0）
+NA	0.553	0.902	NA	NA	discard	NA	CVFI-02: lr=5e-5
+NA	0.628	0.911	NA	NA	discard	NA	CVFI-03: lr=7e-5
+NA	0.734	0.933	NA	NA	discard	NA	CVFI-04: dropout=0.2
+NA	0.681	0.923	NA	NA	discard	NA	CVFI-05: dropout=0.4
+NA	0.553	0.896	NA	NA	discard	NA	CVFI-06: label_smoothing=0.05
+NA	0.489	0.904	NA	NA	discard	NA	CVFI-07: lr=5e-5 + label_smoothing=0.05
+NA	0.723	0.933	NA	NA	discard	沿用最佳 dropout=0.2，并恢复 baseline lr=1e-4 / label_smoothing=0.0	CVFI-08: 基于前 7 次最佳方向的组合实验（沿用最佳 dropout=0.2，并恢复 baseline lr=1e-4 / label_smoothing=0.0）
+053cb3a	0.798	0.960	NA	NA	keep	`053cb3a`，当前全局最优基线	seed=42（`053cb3a`，当前全局最优基线）
+b12f03d	0.787	0.952	NA	NA	discard	`b12f03d`，VRG 当前最优配置 proxy 验证	seed=123（`b12f03d`，VRG 当前最优配置 proxy 验证）
+f3c0157	0.521	0.923	NA	NA	discard	`f3c0157`，VRG 当前最优配置 proxy 验证	seed=456（`f3c0157`，VRG 当前最优配置 proxy 验证）
+NA	0.830	0.970	NA	NA	keep	NA	proxy rerun 摘要：val_AUC=0.970，no_miss_val_acc=0.830
+d32d660	0.798	0.932	NA	NA	discard	`d32d660`，non-shared, aug=true, lr=1e-4, d=0.3, ls=0.05	proxy gate（`d32d660`，non-shared, aug=true, lr=1e-4, d=0.3, ls=0.05）
+af28838	0.755	0.949	NA	NA	keep	`af28838`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0	proxy gate / sanity rerun（`af28838`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0）
+03bdce9	0.638	0.937	NA	NA	discard	`03bdce9`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0	proxy stability rerun #2（`03bdce9`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0）
+ef6008c	0.734	0.914	NA	NA	discard	`ef6008c`，移除 confidence sigmoid 后直接 softmax；non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0	proxy stability rerun #3 / raw confidence logits（`ef6008c`，移除 confidence sigmoid 后直接 softmax；non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0）
+20a402b	0.585	0.941	NA	NA	discard	`20a402b`，恢复标准 confidence sigmoid + softmax；non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0	proxy stability rerun #4 / restore canonical sigmoid gate（`20a402b`，恢复标准 confidence sigmoid + softmax；non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0）
+49e93fb	0.628	0.938	NA	NA	discard	`49e93fb`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, scheduler=cosine	proxy stabilization probe / cosine scheduler（`49e93fb`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, scheduler=cosine）
+814f491	0.872	0.966	NA	NA	keep	`814f491`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0	proxy stabilization probe / gradient clip（`814f491`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0）
+1272bc6	0.830	0.960	NA	NA	discard	`1272bc6`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, seed=123	proxy stability rerun / seed=123 + gradient clip（`1272bc6`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, seed=123）
+50be764	0.862	0.969	NA	NA	discard	`50be764`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, seed=42	proxy formal-preflight / seed=42 clipped VRG rerun + formal config sync（`50be764`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, seed=42）
+601351e	0.691	0.930	NA	NA	discard	`601351e`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, image_size=256, num_slices_per_view=32	proxy formal-geometry smoke（`601351e`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, image_size=256, num_slices_per_view=32）
+18a19d7	0.777	0.941	NA	NA	discard	`18a19d7`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, image_size=256, num_slices_per_view=32, trim_edge_slices=2	proxy formal-geometry stabilization / edge trimming（`18a19d7`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, image_size=256, num_slices_per_view=32, trim_edge_slices=2）
+e4b2175	0.798	0.955	NA	NA	discard	`e4b2175`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, image_size=256, num_slices_per_view=32, trim_edge_slices=2, scheduler=cosine	proxy formal-geometry stabilization / edge trimming + cosine scheduler（`e4b2175`，non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0, image_size=256, num_slices_per_view=32, trim_edge_slices=2, scheduler=cosine）
+d63b49a	NA	0.968	NA	NA	keep	`d63b49a`，沿用 `814f491` 配方 + native 192x16 geometry，15 epochs；non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0	formal run（`d63b49a`，沿用 `814f491` 配方 + native 192x16 geometry，15 epochs；non-shared, aug=true, lr=5e-5, d=0.3, ls=0.0, gradient_clip_norm=1.0）
+1d0bb82	0.723	0.919	NA	NA	discard	`1d0bb82`，shared, aug=false, lr=1e-4, d=0.3, heads=4, layers=2	proxy gate（`1d0bb82`，shared, aug=false, lr=1e-4, d=0.3, heads=4, layers=2）
+NA	NA	0.927	NA	NA	discard	lr=1e-4, d=0.3	共享 backbone baseline (lr=1e-4, d=0.3)
+NA	NA	0.946	NA	NA	keep	NA	共享 backbone lr=5e-5
+NA	NA	NA	NA	NA	discard	NA	共享 backbone lr=3e-4
+NA	NA	NA	NA	NA	discard	NA	共享 backbone dropout=0.2
+NA	NA	NA	NA	NA	discard	NA	共享 backbone dropout=0.4
+NA	NA	NA	NA	NA	discard	NA	共享 backbone CosineAnnealingLR
+NA	NA	0.940	NA	NA	discard	lr=5e-5	共享 backbone formal (lr=5e-5)
+NA	0.755	NA	NA	NA	keep	lr=1e-4, d=0.3	非共享 baseline (lr=1e-4, d=0.3)
+NA	0.660	NA	NA	NA	discard	NA	非共享 lr=5e-5
+NA	0.691	NA	NA	NA	discard	NA	非共享 dropout=0.4
+NA	0.691	NA	NA	NA	discard	NA	非共享 lr=7e-5
+NA	0.777	NA	NA	NA	keep	NA	非共享 + augmentation=true
+NA	0.755	0.946	NA	NA	keep	NA	非共享 + augmentation=true formal 确认
+NA	NA	NA	NA	NA	discard	NA	非共享 + augmentation=true + gradient_clip_norm=1.0
+NA	0.777	0.948	NA	NA	keep	NA	非共享 + augmentation=true + label_smoothing=0.05
+NA	NA	NA	NA	NA	discard	NA	非共享 + aug + lr=5e-5
+NA	NA	NA	NA	NA	discard	NA	非共享 + aug + ls=0.05 + wd=5e-4
+NA	NA	NA	NA	NA	discard	NA	非共享 + aug + ls=0.05 + d=0.4
+NA	NA	NA	NA	NA	discard	NA	非共享 + aug + ls=0.1
+NA	NA	NA	NA	NA	discard	NA	非共享 + aug + ls=0.05 + clip=1.0
+NA	NA	NA	NA	NA	discard	NA	非共享 + aug + ls=0.05 + clip=0.5
+NA	NA	NA	NA	NA	discard	NA	非共享 + aug + ls=0.05 + early_stopping=5
+NA	NA	NA	NA	NA	discard	aug, ls=0.05	Decision Fusion proxy baseline（aug, ls=0.05）
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy lr=5e-5
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy lr=7e-5
+NA	0.787	NA	NA	NA	keep	lr=1e-4	Decision Fusion proxy 去掉 ls（lr=1e-4）
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy lr=3e-4
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy dropout=0.2
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy dropout=0.4
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy clip=0.5
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy hidden=128
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy 6 epoch
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy hidden=384
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy cosine
+NA	NA	NA	NA	NA	discard	NA	Decision Fusion proxy 概率投票
+NA	0.681	NA	NA	NA	discard	NA	ASF-01: temperature=0.5
+NA	0.532	NA	NA	NA	discard	NA	ASF-02: temperature=1.0
+NA	0.617	NA	NA	NA	discard	NA	ASF-03: temperature=0.3
+NA	0.649	NA	NA	NA	discard	NA	ASF-04: temperature=2.0
+NA	0.660	NA	NA	NA	discard	NA	ASF-05: temperature=0.5 + lr=5e-5

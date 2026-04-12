@@ -207,7 +207,7 @@ def train_single_model(config, train_df, val_df, seed, output_dir, device):
     augmentation_enabled = bool(train_cfg.get("augmentation", False))
 
     # Training loop
-    best_score = -1.0
+    best_score = (float("-inf"), float("-inf"))
     start_time = time.perf_counter()
 
     for epoch in range(1, train_cfg["epochs"] + 1):

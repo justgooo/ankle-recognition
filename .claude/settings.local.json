@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(powershell:*)",
+      "Bash(node:*)",
+      "Bash(curl:*)",
+      "Bash(nslookup:*)",
+      "Bash(qodercli --version)",
+      "Bash(git:*)"
+    ],
+    "defaultMode": "bypassPermissions",
+    "skipDangerousModePermissionPrompt": true
+  }
+}
