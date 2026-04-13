@@ -1,7 +1,6 @@
 # Slower confirmation config for promising proxy winners.
-# Stage 3 paper-ready formal: Decision Fusion with clipped VRG.
-# Using native proxy geometry (192x16) per user decision — 256x32 caused
-# significant performance degradation that 5 stabilization probes could not fix.
+# ResUNet + AttentionGate backbone with AttentionPooling slice aggregation
+# and VRG decision fusion.
 experiment_name: autoresearch_formal
 output_dir: runs/autoresearch_formal
 seed: 42
@@ -9,30 +8,32 @@ seed: 42
 data:
   csv_path: data/realdata/metadata.csv
   base_dir: .
-  image_size: 192
+  image_size: 512
   num_slices_per_view: 16
   trim_edge_slices: 1
-  batch_size: 6
+  batch_size: 4
   num_workers: 4
   val_ratio: 0.25
   hu_min: -1000
   hu_max: 1000
 
 model:
-  backbone: resnet18
-  fusion_type: decision  # Decision Fusion = current best VRG variant
+  backbone: resunet       # ResUNet + Attention Gate backbone
+  fusion_type: decision   # Decision Fusion = VRG variant
   share_backbone: false
   use_pretrained: true
+  freeze_layers: 3
   fusion_hidden_dim: 256
   dropout: 0.3
-  use_attention_pooling: false
+  use_attention_pooling: true  # AttentionPooling 聚合切片特征
 
 train:
   epochs: 15
   lr: 0.00005
-  weight_decay: 0.0001
+  weight_decay: 0.001
   class_weight: true
   device: auto
   augmentation: true
   label_smoothing: 0.0
   gradient_clip_norm: 1.0
+  early_stopping_patience: 2
