@@ -30,6 +30,7 @@ from torchvision.models import ResNet18_Weights, resnet18  # type: ignore[import
 # ↑ 从 torchvision 导入 ResNet18 预训练模型和对应的权重
 
 from .attention_pooling import AttentionPooling  # 可学习注意力池化模块
+from .cross_view_attention import CrossViewAttention
 
 # ==================== 方差控制：Backbone 冻结 ====================
 # 冻结 ResNet18 的前 N 个 layer block，保留 ImageNet 预训练权重。
@@ -527,10 +528,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
     工作流程：
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
-        2. 每个视角各自通过自己的分类器，得到各自的分类分数
-        3. 每个视角的 confidence head 结合 feature + 当前视角 logits 输出 reliability logit
-        4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
-        5. 用动态权重对 3 个视角的分类结果加权平均
+        2. 对 3 个视角特征做一层轻量 cross-view context mixing
+        3. 每个视角各自通过自己的分类器，得到各自的分类分数
+        4. 每个视角的 confidence head 输出 raw reliability logit
+        5. 3 个 reliability logits 经 softmax 归一化后作为融合权重
+        6. 用动态权重对 3 个视角的分类结果加权平均
     """
 
     def __init__(
@@ -564,19 +566,22 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 视角可靠度门控：每个视角一个 reliability head。
-        # gate 不再只看 feature，而是额外接收该视角自己的 2-way logits，
-        # 让它在分配融合权重时能直接参考显式类别证据。
-        reliability_hidden_dim = max(32, fusion_hidden_dim // 2)
-        reliability_input_dim = self.feature_dim + 2
+        # 在 pooled 之后只保留 3 个 view token，因此 1 层 cross-view attention
+        # 就足够做轻量上下文混合，不需要改动训练入口或超参模板。
+        self.cross_view_mixer = CrossViewAttention(
+            feature_dim=self.feature_dim,
+            num_heads=4,
+            num_layers=1,
+            dropout=0.1,
+        )
+        # 视角可靠度门控：每个视角一个 reliability head
+        # 直接输出未压缩的 reliability logits，再由 softmax 归一化。
+        # 这样不同视角之间可以拉开更大的权重差距，而不会被 sigmoid 压缩到窄范围。
         self.confidence_heads = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.LayerNorm(reliability_input_dim),
-                    nn.Linear(reliability_input_dim, reliability_hidden_dim),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(dropout),
-                    nn.Linear(reliability_hidden_dim, 1),
+                    nn.LayerNorm(self.feature_dim),
+                    nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
                 )
                 for _ in range(3)
             ]
@@ -595,32 +600,27 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # 第 1 步：提取 3 个视角的特征
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：每个视角分别做分类
-        view_logits_per_view = [
-            classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)
-        ]
+        # 第 2 步：加入轻量 cross-view context，让每个视角先看到另外两个视角
+        stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
+        mixed_features = self.cross_view_mixer(stacked_features)
+        view_features = list(mixed_features.unbind(dim=1))
+
+        # 第 3 步：每个视角分别做分类
         view_logits = torch.stack(
-            view_logits_per_view,
+            [classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)],
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 3 步：计算每个视角的动态可靠度 logits
+        # 第 4 步：计算每个视角的动态可靠度 logits
         confidences = torch.stack(
-            [
-                head(torch.cat([feature, logits], dim=1))
-                for head, feature, logits in zip(
-                    self.confidence_heads,
-                    view_features,
-                    view_logits_per_view,
-                )
-            ],
+            [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
             dim=1,
         )  # (B, 3, 1)
 
         # softmax 归一化：3 个可信度 → 和为 1 的融合权重
         fusion_weights = torch.softmax(confidences, dim=1)  # (B, 3, 1)
 
-        # 第 4 步：动态加权求和
+        # 第 5 步：动态加权求和
         # (B, 3, 2) × (B, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
         return (view_logits * fusion_weights).sum(dim=1)
 
