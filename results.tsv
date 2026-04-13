@@ -150,3 +150,6 @@ NA	0.649	NA	NA	NA	discard	NA	ASF-04: temperature=2.0
 NA	0.660	NA	NA	NA	discard	NA	ASF-05: temperature=0.5 + lr=5e-5
 a60c3e0	0.882979	0.931818	0.876404	14.4	keep	proxy	VRG-LOGIT-01: unsquashed reliability logits; fresh proxy Optuna winner=trial 0 after 4 completed trials on 3090
 c30fcae	0.861702	0.937273	0.850575	14.4	keep	formal	VRG-LOGIT-01 formal confirmation: trial 0 template hyperparams synced into formal config; best epoch 4, early stop at epoch 6
+33e1dd1	0.872340	0.920909	0.857143	14.4	discard	proxy	Constrained manual round 1: lr=4e-5, early_stopping_patience=2, fixed batch_size=4/dropout=0.3/ls=0.0/scheduler=none/wd=1e-3
+81c8a8a	0.808511	0.919091	0.823529	14.4	discard	proxy	Constrained manual round 2: lr=6e-5, early_stopping_patience=2, fixed batch_size=4/dropout=0.3/ls=0.0/scheduler=none/wd=1e-3
+7acb17e	0.000000	0.000000	0.000000	0.0	crash	proxy	Constrained manual round 3: lr=5e-5, early_stopping_patience=3; OOM because another .venv/bin/python process already held about 16.9 GiB on CUDA_VISIBLE_DEVICES=1
