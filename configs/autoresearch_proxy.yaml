@@ -36,5 +36,5 @@ train:
   augmentation: true
   scheduler: none
   label_smoothing: 0.0
-  gradient_clip_norm: 0.5
+  gradient_clip_norm: 0.75
   early_stopping_patience: 2
