@@ -29,7 +29,7 @@ model:
 
 train:
   epochs: 4
-  lr: 0.000035
+  lr: 0.00005
   weight_decay: 0.001
   class_weight: true
   device: auto

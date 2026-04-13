@@ -153,3 +153,6 @@ c30fcae	0.861702	0.937273	0.850575	14.4	keep	formal	VRG-LOGIT-01 formal confirma
 33e1dd1	0.872340	0.920909	0.857143	14.4	discard	proxy	Constrained manual round 1: lr=4e-5, early_stopping_patience=2, fixed batch_size=4/dropout=0.3/ls=0.0/scheduler=none/wd=1e-3
 81c8a8a	0.808511	0.919091	0.823529	14.4	discard	proxy	Constrained manual round 2: lr=6e-5, early_stopping_patience=2, fixed batch_size=4/dropout=0.3/ls=0.0/scheduler=none/wd=1e-3
 7acb17e	0.000000	0.000000	0.000000	0.0	crash	proxy	Constrained manual round 3: lr=5e-5, early_stopping_patience=3; OOM because another .venv/bin/python process already held about 16.9 GiB on CUDA_VISIBLE_DEVICES=1
+1f117dd	0.819149	0.890000	0.831683	14.4	discard	proxy	Constrained manual round 3 rerun: lr=5e-5, early_stopping_patience=3 after GPU became free; valid result underperformed current proxy winner and lr=4e-5/patience=2
+092eea5	0.851064	0.901364	0.833333	14.4	discard	proxy	Constrained manual round 4: lr=4.5e-5, early_stopping_patience=2 interpolation between 4e-5 and 5e-5; recovered over patience=3 rerun but stayed below lr=4e-5/patience=2 and current proxy winner
+aabeb35	0.851064	0.911818	0.829268	14.4	discard	proxy	Constrained manual round 5: lr=3.5e-5, early_stopping_patience=2 lower-lr boundary probe; matched round 4 accuracy, higher AUC, but still below lr=4e-5/patience=2 and current proxy winner
