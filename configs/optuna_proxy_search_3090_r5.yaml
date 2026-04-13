@@ -5,8 +5,8 @@ study:
   study_root: runs/optuna_proxy_20260413_3090_r5
   direction: maximize
   n_trials: 5
-  timeout_minutes: 220
-  trial_timeout_minutes: 75
+  timeout_minutes: 300
+  trial_timeout_minutes: 90
   failed_score: -1.0
   sampler: tpe
   sampler_seed: 42
