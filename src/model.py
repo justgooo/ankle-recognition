@@ -528,8 +528,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     工作流程：
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
         2. 每个视角各自通过自己的分类器，得到各自的分类分数
-        3. 每个视角的 confidence head 输出可信度 (0~1)
-        4. 3 个可信度经 softmax 归一化后作为融合权重
+        3. 每个视角的 confidence head 结合 feature + 当前视角 logits 输出 reliability logit
+        4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
     """
 
@@ -564,14 +564,19 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 视角可靠度门控：每个视角一个 reliability head
-        # 直接输出未压缩的 reliability logits，再由 softmax 归一化。
-        # 这样不同视角之间可以拉开更大的权重差距，而不会被 sigmoid 压缩到窄范围。
+        # 视角可靠度门控：每个视角一个 reliability head。
+        # gate 不再只看 feature，而是额外接收该视角自己的 2-way logits，
+        # 让它在分配融合权重时能直接参考显式类别证据。
+        reliability_hidden_dim = max(32, fusion_hidden_dim // 2)
+        reliability_input_dim = self.feature_dim + 2
         self.confidence_heads = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.LayerNorm(self.feature_dim),
-                    nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
+                    nn.LayerNorm(reliability_input_dim),
+                    nn.Linear(reliability_input_dim, reliability_hidden_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout),
+                    nn.Linear(reliability_hidden_dim, 1),
                 )
                 for _ in range(3)
             ]
@@ -591,14 +596,24 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
         # 第 2 步：每个视角分别做分类
+        view_logits_per_view = [
+            classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)
+        ]
         view_logits = torch.stack(
-            [classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)],
+            view_logits_per_view,
             dim=1,
         )  # (B, 3, 2)
 
         # 第 3 步：计算每个视角的动态可靠度 logits
         confidences = torch.stack(
-            [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
+            [
+                head(torch.cat([feature, logits], dim=1))
+                for head, feature, logits in zip(
+                    self.confidence_heads,
+                    view_features,
+                    view_logits_per_view,
+                )
+            ],
             dim=1,
         )  # (B, 3, 1)
 
