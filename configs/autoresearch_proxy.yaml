@@ -29,7 +29,7 @@ model:
 
 train:
   epochs: 4
-  lr: 0.00005
+  lr: 0.000045
   weight_decay: 0.001
   class_weight: true
   device: auto
@@ -37,4 +37,4 @@ train:
   scheduler: none
   label_smoothing: 0.0
   gradient_clip_norm: 1.0
-  early_stopping_patience: 3
+  early_stopping_patience: 2
