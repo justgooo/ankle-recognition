@@ -24,7 +24,7 @@ model:
   use_pretrained: true
   freeze_layers: 3
   fusion_hidden_dim: 256
-  dropout: 0.25
+  dropout: 0.3
   use_attention_pooling: true  # AttentionPooling 聚合切片特征
 
 train:
