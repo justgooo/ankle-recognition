@@ -3,7 +3,7 @@
 # and VRG decision fusion.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
-seed: 42
+seed: 123
 
 data:
   csv_path: data/realdata/metadata.csv
