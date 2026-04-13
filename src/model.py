@@ -30,7 +30,7 @@ from torchvision.models import ResNet18_Weights, resnet18  # type: ignore[import
 # ↑ 从 torchvision 导入 ResNet18 预训练模型和对应的权重
 
 from .attention_pooling import AttentionPooling  # 可学习注意力池化模块
-from .cross_view_attention import CrossViewAttention
+from .cross_view_attention import CrossViewMeanContextMixer
 
 # ==================== 方差控制：Backbone 冻结 ====================
 # 冻结 ResNet18 的前 N 个 layer block，保留 ImageNet 预训练权重。
@@ -528,7 +528,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
     工作流程：
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
-        2. 对 3 个视角特征做一层轻量 cross-view context mixing
+        2. 用轻量 mean-context MLP 在 3 个 pooled 视角特征之间注入少量上下文
         3. 每个视角各自通过自己的分类器，得到各自的分类分数
         4. 每个视角的 confidence head 输出 raw reliability logit
         5. 3 个 reliability logits 经 softmax 归一化后作为融合权重
@@ -566,12 +566,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 在 pooled 之后只保留 3 个 view token，因此 1 层 cross-view attention
-        # 就足够做轻量上下文混合，不需要改动训练入口或超参模板。
-        self.cross_view_mixer = CrossViewAttention(
+        # 只在 3 个 pooled view token 间注入少量上下文，避免引入 Transformer 的较大方差。
+        self.cross_view_mixer = CrossViewMeanContextMixer(
             feature_dim=self.feature_dim,
-            num_heads=4,
-            num_layers=1,
+            hidden_dim=128,
             dropout=0.1,
         )
         # 视角可靠度门控：每个视角一个 reliability head
@@ -600,7 +598,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # 第 1 步：提取 3 个视角的特征
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：加入轻量 cross-view context，让每个视角先看到另外两个视角
+        # 第 2 步：用低容量 cross-view mixer 注入其他视角的平均上下文
         stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
         mixed_features = self.cross_view_mixer(stacked_features)
         view_features = list(mixed_features.unbind(dim=1))
