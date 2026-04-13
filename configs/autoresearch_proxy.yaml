@@ -30,7 +30,7 @@ model:
 train:
   epochs: 4
   lr: 0.00005
-  weight_decay: 0.0005
+  weight_decay: 0.00075
   class_weight: true
   device: auto
   augmentation: true
