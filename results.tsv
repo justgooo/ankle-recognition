@@ -148,3 +148,5 @@ NA	0.532	NA	NA	NA	discard	NA	ASF-02: temperature=1.0
 NA	0.617	NA	NA	NA	discard	NA	ASF-03: temperature=0.3
 NA	0.649	NA	NA	NA	discard	NA	ASF-04: temperature=2.0
 NA	0.660	NA	NA	NA	discard	NA	ASF-05: temperature=0.5 + lr=5e-5
+09531b1	0.840426	0.918182	0.819277	14.4	keep	proxy	canonical baseline smoke on baseline-only main@09531b1 [3090/cuda1]
+487dbed	0.851064	0.925909	0.840909	14.4	keep	proxy	fresh proxy Optuna winner trial 2 on 3090/cuda1 (r5 study)
