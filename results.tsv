@@ -159,3 +159,4 @@ aabeb35	0.851064	0.911818	0.829268	14.4	discard	proxy	Constrained manual round 5
 eddf885	0.840426	0.917727	0.814815	14.4	discard	proxy	CVT-MAN-06: exact proxy winner reproduction with seed=123 (lr=5e-5, early_stopping_patience=2); failed to reproduce trial-0 winner and fell back to baseline-level accuracy
 336cd96	0.882979	0.926364	0.870588	14.4	discard	proxy	CVT-MAN-07: winner-template stability probe with weight_decay=5e-4 on seed=42; matched current proxy best accuracy but lost the AUC tie-break to the weight_decay=1e-3 winner
 51f8199	0.840426	0.916364	0.823529	14.4	discard	proxy	CVT-MAN-08: winner-template stability probe with seed=42, dropout=0.25; regressed to baseline-level accuracy and underperformed the current proxy winner
+7b25d8d	0.819149	0.872727	0.779221	14.4	discard	proxy	CVT-MAN-09: winner-template stability probe with seed=42, dropout=0.35; higher dropout overshot regularization and stayed well below the current proxy winner

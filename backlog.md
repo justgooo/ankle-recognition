@@ -16,10 +16,10 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CVT-MAN-08（winner-template stability probe；`seed=42`, `dropout=0.25`; commit `51f8199`） |
-| 上次结果 | discard（`val_acc=0.8404255319148937`, `val_auc=0.9163636363636364`, `val_f1=0.8235294117647058`, `peak_vram=14.4 GiB`。较 current proxy winner `0.8829787234042553` 低 `0.0425531914893616`，accuracy 直接回落到 canonical baseline rerun 同档位，而 AUC 还比 canonical winner 低 `0.0154545454545455`；说明把 winner 模板的 dropout 从 `0.3` 下调到 `0.25` 会明显破坏当前正则平衡） |
-| 下一步 | `dropout=0.25` 已证伪，当前 canonical winner 仍应保持 `dropout=0.3`。若继续，最高优先级改为在同一 winner 模板上测试 `dropout=0.35`；若 `0.35` 仍不能至少追平 accuracy，再停止 dropout 轴并转向 alternate-seed confirmation。 |
-| 连续 discard 计数 | 8 |
+| 上次实验 | CVT-MAN-09（winner-template stability probe；`seed=42`, `dropout=0.35`; commit `7b25d8d`） |
+| 上次结果 | discard（`val_acc=0.8191489361702128`, `val_auc=0.8727272727272728`, `val_f1=0.7792207792207793`, `peak_vram=14.4 GiB`。较 current proxy winner `0.8829787234042553` 低 `0.06382978723404253`，也比 canonical baseline rerun `0.8404255319148937` 再低 `0.021276595744680882`；说明把 winner 模板的 dropout 从 `0.3` 上调到 `0.35` 会进一步过正则化，dropout 轴两侧 `0.25/0.35` 均已证伪） |
+| 下一步 | `dropout=0.25` 与 `0.35` 均已证伪，当前 canonical winner 应继续保持 `dropout=0.3`。最高优先级转为 alternate-seed confirmation，优先在同一 winner 模板上补做 `seed=456` 的 exact reproduction，而不是继续扩展 dropout 轴。 |
+| 连续 discard 计数 | 9 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -87,6 +87,7 @@
 - [x] **CVT-MAN-06**：exact winner reproduction（`seed=123`, `lr=5e-5`, `early_stopping_patience=2`；commit `eddf885`）→ `val_acc=0.8404255319148937`, `val_auc=0.9177272727272727`, `val_f1=0.8148148148148148`, `peak_vram=14.4 GiB` → **discard**（较 current proxy winner `0.8829787234042553` 低 `0.0425531914893616`，且 accuracy 与 canonical baseline rerun `0.8404255319148937` 完全相同、AUC 还低 `0.0004545454545455`；说明 trial-0 winner 未在 alternate seed 上复现，当前更需要做稳定性导向的 `weight_decay / dropout` 探针，而不是继续受限 lr 微调）。
 - [x] **CVT-MAN-07**：winner-template stability probe（`seed=42`, `weight_decay=5e-4`；commit `336cd96`）→ `val_acc=0.8829787234042553`, `val_auc=0.9263636363636365`, `val_f1=0.8705882352941177`, `peak_vram=14.4 GiB` → **discard**（与 current proxy winner `0.8829787234042553` accuracy 完全持平，但 AUC 低 `0.0054545454545454`，因此按 tie-break 仍输给 `weight_decay=1e-3` 的 trial-0 winner；说明较弱 L2 正则不会立刻伤到 accuracy，但当前 canonical winner 在排序质量上更稳，下一步更值得转测 `dropout=0.25/0.35`，而不是继续下调 weight decay）。
 - [x] **CVT-MAN-08**：winner-template stability probe（`seed=42`, `dropout=0.25`；commit `51f8199`）→ `val_acc=0.8404255319148937`, `val_auc=0.9163636363636364`, `val_f1=0.8235294117647058`, `peak_vram=14.4 GiB` → **discard**（较 current proxy winner `0.8829787234042553` 低 `0.0425531914893616`，accuracy 与 canonical baseline rerun `0.8404255319148937` 完全相同，AUC 还低 `0.0154545454545455`；说明把 canonical winner 的 dropout 从 `0.3` 下调到 `0.25` 会明显削弱当前正则平衡，下一步若继续应优先测试 `dropout=0.35` 而不是继续下调 dropout。）
+- [x] **CVT-MAN-09**：winner-template stability probe（`seed=42`, `dropout=0.35`；commit `7b25d8d`）→ `val_acc=0.8191489361702128`, `val_auc=0.8727272727272728`, `val_f1=0.7792207792207793`, `peak_vram=14.4 GiB` → **discard**（较 current proxy winner `0.8829787234042553` 低 `0.06382978723404253`，也比 canonical baseline rerun `0.8404255319148937` 再低 `0.021276595744680882`；说明把 canonical winner 的 dropout 从 `0.3` 上调到 `0.35` 会进一步过正则化，至此 `dropout=0.25/0.35` 两侧探针均失败，下一步应停止 dropout 轴并转向 alternate-seed confirmation。）
 
 ---
 
