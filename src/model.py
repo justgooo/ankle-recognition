@@ -589,14 +589,15 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 仅在 classifier 分支注入低秩的真实 cross-view token interaction：
-        # 先把 512D pooled token 压到 128D bottleneck 做 1 层 attention，
-        # 再投影回 512D 并保留弱残差，测试是否比全维 attention 更稳。
+        # 仅在 classifier 分支注入中等秩的真实 cross-view token interaction：
+        # 先把 512D pooled token 压到 256D bottleneck 做 1 层 attention，
+        # 再投影回 512D 并保留弱残差，测试是否能保住 XVIEW-05 的 AUC 回升
+        # 同时把 accuracy 拉回至少 baseline-level。
         from .cross_view_attention import CrossViewAttention
 
         self.cross_view_mixer = CrossViewAttention(
             feature_dim=self.feature_dim,
-            attention_dim=128,
+            attention_dim=256,
             num_heads=4,
             num_layers=1,
             dropout=0.1,
