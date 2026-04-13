@@ -551,7 +551,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
     工作流程：
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
-        2. 每个视角先经过一个轻量 residual self-MLP，再送入各自的分类器
+        2. 仅在 classifier 分支上加入轻量 residual cross-view attention，
+           让每个视角少量接收另外两个视角的 token 交互
         3. 每个视角的 confidence head 仍基于原始 pooled feature 输出 raw reliability logit
         4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
@@ -588,20 +589,19 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 仅在 classifier 分支增加 per-view residual self-MLP。
-        # hidden_dim=192 使其参数量与 CVT-XVIEW-02 的 1024->128->512 bottleneck 接近。
-        self.view_self_mlps = nn.ModuleList(
-            [
-                ResidualPerViewMLP(
-                    feature_dim=self.feature_dim,
-                    hidden_dim=192,
-                    dropout=0.1,
-                )
-                for _ in range(3)
-            ]
+        # 仅在 classifier 分支注入少量真实 cross-view token interaction，
+        # 并用固定小系数约束残差幅度，避免复现 CVT-XVIEW-01 的过强扰动。
+        from .cross_view_attention import CrossViewAttention
+
+        self.cross_view_mixer = CrossViewAttention(
+            feature_dim=self.feature_dim,
+            num_heads=4,
+            num_layers=1,
+            dropout=0.1,
+            residual_scale=0.25,
         )
         # 视角可靠度门控：每个视角一个 baseline raw-logit reliability head。
-        # 保持 current winner 的 VRG 路径，不让 self-MLP 改写 fusion weighting。
+        # 保持 current winner 的 VRG 路径，不让 cross-view mixer 改写 fusion weighting。
         self.confidence_heads = nn.ModuleList(
             [
                 nn.Sequential(
@@ -625,11 +625,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # 第 1 步：提取 3 个视角的特征
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：只在 classifier 分支加入 matched-capacity residual self-MLP。
-        classifier_features = [
-            mlp(feature)
-            for mlp, feature in zip(self.view_self_mlps, view_features)
-        ]
+        # 第 2 步：只在 classifier 分支加入弱化后的 cross-view attention。
+        stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
+        classifier_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
 
         # 第 3 步：每个视角分别做分类
         view_logits = torch.stack(
