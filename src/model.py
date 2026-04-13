@@ -30,7 +30,6 @@ from torchvision.models import ResNet18_Weights, resnet18  # type: ignore[import
 # ↑ 从 torchvision 导入 ResNet18 预训练模型和对应的权重
 
 from .attention_pooling import AttentionPooling  # 可学习注意力池化模块
-from .cross_view_attention import CrossViewMeanContextMixer
 
 # ==================== 方差控制：Backbone 冻结 ====================
 # 冻结 ResNet18 的前 N 个 layer block，保留 ImageNet 预训练权重。
@@ -528,10 +527,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
     工作流程：
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
-        2. 用轻量 mean-context MLP 在 3 个 pooled 视角特征之间注入少量上下文
-        3. 每个视角各自通过自己的分类器，得到各自的分类分数
-        4. 每个视角的 confidence head 输出 raw reliability logit
-        5. 3 个 reliability logits 经 softmax 归一化后作为融合权重
+        2. 每个视角各自通过自己的分类器，得到各自的分类分数
+        3. 每个视角的 confidence head 先输出 baseline raw reliability logit
+        4. 额外用其他两个视角的均值特征生成一个轻量 gating bias
+        5. raw reliability logit + gating bias 经 softmax 归一化后作为融合权重
         6. 用动态权重对 3 个视角的分类结果加权平均
     """
 
@@ -566,12 +565,6 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 只在 3 个 pooled view token 间注入少量上下文，避免引入 Transformer 的较大方差。
-        self.cross_view_mixer = CrossViewMeanContextMixer(
-            feature_dim=self.feature_dim,
-            hidden_dim=128,
-            dropout=0.1,
-        )
         # 视角可靠度门控：每个视角一个 reliability head
         # 直接输出未压缩的 reliability logits，再由 softmax 归一化。
         # 这样不同视角之间可以拉开更大的权重差距，而不会被 sigmoid 压缩到窄范围。
@@ -580,6 +573,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 nn.Sequential(
                     nn.LayerNorm(self.feature_dim),
                     nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
+                )
+                for _ in range(3)
+            ]
+        )
+        # 只让跨视角上下文影响 VRG weighting，不改写 per-view classifier 输入。
+        # 这里使用 other-view mean -> additive bias 的轻量分支，测试跨视角收益
+        # 是否主要来自更好的 reliability estimation。
+        self.context_bias_heads = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.LayerNorm(self.feature_dim * 2),
+                    nn.Linear(self.feature_dim * 2, 64),
+                    nn.GELU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(64, 1),
                 )
                 for _ in range(3)
             ]
@@ -598,27 +606,45 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # 第 1 步：提取 3 个视角的特征
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：用低容量 cross-view mixer 注入其他视角的平均上下文
-        stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
-        mixed_features = self.cross_view_mixer(stacked_features)
-        view_features = list(mixed_features.unbind(dim=1))
-
-        # 第 3 步：每个视角分别做分类
+        # 第 2 步：每个视角分别做分类；per-view classifier 保持使用原始 pooled feature
         view_logits = torch.stack(
             [classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)],
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 4 步：计算每个视角的动态可靠度 logits
-        confidences = torch.stack(
+        # 第 3 步：先计算 baseline reliability logits
+        baseline_confidences = torch.stack(
             [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
             dim=1,
         )  # (B, 3, 1)
 
-        # softmax 归一化：3 个可信度 → 和为 1 的融合权重
+        # 第 4 步：只在 gating 分支注入 other-view mean context
+        stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
+        num_views = stacked_features.shape[1]
+        if num_views > 1:
+            other_view_mean = (
+                stacked_features.sum(dim=1, keepdim=True) - stacked_features
+            ) / float(num_views - 1)
+        else:
+            other_view_mean = torch.zeros_like(stacked_features)
+
+        context_biases = torch.stack(
+            [
+                head(torch.cat([feature, context], dim=1))
+                for head, feature, context in zip(
+                    self.context_bias_heads,
+                    view_features,
+                    other_view_mean.unbind(dim=1),
+                )
+            ],
+            dim=1,
+        )  # (B, 3, 1)
+        confidences = baseline_confidences + context_biases
+
+        # 第 5 步：softmax 归一化，得到 3 个视角的融合权重
         fusion_weights = torch.softmax(confidences, dim=1)  # (B, 3, 1)
 
-        # 第 5 步：动态加权求和
+        # 第 6 步：动态加权求和
         # (B, 3, 2) × (B, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
         return (view_logits * fusion_weights).sum(dim=1)
 
