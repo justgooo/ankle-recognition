@@ -589,9 +589,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 仅在 classifier 分支注入极弱的 full-rank cross-view token interaction：
-        # 回到 XVIEW-04 的 full-rank attention 路径，但进一步缩小残差注入幅度，
-        # 以验证此前 0.8511 accuracy 回升是否主要来自 very-light cross-view mixing。
+        # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
+        # per-view classifier 保持 baseline pooled-feature 路径，避免再次扰动 logits；
+        # richer cross-view context 只用于 fusion weighting，测试它是否比均值 bias 更适合校准 VRG。
         from .cross_view_attention import CrossViewAttention
 
         self.cross_view_mixer = CrossViewAttention(
@@ -626,22 +626,22 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # 第 1 步：提取 3 个视角的特征
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：只在 classifier 分支加入弱化后的 cross-view attention。
+        # 第 2 步：分类 logits 保持 baseline 路径；cross-view context 只送入 gating 分支。
         stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
-        classifier_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
+        gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
 
         # 第 3 步：每个视角分别做分类
         view_logits = torch.stack(
             [
                 classifier(feature)
-                for classifier, feature in zip(self.view_classifiers, classifier_features)
+                for classifier, feature in zip(self.view_classifiers, view_features)
             ],
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 4 步：保持 baseline raw-logit VRG，只在原始 pooled feature 上估计可靠度。
+        # 第 4 步：保持 baseline raw-logit VRG 头形式，但让它读取 cross-view-enriched gating feature。
         confidences = torch.stack(
-            [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
+            [head(feature) for head, feature in zip(self.confidence_heads, gating_features)],
             dim=1,
         )  # (B, 3, 1)
 
