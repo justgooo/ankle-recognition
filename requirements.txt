@@ -8,3 +8,4 @@ PyYAML>=6.0
 tqdm>=4.66
 pydicom>=2.4
 optuna>=3.0
+timm>=0.9.0
