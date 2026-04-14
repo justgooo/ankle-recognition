@@ -155,38 +155,27 @@ sed -i 's|OS: Windows，Shell: PowerShell|OS: Ubuntu，Shell: Bash|g' AGENTS.md
 
 ---
 
-## 第 8 步：将 PowerShell 脚本转换为 Bash
+## 第 8 步：统一为 Python 入口
 
-项目有两个 `.ps1`（PowerShell）脚本需要转为 `.sh`：
+服务器目标环境不依赖可执行脚本入口，项目中的调度/批处理入口统一改为 `.py`：
 
-- `autoresearch_loop.ps1` → `autoresearch_loop.sh`
-- `run_paper_validation.ps1` → `run_paper_validation.sh`
+- `autoresearch_loop.py`
+- `autoresearch_parallel_loop.py`
+- `run_paper_validation.py`
+- `scripts/parallel_train.py`
+- `scripts/parallel_status.py`
 
-**转换要点**：
-
-| PowerShell 语法 | Bash 等价 |
-|---|---|
-| `$variable = "value"` | `variable="value"` |
-| `Write-Host "msg"` | `echo "msg"` |
-| `Start-Process` | 直接执行或 `nohup ... &` |
-| `Get-Content file` | `cat file` |
-| `Test-Path file` | `[ -f file ]` 或 `[ -d dir ]` |
-| `.\.venv\Scripts\python.exe` | `.venv/bin/python` |
-| `2>$null` | `2>/dev/null` |
-| 条件 `-eq`, `-ne`, `-gt` | `==`, `!=`, `-gt`（在 `[[ ]]` 中可用 `>`） |
-
-脚本头部添加：
+调用方式统一为：
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
+python autoresearch_loop.py
+python autoresearch_parallel_loop.py
+python run_paper_validation.py
+python scripts/parallel_train.py
+python scripts/parallel_status.py
 ```
 
-转换完成后赋予执行权限：
-
-```bash
-chmod +x autoresearch_loop.sh run_paper_validation.sh
-```
+这样部署时只要求服务器能运行 Python，不再依赖 `.sh` / `.ps1` 的执行权限与 shell 兼容性。
 
 ---
 
@@ -235,8 +224,7 @@ nvidia-smi
 ### 10.3 双 GPU 并行测试
 
 ```bash
-chmod +x scripts/parallel_train.sh scripts/parallel_status.sh autoresearch_parallel_loop.sh
-./scripts/parallel_train.sh
+python scripts/parallel_train.py
 ```
 
 确认：
@@ -246,7 +234,7 @@ chmod +x scripts/parallel_train.sh scripts/parallel_status.sh autoresearch_paral
 
 监控状态：
 ```bash
-./scripts/parallel_status.sh
+python scripts/parallel_status.py
 ```
 
 ---
@@ -261,7 +249,7 @@ chmod +x scripts/parallel_train.sh scripts/parallel_status.sh autoresearch_paral
 - [x] `python train.py --config configs/autoresearch_proxy.yaml` 能完整跑完 4 个 epoch 且生成 `summary.json`
 - [x] AGENTS.md 中的路径已改为 Linux 格式
 - [x] `data/realdata/metadata.csv` 中的路径均为正斜杠格式
-- [ ] `./scripts/parallel_train.sh` 能同时在两张卡上启动训练
+- [ ] `python scripts/parallel_train.py` 能同时在两张卡上启动训练
 
 ---
 
@@ -282,6 +270,6 @@ chmod +x scripts/parallel_train.sh scripts/parallel_status.sh autoresearch_paral
 | `backlog.md` | 实验待办 | ✅ |
 | `program.md` | 实验协议 | ⚠️ 需确认 |
 | `results.tsv` | 实验结果 | 只追加 |
-| `scripts/parallel_train.sh` | 双 GPU 并行训练启动器 | ✅ |
-| `scripts/parallel_status.sh` | 双槽位状态监控 | ✅ |
-| `autoresearch_parallel_loop.sh` | 双进程 autoresearch 自动循环 | ✅ |
+| `scripts/parallel_train.py` | 双 GPU 并行训练启动器 | ✅ |
+| `scripts/parallel_status.py` | 双槽位状态监控 | ✅ |
+| `autoresearch_parallel_loop.py` | 双进程 autoresearch 自动循环 | ✅ |

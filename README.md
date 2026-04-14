@@ -8,6 +8,7 @@
 - `2.5D` 多视角分类，不是完整 3D 网络
 - 三个标准视角：`axial / coronal / sagittal`
 - 三种融合模式：`feature / decision / attention`
+- 五种骨干网络：`resnet18 / resunet / resnext / senet / cspnet`
 - `png / jpg / jpeg / bmp / dcm` 切片输入
 - `nii / nii.gz` 体数据输入
 - 手工划分 `train / val / test`，或自动 `train / val`
@@ -286,6 +287,34 @@ model:
 - `src/cross_view_attention.py`
 - `src/model.py`
 
+### 7.4 骨干网络选择（Backbone）
+
+`configs/*.yaml` 里通过 `model.backbone` 切换骨干网络：
+
+```yaml
+model:
+  backbone: resnet18
+```
+
+可选值：
+
+| 值 | 对应模型 | 来源 | 特点 |
+|---|---------|------|------|
+| `resnet18` | ResNet-18 | torchvision | 经典轻量 backbone，参数少，适合小数据集 |
+| `resunet` | ResUNet + Attention Gate | 项目自实现 | 基于 ResNet18 的 UNet 编码器，通过空间注意力门控强化病灶区域 |
+| `resnext` | ResNeXt-50 (32x4d) | timm | 分组卷积 + 多分支聚合，在同样参数量下比 ResNet 表达力更强 |
+| `senet` | SE-ResNet-50 | timm | Squeeze-and-Excitation 通道注意力，自适应校准通道特征响应 |
+| `cspnet` | CSP-ResNet-50 | timm | 跨阶段部分连接（Cross Stage Partial），梯度复用更高效，推理更快 |
+
+> **注意**：`resnext`、`senet`、`cspnet` 需要安装 `timm` 库（已包含在 `requirements.txt` 中）。
+> 这三种 backbone 通过 `GenericTimmEncoder` 包装器接入，会自动将模型输出投影到 512 维以兼容现有的多视角编码和融合流程。
+
+所有骨干网络均支持：
+
+- `use_pretrained`：是否加载 ImageNet 预训练权重
+- `freeze_layers`：冻结前 N 个 stage（0-3），降低可训练参数量、减小 seed 方差
+- 与全部三种融合模式（feature / decision / attention）配合使用
+
 ## 8. 常用配置项
 
 `data` 部分常用项：
@@ -303,8 +332,10 @@ model:
 `model` 部分常用项：
 
 - `fusion_type`：`feature / decision / attention`
-- `share_backbone`：三个视角是否共享同一个 `ResNet18`
+- `backbone`：`resnet18 / resunet / resnext / senet / cspnet`
+- `share_backbone`：三个视角是否共享同一个骨干网络
 - `use_pretrained`：是否使用 ImageNet 预训练权重
+- `freeze_layers`：冻结前 N 个 stage（0-3），减少可训练参数
 - `fusion_hidden_dim`：分类头隐藏层维度
 - `dropout`
 - `cross_view_heads`：注意力头数（仅 attention 模式使用）

@@ -6,9 +6,12 @@ model.py — 多视角 CT 分类模型
 整体思路：
     1. 一张 CT 扫描有 3 个视角（轴状面 / 冠状面 / 矢状面），每个视角有多张切片图像。
     2. 用 encoder 把每张切片提取成一个 512 维的特征向量。
-       支持两种 backbone：
+       支持五种 backbone：
        - ResNet18（经典分类 backbone）
        - ResUNet + Attention Gate（空间注意力增强，关注病灶区域）
+       - ResNeXt（分组卷积 + 多分支聚合，通过 timm 的 resnext50_32x4d 实现）
+       - SENet（通道注意力，Squeeze-and-Excitation，通过 timm 的 seresnet50 实现）
+       - CSPNet（跨阶段部分连接，梯度复用更高效，通过 timm 的 cspresnet50 实现）
     3. 把同一个视角的所有切片特征聚合（mean pooling 或 AttentionPooling），得到该视角的代表特征。
     4. 多视角融合后分类，输出 2 个值：正常/异常
 
@@ -16,6 +19,7 @@ model.py — 多视角 CT 分类模型
     - build_resnet18_encoder(): 构建 ResNet18 特征提取器
     - AttentionGate: Attention Gate 模块 (Oktay et al., 2018)
     - ResUNetEncoder: ResNet18-based UNet Encoder with Attention Gates
+    - GenericTimmEncoder: 通用 timm backbone 包装器（支持 ResNeXt / SENet / CSPNet）
     - build_encoder(): 根据 backbone 类型构建 encoder
     - MultiViewEncoder: 多视角编码器（提取 3 个视角的特征，支持 mean pooling 或 AttentionPooling）
     - MultiViewCTClassifier: 特征融合分类器（拼接 3 个视角特征后分类）
@@ -302,6 +306,67 @@ class ResUNetEncoder(nn.Module):
         return feat_b + feat_skip  # (B, 512)
 
 
+class GenericTimmEncoder(nn.Module):
+    """
+    通用 timm 编码器包装器，用于支持 ResNeXt, SENet, CSPNet 等。
+    将任意维度的输出特征投影到 512 维，以兼容现有项目框架。
+    """
+    def __init__(
+        self,
+        model_name: str,
+        use_pretrained: bool = True,
+        freeze_layers: int = DEFAULT_FREEZE_LAYERS,
+    ) -> None:
+        super().__init__()
+        try:
+            import timm
+        except ImportError:
+            raise ImportError("请先安装 timm 库 (pip install timm) 以使用额外模型。")
+            
+        self.backbone = timm.create_model(
+            model_name,
+            pretrained=use_pretrained,
+            in_chans=1,
+            num_classes=0, # 全局池化后直接输出特征
+        )
+        
+        # 获取 timm 模型的特征维度
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, 1, 224, 224)
+            dummy_output = self.backbone(dummy_input)
+            in_dim = dummy_output.shape[1]
+            
+        # 兼容性投影：统一为 512 维
+        if in_dim != 512:
+            self.proj = nn.Sequential(
+                nn.Linear(in_dim, 512),
+                nn.ReLU(inplace=True),
+            )
+        else:
+            self.proj = nn.Identity()
+            
+        # 尽力而为的冻结策略
+        if freeze_layers >= 1:
+            for name in ['conv1', 'bn1', 'layer1', 'stem', 'stages_0']:
+                if hasattr(self.backbone, name):
+                    for param in getattr(self.backbone, name).parameters():
+                        param.requires_grad = False
+        if freeze_layers >= 2:
+            for name in ['layer2', 'stages_1']:
+                if hasattr(self.backbone, name):
+                    for param in getattr(self.backbone, name).parameters():
+                        param.requires_grad = False
+        if freeze_layers >= 3:
+            for name in ['layer3', 'stages_2']:
+                if hasattr(self.backbone, name):
+                    for param in getattr(self.backbone, name).parameters():
+                        param.requires_grad = False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feat = self.backbone(x)
+        return self.proj(feat)
+
+
 def build_encoder(
     backbone: str = "resnet18",
     use_pretrained: bool = True,
@@ -310,7 +375,7 @@ def build_encoder(
     """根据 backbone 类型构建 encoder。
 
     参数：
-        backbone: "resnet18" 或 "resunet"
+        backbone: "resnet18" 或 "resunet" 或 "resnext" 或 "senet" 或 "cspnet"
         use_pretrained: 是否使用 ImageNet 预训练权重
         freeze_layers: 冻结前 N 个 encoder stage
 
@@ -327,7 +392,25 @@ def build_encoder(
             use_pretrained=use_pretrained,
             freeze_layers=freeze_layers,
         )
-    raise ValueError(f"Unsupported backbone: {backbone!r}. Expected 'resnet18' or 'resunet'.")
+    if backbone == "resnext":
+        return GenericTimmEncoder(
+            model_name="resnext50_32x4d",
+            use_pretrained=use_pretrained,
+            freeze_layers=freeze_layers,
+        )
+    if backbone == "senet":
+        return GenericTimmEncoder(
+            model_name="seresnet50",
+            use_pretrained=use_pretrained,
+            freeze_layers=freeze_layers,
+        )
+    if backbone == "cspnet":
+        return GenericTimmEncoder(
+            model_name="cspresnet50",
+            use_pretrained=use_pretrained,
+            freeze_layers=freeze_layers,
+        )
+    raise ValueError(f"Unsupported backbone: {backbone!r}. Expected 'resnet18', 'resunet', 'resnext', 'senet', or 'cspnet'.")
 
 
 class ResidualPerViewMLP(nn.Module):

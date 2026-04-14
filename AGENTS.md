@@ -55,7 +55,7 @@ LOOP:
 - RAM: 128GB
 - GPU 0: NVIDIA RTX 3090（24GB VRAM）→ Slot 0，`CUDA_VISIBLE_DEVICES=0`
 - GPU 1: NVIDIA RTX 4090（24GB VRAM）→ Slot 1，`CUDA_VISIBLE_DEVICES=1`
-- 设备映射提醒：某些宿主环境里 `nvidia-smi` 与 PyTorch 的设备顺序可能不一致；长跑前先用 `torch.cuda.get_device_name(...)` 或 `scripts/gpu_python.sh` 实测当前命中的 GPU
+- 设备映射提醒：某些宿主环境里 `nvidia-smi` 与 PyTorch 的设备顺序可能不一致；长跑前先用 `.venv/bin/python -c "import torch; print(torch.cuda.get_device_name(0))"` 实测当前命中的 GPU
 - `num_workers`: 默认 1（注意：如果 CPU 占用不高，Agent 可以自动调整 num_workers 的水平以加速训练）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
 
@@ -66,7 +66,7 @@ LOOP:
 - `configs/autoresearch_proxy_slot0.yaml`、`configs/autoresearch_formal_slot0.yaml`
 - `configs/optuna_*.yaml`（Optuna 搜索配置）
 - `scripts/`（Optuna 工作流脚本 + 并行训练脚本）
-- `autoresearch_parallel_loop.sh`（双进程自动循环）
+- `autoresearch_parallel_loop.py`（双进程自动循环）
 - `backlog.md`（实验待办，每次实验后必须更新）
 - `results.tsv`（只追加）
 - 可新增依赖（限 `optuna` 等实验工具，需记录在 `requirements.txt`）
@@ -83,8 +83,8 @@ LOOP:
 | `configs/autoresearch_proxy_slot0.yaml` | Slot 0 (3090) proxy 配置 |
 | `configs/autoresearch_formal_slot0.yaml` | Slot 0 (3090) formal 配置 |
 | `src/model.py` | 模型代码（可修改） |
-| `scripts/parallel_train.sh` | 双 GPU 并行训练启动器 |
-| `scripts/parallel_status.sh` | 双槽位状态监控 |
-| `autoresearch_parallel_loop.sh` | 双进程 autoresearch 自动循环 |
+| `scripts/parallel_train.py` | 双 GPU 并行训练启动器 |
+| `scripts/parallel_status.py` | 双槽位状态监控 |
+| `autoresearch_parallel_loop.py` | 双进程 autoresearch 自动循环 |
 | `scripts/run_optuna_proxy.py` | Optuna proxy 超参搜索（可修改） |
 | `scripts/monitor_optuna.py` | Optuna 结果监控（可修改） |
