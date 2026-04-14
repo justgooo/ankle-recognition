@@ -12,7 +12,7 @@ data:
   num_slices_per_view: 16
   trim_edge_slices: 1
   batch_size: 4
-  num_workers: 1          # 低 CPU 占用（服务器 CPU 已被其他进程占用 ~70%）
+  num_workers: 4
   val_ratio: 0.25
   hu_min: -1000
   hu_max: 1000
@@ -34,5 +34,7 @@ train:
   class_weight: true
   device: auto
   augmentation: true
+  scheduler: none
   label_smoothing: 0.0
   gradient_clip_norm: 1.0
+  early_stopping_patience: 2

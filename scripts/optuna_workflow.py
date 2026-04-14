@@ -7,6 +7,7 @@ import json
 import math
 import os
 import shlex
+import shutil
 import statistics
 import subprocess
 import sys
@@ -20,6 +21,7 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+HOST_PYTHON_WRAPPER = REPO_ROOT / "scripts" / "gpu_python.sh"
 DEFAULT_FAILED_SCORE = -1.0
 VALID_TRIAL_STATUSES = {"completed"}
 FAILURE_PATTERNS = {
@@ -342,31 +344,71 @@ def build_env(study_cfg: dict[str, Any]) -> dict[str, str]:
     return env
 
 
+def resolve_python_candidate(candidate: str) -> str | None:
+    candidate = str(candidate).strip()
+    if not candidate:
+        return None
+
+    candidate_path = Path(candidate)
+    if candidate_path.is_absolute():
+        resolved_path = candidate_path
+    elif any(sep in candidate for sep in (os.sep, "/", "\\")) or candidate.startswith("."):
+        resolved_path = (REPO_ROOT / candidate_path).resolve()
+    else:
+        return shutil.which(candidate)
+
+    if resolved_path.exists():
+        return str(resolved_path)
+    return None
+
+
+def python_candidate_works(candidate_to_run: str) -> bool:
+    try:
+        subprocess.run(
+            [candidate_to_run, "-c", "import sys; print(sys.executable)"],
+            cwd=REPO_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        )
+        return True
+    except (FileNotFoundError, PermissionError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+
+
 def detect_python_executable(candidates: list[str] | None = None) -> str:
-    del candidates
-    venv_candidates = [
-        (REPO_ROOT / ".venv" / "bin" / "python").resolve(),
-        (REPO_ROOT / ".venv" / "Scripts" / "python.exe").resolve(),
+    ordered_candidates = []
+    if HOST_PYTHON_WRAPPER.exists():
+        ordered_candidates.append(str(HOST_PYTHON_WRAPPER.relative_to(REPO_ROOT)))
+    if candidates:
+        ordered_candidates.extend(str(candidate) for candidate in candidates)
+    ordered_candidates.extend(
+        [
+            ".venv/bin/python",
+            ".venv/Scripts/python.exe",
+            "python3",
+            "python",
+        ]
+    )
+
+    seen: set[str] = set()
+    for candidate in ordered_candidates:
+        resolved = resolve_python_candidate(candidate)
+        if not resolved or resolved in seen:
+            continue
+        seen.add(resolved)
+        if python_candidate_works(resolved):
+            return resolved
+
+    tried_candidates = [
+        candidate
+        for candidate in ordered_candidates
+        if candidate and candidate not in seen
     ]
-    for candidate_path in venv_candidates:
-        if not candidate_path.exists():
-            continue
-        candidate_to_run = str(candidate_path)
-        try:
-            subprocess.run(
-                [candidate_to_run, "-c", "import sys; print(sys.executable)"],
-                cwd=REPO_ROOT,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-                timeout=10,
-            )
-            return candidate_to_run
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            continue
     raise RuntimeError(
-        "Could not find a usable project virtualenv Python. Expected one of: "
-        "./.venv/bin/python or ./.venv/Scripts/python.exe"
+        "Could not find a usable project Python executable. Tried: "
+        + ", ".join(tried_candidates or ordered_candidates)
     )
 
 
@@ -377,7 +419,8 @@ def import_optuna():
         message = (
             "Optuna is not installed in the training environment. "
             "Install it in the project environment before running this workflow, for example:\n"
-            "  ./.venv/bin/python -m pip install optuna"
+            "  ./scripts/gpu_python.sh -m pip install optuna\n"
+            "  or ./.venv/bin/python -m pip install optuna"
         )
         raise SystemExit(message) from exc
     return optuna

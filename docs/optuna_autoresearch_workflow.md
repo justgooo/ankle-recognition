@@ -14,19 +14,17 @@ The existing training entrypoint stays unchanged:
 
 The Optuna layer is optional. If you do not run Optuna, the original training flow still works exactly as before.
 
-GPU selection is inherited from the shell environment. The server has two GPUs:
-- GPU 0 = RTX 3090 (slot 0): `CUDA_VISIBLE_DEVICES=0`
-- GPU 1 = RTX 4090 (slot 1): `CUDA_VISIBLE_DEVICES=1`
+GPU selection is inherited from the shell environment. On this host, `nvidia-smi` ordering and PyTorch/CUDA runtime ordering are reversed:
+
+- `nvidia-smi`: `0=RTX 3090`, `1=RTX 4090`
+- PyTorch runtime: `cuda:0=RTX 4090`, `cuda:1=RTX 3090`
+- As a result, `torch.device("cuda:1")` and `CUDA_VISIBLE_DEVICES=1` both land on the **3090** on this machine; use `torch.device("cuda:0")` or `CUDA_VISIBLE_DEVICES=0` for the **4090**
+
+If you want to reproduce the current project convention on this host, prefix the command:
 
 ```bash
-# Slot 1 (default, RTX 4090)
 CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_proxy.py
-
-# Slot 0 (RTX 3090)
-CUDA_VISIBLE_DEVICES=0 ./.venv/bin/python scripts/run_optuna_proxy.py
 ```
-
-> **⚠️ CPU 限制**：服务器 CPU 已被其他进程占用 ~70%，所有配置的 `num_workers` 必须保持为 1。
 
 ## Files
 
@@ -123,7 +121,7 @@ Failure handling:
 #    Keep it discrete: one structural or regularization idea at a time.
 
 # 3) Launch a small fresh proxy Optuna study on top of that candidate.
-CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_proxy.py  # or CUDA_VISIBLE_DEVICES=0 for slot 0
+CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_proxy.py
 
 # 4) Monitor the running study in another shell.
 ./.venv/bin/python scripts/monitor_optuna.py \
@@ -138,10 +136,6 @@ CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_proxy.py --resume
 CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_main.py \
   --source-study-dir runs/optuna_proxy \
   --top-k 3
-
-# Note: For parallel training on both GPUs, see:
-#   ./scripts/parallel_train.sh
-#   ./autoresearch_parallel_loop.sh
 
 # 7) Summarize the formal study.
 ./.venv/bin/python scripts/monitor_optuna.py \
