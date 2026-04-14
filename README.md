@@ -14,7 +14,7 @@
 - 注意力融合：`Attention Pooling + Cross-View Attention`
 - **增强特性**：`View Reliability Gating (VRG)` 置信度门控、`LayerNorm` 特征归一化、动态骨干网络冻结（防过拟合策略）
 
-如果你是第一次做医学影像深度学习，建议先用 demo 数据把流程跑通，再切到真实数据。
+如果你是第一次做医学影像深度学习，先用 demo 数据把流程跑通，再切到真实数据。
 
 ## 1. 项目结构
 
@@ -326,15 +326,19 @@ model:
 - 没有 `split` 列时，自动按标签分层切出 `train / val`
 - 训练时使用交叉熵损失
 - 如果 `class_weight: true`，会自动按训练集类别频次计算权重
-- 模型选择优先按验证集 `AUC`，如果 `AUC` 不可用则退化为 `accuracy`
+- 模型选择统一按 `summary.json` 里的验证集 `best_val.accuracy`
+- `AUC / F1 / threshold_eval.json` 只作为辅助分析信息，不参与 `best.pt` 选择
 - `device: auto` 当前会在 `cuda` 和 `cpu` 之间自动选择
 
-## 10. 小白最容易踩的坑
+## 10. 注意事项
 
 - 不要把同一病人的不同切片拆到训练集和验证集
 - 不要一开始就上完整 3D 三分支模型
+- 当前双卡服务器上，`nvidia-smi` 与 PyTorch 的设备编号顺序相反：`nvidia-smi` 显示 `0=3090`、`1=4090`，但 PyTorch 实测是 `cuda:0=4090`、`cuda:1=3090`
+- 因此如果训练代码里显式写 `torch.device("cuda:1")`，实际使用的是 **3090**；同理，`CUDA_VISIBLE_DEVICES=1` 暴露给进程的也是 **3090**。如果你要显式指定 **4090**，应改用 `torch.device("cuda:0")` 或 `CUDA_VISIBLE_DEVICES=0`
+- 不要把 `nvidia-smi` 的 index 直接当作训练配置里的 CUDA device id；长跑前先用 `torch.cuda.get_device_name(...)` 核对一次
 - 数据量较小且参数量大时，极易因过拟合导致指标崩盘。建议直接修改代码内的配置（如冻结骨干网络的大部分层：设 `DEFAULT_FREEZE_LAYERS = 2 或 3`），只放开最后的层与分类头。
-- 不要只看准确率，至少看 `AUC`，同时留意阈值与`零漏诊准确性（无病特异度）`的平衡
+- 主决策只看验证集 `best_val.accuracy`，同时把 `AUC` 和 `threshold_eval` 当作辅助稳定性信号
 - 验证集太小时，`AUC` 波动很大是正常现象，强烈建议看多个随机种子 (Seed)
 - `dcm` 依赖 `pydicom`，`nii/nii.gz` 必须是 3D 体数据
 - 如果你在新设备上直接运行默认配置报找不到 `data/demo/metadata.csv`，先执行 `python tools/create_dummy_dataset.py`
@@ -346,5 +350,7 @@ model:
 
 1. **方差缩减 (Variance Reduction)**：3 个独立 ResNet18 的参数组合很容易在小数据集上引起巨大方差。建议结合网络截断冻结策略、增大强正则化 (`dropout=0.3/0.4`, `weight_decay=0.001`, `gradient_clip`) 来提升稳健性。
 2. **多随机种子评价 (Multi-Seed Validation)**：每次新改进后至少测试 3 个以上的 Seed 并计算指标标准差。单次的高准确率可能只是撞上的幸运分布。
-3. 简单划分 -> 5-fold 交叉验证。
-4. 最后才是考虑将 2.5D 切片扩展为 3D 模型实现。
+3. **架构创新**：使用不确定性权重策略或跨视角交叉注意（Cross-View Attention）让具有较多鉴别性视角的权重自适应放大。
+4. **统计显著性验证**：可以对结果进行 1000 次 Bootstrap 的重采样以建立 95% 置信区间 (Confidence Interval)。
+5. 简单划分 -> 5-fold 交叉验证。
+6. 最后才是考虑将 2.5D 切片扩展为 3D 模型实现。
