@@ -21,7 +21,10 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-HOST_PYTHON_WRAPPER = REPO_ROOT / "scripts" / "gpu_python.sh"
+BUNDLED_PYTHON_CANDIDATES = [
+    ".venv/bin/python",
+    ".venv/Scripts/python.exe",
+]
 DEFAULT_FAILED_SCORE = -1.0
 VALID_TRIAL_STATUSES = {"completed"}
 FAILURE_PATTERNS = {
@@ -379,14 +382,11 @@ def python_candidate_works(candidate_to_run: str) -> bool:
 
 def detect_python_executable(candidates: list[str] | None = None) -> str:
     ordered_candidates = []
-    if HOST_PYTHON_WRAPPER.exists():
-        ordered_candidates.append(str(HOST_PYTHON_WRAPPER.relative_to(REPO_ROOT)))
+    ordered_candidates.extend(BUNDLED_PYTHON_CANDIDATES)
     if candidates:
         ordered_candidates.extend(str(candidate) for candidate in candidates)
     ordered_candidates.extend(
         [
-            ".venv/bin/python",
-            ".venv/Scripts/python.exe",
             "python3",
             "python",
         ]
@@ -419,7 +419,7 @@ def import_optuna():
         message = (
             "Optuna is not installed in the training environment. "
             "Install it in the project environment before running this workflow, for example:\n"
-            "  ./scripts/gpu_python.sh -m pip install optuna\n"
+            "  .venv/bin/python -m pip install optuna\n"
             "  or ./.venv/bin/python -m pip install optuna"
         )
         raise SystemExit(message) from exc
