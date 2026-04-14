@@ -330,6 +330,30 @@ def build_encoder(
     raise ValueError(f"Unsupported backbone: {backbone!r}. Expected 'resnet18' or 'resunet'.")
 
 
+class ResidualPerViewMLP(nn.Module):
+    """Residual self-MLP used as a matched-capacity per-view control."""
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        hidden_dim: int = 192,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.LayerNorm(feature_dim),
+            nn.Linear(feature_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, feature_dim),
+            nn.Dropout(dropout),
+        )
+        self.norm = nn.LayerNorm(feature_dim)
+
+    def forward(self, view_feature: torch.Tensor) -> torch.Tensor:
+        return self.norm(view_feature + self.mlp(view_feature))
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -527,9 +551,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
     工作流程：
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
-        2. 每个视角各自通过自己的分类器，得到各自的分类分数
-        3. 每个视角的 confidence head 输出可信度 (0~1)
-        4. 3 个可信度经 softmax 归一化后作为融合权重
+        2. 仅在 classifier 分支上加入轻量 residual cross-view attention，
+           让每个视角少量接收另外两个视角的 token 交互
+        3. 每个视角的 confidence head 仍基于原始 pooled feature 输出 raw reliability logit
+        4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
     """
 
@@ -564,14 +589,25 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
-        # 视角可靠度门控：每个视角一个 confidence head
-        # 输入 512 维特征 → 输出 1 个标量（经 sigmoid 映射到 0~1）
-        # 3 个 confidence 经 softmax 归一化后作为动态融合权重
+        # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
+        # per-view classifier 保持 baseline pooled-feature 路径，避免再次扰动 logits；
+        # richer cross-view context 只用于 fusion weighting，测试它是否比均值 bias 更适合校准 VRG。
+        from .cross_view_attention import CrossViewAttention
+
+        self.cross_view_mixer = CrossViewAttention(
+            feature_dim=self.feature_dim,
+            num_heads=4,
+            num_layers=1,
+            dropout=0.1,
+            residual_scale=0.125,
+        )
+        # 视角可靠度门控：每个视角一个 baseline raw-logit reliability head。
+        # 保持 current winner 的 VRG 路径，不让 cross-view mixer 改写 fusion weighting。
         self.confidence_heads = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(self.feature_dim, 1),  # 512 → 1
-                    nn.Sigmoid(),                    # 映射到 (0, 1)
+                    nn.LayerNorm(self.feature_dim),
+                    nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
                 )
                 for _ in range(3)
             ]
@@ -590,22 +626,29 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # 第 1 步：提取 3 个视角的特征
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：每个视角分别做分类
+        # 第 2 步：分类 logits 保持 baseline 路径；cross-view context 只送入 gating 分支。
+        stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
+        gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
+
+        # 第 3 步：每个视角分别做分类
         view_logits = torch.stack(
-            [classifier(feature) for classifier, feature in zip(self.view_classifiers, view_features)],
+            [
+                classifier(feature)
+                for classifier, feature in zip(self.view_classifiers, view_features)
+            ],
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 3 步：计算每个视角的动态可信度
+        # 第 4 步：保持 baseline raw-logit VRG 头形式，但让它读取 cross-view-enriched gating feature。
         confidences = torch.stack(
-            [head(feature) for head, feature in zip(self.confidence_heads, view_features)],
+            [head(feature) for head, feature in zip(self.confidence_heads, gating_features)],
             dim=1,
         )  # (B, 3, 1)
 
-        # softmax 归一化：3 个可信度 → 和为 1 的融合权重
+        # 第 5 步：softmax 归一化，得到 3 个视角的融合权重
         fusion_weights = torch.softmax(confidences, dim=1)  # (B, 3, 1)
 
-        # 第 4 步：动态加权求和
+        # 第 6 步：动态加权求和
         # (B, 3, 2) × (B, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
         return (view_logits * fusion_weights).sum(dim=1)
 

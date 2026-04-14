@@ -16,6 +16,7 @@ study:
   enqueue_current_template: true
 
 python_candidates:
+  - scripts/gpu_python.sh
   - .venv/bin/python
   - python3
   - python

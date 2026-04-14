@@ -55,6 +55,7 @@ LOOP:
 - RAM: 128GB
 - GPU 0: NVIDIA RTX 3090（24GB VRAM）→ Slot 0，`CUDA_VISIBLE_DEVICES=0`
 - GPU 1: NVIDIA RTX 4090（24GB VRAM）→ Slot 1，`CUDA_VISIBLE_DEVICES=1`
+- 设备映射提醒：某些宿主环境里 `nvidia-smi` 与 PyTorch 的设备顺序可能不一致；长跑前先用 `torch.cuda.get_device_name(...)` 或 `scripts/gpu_python.sh` 实测当前命中的 GPU
 - `num_workers`: 默认 1（注意：如果 CPU 占用不高，Agent 可以自动调整 num_workers 的水平以加速训练）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
 
