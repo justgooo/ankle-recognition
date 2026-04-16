@@ -344,23 +344,45 @@ class GenericTimmEncoder(nn.Module):
             )
         else:
             self.proj = nn.Identity()
-            
-        # 尽力而为的冻结策略
+
+        # 尽力而为的冻结策略：
+        # - ResNeXt / SENet 这类 timm ResNet 家族暴露 conv1/layer1/layer2/layer3
+        # - CSPNet 这类模型暴露 stem + stages[0/1/2/...]
+        # 之前仅尝试访问 "stages_0" 这类不存在的属性，导致 cspnet 在
+        # freeze_layers=3 时几乎没有真正冻结，比较结果不公平。
+        self._apply_freeze_layers(freeze_layers)
+
+    @staticmethod
+    def _freeze_module(module: nn.Module) -> None:
+        for param in module.parameters():
+            param.requires_grad = False
+
+    def _freeze_attr_if_present(self, name: str) -> bool:
+        if not hasattr(self.backbone, name):
+            return False
+        self._freeze_module(getattr(self.backbone, name))
+        return True
+
+    def _freeze_stage_prefix(self, count: int) -> None:
+        stages = getattr(self.backbone, "stages", None)
+        if stages is None:
+            return
+        if not isinstance(stages, (nn.Sequential, nn.ModuleList, list, tuple)):
+            return
+        for stage in list(stages)[:count]:
+            self._freeze_module(stage)
+
+    def _apply_freeze_layers(self, freeze_layers: int) -> None:
         if freeze_layers >= 1:
-            for name in ['conv1', 'bn1', 'layer1', 'stem', 'stages_0']:
-                if hasattr(self.backbone, name):
-                    for param in getattr(self.backbone, name).parameters():
-                        param.requires_grad = False
+            for name in ("conv1", "bn1", "layer1", "stem"):
+                self._freeze_attr_if_present(name)
+            self._freeze_stage_prefix(1)
         if freeze_layers >= 2:
-            for name in ['layer2', 'stages_1']:
-                if hasattr(self.backbone, name):
-                    for param in getattr(self.backbone, name).parameters():
-                        param.requires_grad = False
+            self._freeze_attr_if_present("layer2")
+            self._freeze_stage_prefix(2)
         if freeze_layers >= 3:
-            for name in ['layer3', 'stages_2']:
-                if hasattr(self.backbone, name):
-                    for param in getattr(self.backbone, name).parameters():
-                        param.requires_grad = False
+            self._freeze_attr_if_present("layer3")
+            self._freeze_stage_prefix(3)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         feat = self.backbone(x)
