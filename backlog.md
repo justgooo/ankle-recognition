@@ -45,7 +45,7 @@
 > - 这一轮是 **本地兼容性 + backbone 快筛**，不与当前 canonical `val_acc` 主线（`a60c3e0` / `c30fcae`）直接比较。
 > - 当前本地环境于 **2026-04-16** 实测为：Windows `.venv\\Scripts\\python.exe` + 单卡 `NVIDIA GeForce RTX 2070 SUPER (8192 MiB)`。
 > - 原始 `data/realdata/metadata.csv` 在本地存在 `CTdata2/` 路径漂移；本轮通过 `scripts/prepare_local_metadata.py` 生成 `autoresearch_logs/local_metadata_fixed.csv` 供训练使用，**未修改原始数据文件与 split**。
-> - 为适配 8GB 显存，当前 `configs/autoresearch_proxy.yaml` / `configs/autoresearch_formal.yaml` 已同步收紧到：`image_size=256`, `num_slices_per_view=8`, `batch_size=2`, `num_workers=0`。
+> - 为适配 8GB 显存与本地路径现状，当前 `configs/autoresearch_proxy.yaml` / `configs/autoresearch_formal.yaml` 已同步切到 `autoresearch_logs/local_metadata_fixed.csv`，并收紧到：`image_size=256`, `num_slices_per_view=8`, `batch_size=2`, `num_workers=0`。
 > - backbone 对比使用统一 quick-compare 配方：`feature fusion`, `share_backbone=false`, `freeze_layers=3`, `use_pretrained=true`, `dropout=0.3`, `lr=5e-5`, `weight_decay=1e-4`, `epochs=1`。
 
 - [x] **CMP-LOCAL8G-RESUNET**：`configs/cmp_local8g_feature_resunet.yaml` → `val_acc=0.8085106382978723`, `val_auc=0.915`, `val_f1=0.7857142857142857`, `peak_vram=1.23 GiB`, `total_seconds=443.9` → **keep**（本轮四个 backbone 中 accuracy / AUC 均最佳，且显存余量最充足，是当前 2070S 路线的首选 backbone）
