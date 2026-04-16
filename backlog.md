@@ -16,9 +16,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CVT-VRG-CTX-01（winner-template attention-for-gating-only probe；`seed=42`, full-rank 1-layer `CrossViewAttention` moved to reliability estimation only while per-view classifier logits stayed on the baseline path；commit `eb8e64b`） |
-| 上次结果 | discard（`val_acc=0.8404255319148937`, `val_auc=0.894090909090909`, `val_f1=0.8192771084337349`, `peak_vram=14.5 GiB`, `total_seconds=623.5`。较 current proxy winner `0.8829787234042553` 低 `0.0425531914893616`；accuracy 与 canonical baseline rerun `0.8404255319148937` 完全持平，但 `val_auc` 仍低 `0.0240909090909092`。相对 `CVT-XVIEW-03` 的 mean-bias gating-only 失败点，accuracy 回升 `0.0744680851063831`、`val_auc` 回升 `0.034090909090909`，说明 richer attention context 确实比均值 bias 更稳；但它仍没有形成任何净收益，也未追平 `CVT-XVIEW-04` 的局部 accuracy 回升。由此可判定 classifier-side 与 gating-side 两条新的 cross-view 结构线都已缺乏继续投入价值。） |
-| 下一步 | 按 `ASK FIRST` 规则，当前连续 discard 已超过 5 且新 cross-view 思路已收束：若继续，应先由人类确认是转去 legacy `VR-MS-01~03` / formal 对比，还是为当前 `val_acc` 主线补充新的 **非 cross-view** 实验方向。 |
+| 上次实验 | CMP-LOCAL8G-BB（按本地 `RTX 2070 SUPER 8GB` 预算进行的 feature-fusion backbone quick compare；`resunet / resnext / senet / cspnet` 统一使用 `image_size=256`, `num_slices_per_view=8`, `batch_size=2`, `num_workers=0`, `epochs=1`；commit `e486601`） |
+| 上次结果 | keep（本轮本地 8GB 快筛排名：`resunet` `val_acc=0.8085106382978723`, `val_auc=0.915`, `peak_vram=1.23 GiB` > `cspnet` `0.7553191489361702`, `0.8818181818181818`, `5.61 GiB` >>> `senet` `0.5319148936170213`, `0.7781818181818181`, `1.46 GiB` > `resnext` `0.46808510638297873`, `0.7272727272727272`, `1.32 GiB`。说明在当前 2070S-safe 几何下，`resunet` 明显是最优 backbone，`cspnet` 是唯一仍有继续推进价值的备选，而 `senet / resnext` 应停止继续投入。） |
+| 下一步 | 若继续当前本地 8GB 路线，应只推进 `resunet` 与 `cspnet` 做 `4-epoch proxy` 对比；`senet / resnext` 直接关闭。当前 canonical `val_acc` 主线仍与旧 `512x16 / decision fusion` 记录分开记账，不直接比较。 |
 | 连续 discard 计数 | 30 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
@@ -36,6 +36,25 @@
 | **tie-break** | **0.9318181818181819** | `a60c3e0` | fresh proxy study trial 0 | 与上述 winner 同一 trial 的 `best_val.auc`；当 `val_acc` 持平时仍按此决胜 |
 | canonical formal 参考 | 0.8617021276595744 | `c30fcae` | `configs/autoresearch_formal.yaml`（trial 0 模板超参） | 当前主线首个 formal confirmation；`val_auc=0.9372727272727273`，准确率低于 proxy winner 但 AUC 更高 |
 | legacy no_miss 参考 | 0.915 | `d63b49a` (formal) | 旧 Decision Fusion / 旧实验语义 | **legacy reference only**，不可与当前主线直接比较 |
+
+---
+
+## 2026-04-16：本地 2070S 基础 Backbone Quick Compare
+
+> **独立 campaign 说明**
+> - 这一轮是 **本地兼容性 + backbone 快筛**，不与当前 canonical `val_acc` 主线（`a60c3e0` / `c30fcae`）直接比较。
+> - 当前本地环境于 **2026-04-16** 实测为：Windows `.venv\\Scripts\\python.exe` + 单卡 `NVIDIA GeForce RTX 2070 SUPER (8192 MiB)`。
+> - 原始 `data/realdata/metadata.csv` 在本地存在 `CTdata2/` 路径漂移；本轮通过 `scripts/prepare_local_metadata.py` 生成 `autoresearch_logs/local_metadata_fixed.csv` 供训练使用，**未修改原始数据文件与 split**。
+> - 为适配 8GB 显存与本地路径现状，当前 `configs/autoresearch_proxy.yaml` / `configs/autoresearch_formal.yaml` 已同步切到 `autoresearch_logs/local_metadata_fixed.csv`，并收紧到：`image_size=256`, `num_slices_per_view=8`, `batch_size=2`, `num_workers=0`。
+> - backbone 对比使用统一 quick-compare 配方：`feature fusion`, `share_backbone=false`, `freeze_layers=3`, `use_pretrained=true`, `dropout=0.3`, `lr=5e-5`, `weight_decay=1e-4`, `epochs=1`。
+
+- [x] **CMP-LOCAL8G-RESUNET**：`configs/cmp_local8g_feature_resunet.yaml` → `val_acc=0.8085106382978723`, `val_auc=0.915`, `val_f1=0.7857142857142857`, `peak_vram=1.23 GiB`, `total_seconds=443.9` → **keep**（本轮四个 backbone 中 accuracy / AUC 均最佳，且显存余量最充足，是当前 2070S 路线的首选 backbone）
+- [x] **CMP-LOCAL8G-RESNEXT**：`configs/cmp_local8g_feature_resnext.yaml` → `val_acc=0.46808510638297873`, `val_auc=0.7272727272727272`, `val_f1=0.6376811594202898`, `peak_vram=1.32 GiB`, `total_seconds=607.6` → **discard**（准确率最低，且训练时长最高；在当前预算下没有继续投入价值）
+- [x] **CMP-LOCAL8G-SENET**：`configs/cmp_local8g_feature_senet.yaml` → `val_acc=0.5319148936170213`, `val_auc=0.7781818181818181`, `val_f1=0.0`, `peak_vram=1.46 GiB`, `total_seconds=493.5` → **discard**（比 `resnext` 稍好，但模型几乎退化为单类预测，仍明显弱于 `resunet / cspnet`）
+- [x] **CMP-LOCAL8G-CSPNET**：`configs/cmp_local8g_feature_cspnet.yaml` → `val_acc=0.7553191489361702`, `val_auc=0.8818181818181818`, `val_f1=0.6567164179104478`, `peak_vram=5.61 GiB`, `total_seconds=475.0` → **discard**（是唯一接近 `resunet` 的备选，但 accuracy 仍低 `0.0531914893617021`；运行中 `nvidia-smi` 一度接近 `7.7 / 8.0 GiB`，说明能跑但显存冗余不大）
+
+- **本轮结论**：`resunet` > `cspnet` >>> `senet` > `resnext`
+- **推荐动作**：若继续本地 8GB 路线，只保留 `resunet` 与 `cspnet` 做后续 `4-epoch proxy`；`senet / resnext` 直接停止
 
 ---
 
