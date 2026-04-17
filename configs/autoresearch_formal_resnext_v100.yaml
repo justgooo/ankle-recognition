@@ -2,7 +2,7 @@
 # This continues the fair-backbone recipe rather than the canonical ResUNet mainline.
 experiment_name: autoresearch_formal_resnext_v100
 output_dir: runs/autoresearch_formal_resnext_v100
-seed: 42
+seed: 123
 
 data:
   csv_path: data/realdata/metadata.csv

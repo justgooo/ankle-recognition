@@ -18,9 +18,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-STAGE3-MULTISEED（沿 `docs/fair_backbone_compare.md` 的 Stage 3，在与上一轮完全相同的 matched V100 formal recipe 上，对 `resunet / resnext` 补做 `seed=123 / 456` 稳定性确认；共 4 个 formal run；commit `2123941`） |
-| 上次结果 | keep（Stage 3 完成后，`resnext` 在 `seed=42/123/456` 上的 `val_acc` 为 `0.9148936170212766 / 0.9148936170212766 / 0.9042553191489362`，`val_auc` 为 `0.9404545454545454 / 0.9695454545454545 / 0.9413636363636364`；`resunet` 对应为 `0.9148936170212766 / 0.8829787234042553 / 0.9042553191489362` 和 `0.9222727272727274 / 0.9363636363636363 / 0.9309090909090909`。`resnext` 在 3 个 seed 上 accuracy 从不输给 `resunet`，且 AUC 3/3 全胜，因此该独立 fair-backbone campaign 的 stable winner 可以正式定为 `resnext`。） |
-| 下一步 | `fair_backbone_compare` 路线到此可收束：若继续推进该独立 backbone campaign，只保留 `resnext`；若回到仓库主任务，应重新切回当前 canonical `val_acc` 主线（阶段 10），而不是继续补 `resunet` 对照。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM（把 dedicated ResNeXt V100 formal 模板对齐到上一轮 main-study winner：`freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`，保持原始 `fusion_hidden_dim=256` / `256x8` / mean pooling 几何不变，并在 `GPU 2` 上做 1 次 direct formal confirmation；commit `072e601`） |
+| 上次结果 | keep（direct formal confirmation 得到 `val_acc=0.925531914893617`, `val_auc=0.9563636363636363`, `val_f1=0.9176470588235294`，较此前 fair-backbone stable winner `resnext` 的 `0.9148936170212766 / 0.9404545454545454` 再提升 `+0.0106382978723404` accuracy 与 `+0.0159090909090909` AUC。说明上一轮 main-study 的 trial-3 角点并非一次性搜索噪声，而是能转化为更强 direct formal 证据的新 best keep。） |
+| 下一步 | 若继续该独立 ResNeXt V100 side campaign，优先对这个 fixed-config formal winner 做 1 次 alternate-seed formal confirmation（先测 `seed=123` 或 `seed=456`），确认 `0.9255 / 0.9564` 的稳定性；不要回到 `384` head，也不要补 `resunet / senet / cspnet`。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 0 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
@@ -99,6 +99,51 @@
 
 - **Stage 3 结论**：`resnext` 在 3 个 seed 上 accuracy 从不输给 `resunet`，AUC 则 3/3 全胜，因此该独立 `fair_backbone_compare` campaign 的稳定胜者正式定为 `resnext`
 - **附带观察**：`resnext` 的训练曲线明显比 `resunet` 更慢热、更波动，尤其 `seed=456` 前半程多次掉到 `0.8` 以下；但以 `best_val_accuracy_then_auc` 作为规则时，它最终仍保持对 `resunet` 的系统性优势
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（fusion_hidden_dim=384）
+
+> **独立 campaign 说明**
+> - 这一轮显式延续上面的 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling）。
+> - 唯一离散改动：把 dedicated formal template `configs/autoresearch_formal_resnext_v100.yaml` 的 `fusion_hidden_dim` 从 `256` 放宽到 `384`，其余由 fresh adaptive Optuna main study 做小预算标量调参。
+> - 本轮 fresh study 为 `runs/optuna_main_autoloop/iter_0001_20260418_023423`，运行 commit 为 `992687c`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-HEAD384**：`configs/autoresearch_formal_resnext_v100.yaml`（`fusion_hidden_dim=384`）+ fresh adaptive main study → best completed trial 为 **trial 3**（`freeze_layers=3`, `lr=5e-5`, `weight_decay=5e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`）→ `val_acc=0.8829787234042553`, `val_auc=0.9431818181818181`, `val_f1=0.8607594936708861`, `peak_vram=2.15 GiB`, `total_seconds=859.1` → **discard**（相对 widened-head study 内的 template trial 0 `0.8617021276595744 / 0.9663636363636363` 有 accuracy 提升 `+0.0212765957446809`，但仍较 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766` 低 `0.0319148936170213`；说明仅放宽 fusion bottleneck 并没有把 ResNeXt 的 formal ceiling 推到新高。）
+- **Monitor takeaways**：在这 4 个 completed trial 里，`freeze_layers=3` 明显优于 `freeze_layers=2`；更低的 `lr=5e-5`、更高的 `weight_decay=5e-4`、更低的 `dropout=0.25` 共同对应最佳 accuracy。唯一的 `freeze_layers=2` 试次（trial 2）把 `peak_vram` 提到 `6.24 GiB`，但 accuracy 只追平 trial 1 且 AUC 更低，说明解冻更深层并未换来净收益。
+- **本轮结论**：`fusion_hidden_dim=384` 不晋升；该独立 ResNeXt V100 side campaign 仍以原始 `256` 宽 head 的 matched formal winner（`val_acc=0.9148936170212766`, `val_auc=0.9404545454545454`）作为当前应保留的最好证据。
+- **推荐动作**：若后续继续该独立 side campaign，应把本轮 main-study 暗示较优的标量组合迁回原始 `256` 宽 recipe 做单点验证，而不是继续加宽 head 或重新补 `resunet` 对照。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（回到 head256 + scalar retune）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling）。
+> - 唯一离散改动：把 dedicated formal template `configs/autoresearch_formal_resnext_v100.yaml` 从 widened-head 试验状态迁回原始 `fusion_hidden_dim=256`，并把 base template 标量锚定到上一轮 main-study 暗示较优的组合（`freeze_layers=3`, `lr=5e-5`, `weight_decay=5e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`）。
+> - 由于起跑时 `GPU 0` 不满足本轮 idle 阈值（`used≈2152 MiB`, `util≈27%`），本轮 fresh study 改走允许的单卡 fallback `GPU 2`；fresh study 为 `runs/optuna_main_autoloop/iter_0002_20260418_030934`，运行 commit 为 `5a1c113`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-HEAD256-RETUNE**：`configs/autoresearch_formal_resnext_v100.yaml`（`fusion_hidden_dim=256`，base template 迁入上一轮较优锚点）+ fresh adaptive main study → best completed trial 为 **trial 3**（`freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）→ `val_acc=0.9042553191489362`, `val_auc=0.9368181818181818`, `val_f1=0.891566265060241`, `peak_vram=6.23 GiB`, `total_seconds=827.8` → **discard**（较 widened-head study best `0.8829787234042553 / 0.9431818181818181` 回升 `+0.0212765957446809` accuracy，但仍较 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 低 `0.0106382978723404` accuracy，且 AUC 也低 `0.0036363636363636`，因此不足以替换当前应保留证据。）
+- **Monitor takeaways**：回到 `head=256` 后，搜索上界明显高于上一轮 widened-head study；本轮唯一突破 `0.9` accuracy 的是更激进的 `freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0` 角点。作为对照，迁回的锚点组合在 3 个 completed trial 里只落在 `0.8723404255319149 ~ 0.8829787234042553`，说明上一轮 `head384` monitor 所暗示的优选标量并不能直接把原始 `head256` recipe 拉回 stable-winner 水平。
+- **附带观察**：trial 0 与 trial 2 被 Optuna 命中了同一组参数（`freeze_layers=3`, `lr=5e-5`, `weight_decay=5e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`），但分别得到 `0.8723404255319149` 与 `0.8829787234042553` accuracy，提示当前 ResNeXt side campaign 仍存在不小的 run-to-run 波动。
+- **本轮结论**：把模板迁回原始 `256` 宽 head 是正确方向，但目前找到的更优 retune 角点仍未超过既有 fair-backbone stable winner，因此本轮仍记 **discard**。
+- **推荐动作**：若后续继续该独立 side campaign，优先对本轮 trial-3 角点做 1 次 fixed-config formal confirmation，判断 `0.9043` 是否可复现；若仍低于 `0.9149 / 0.9405`，则应收束该 side campaign，不再继续围绕 ResNeXt 标量做小步扫描。
+
+---
+
+## 2026-04-18：ResNeXt V100 Direct Formal Confirmation（head256 retune winner）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256` 不变。
+> - 唯一离散改动：把 dedicated formal template `configs/autoresearch_formal_resnext_v100.yaml` 对齐到上一轮 main-study 的 best completed trial（`freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`），然后直接做 1 次 formal confirmation。
+> - 本轮运行 commit 为 `072e601`；由于这是 fixed-config confirmation 而不是 fresh study，直接在允许的单卡 fallback `GPU 2` 上运行 `train.py --config configs/autoresearch_formal_resnext_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM**：`configs/autoresearch_formal_resnext_v100.yaml`（`head256`, `freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）→ `val_acc=0.925531914893617`, `val_auc=0.9563636363636363`, `val_f1=0.9176470588235294`, `peak_vram=6.23 GiB`, `total_seconds=824.0` → **keep**（较上一轮 main-study winner 的 `0.9042553191489362 / 0.9368181818181818` 再提升 `+0.0212765957446808` accuracy 与 `+0.0195454545454545` AUC，也较此前 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 提升 `+0.0106382978723404` accuracy 与 `+0.0159090909090909` AUC；说明这组更激进的解冻与优化标量能够稳定转化为更强的 direct formal 证据。）
+- **本轮结论**：上一轮 main-study 的 trial-3 角点不是一次性搜索噪声，而是当前独立 ResNeXt V100 side campaign 的新 best keep；它现在取代旧的 fair-backbone stable winner，成为该 campaign 最强的 retained evidence。
+- **推荐动作**：若后续继续该独立 side campaign，应先做 1 次 alternate-seed formal confirmation（优先 `seed=123` 或 `seed=456`）来检验稳定性，再决定是否围绕这一新 anchor 开 fresh adaptive main study；不要回到 `head384`，也不要重新补非 `resnext` backbone。
 
 ---
 
