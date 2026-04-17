@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM（把 dedicated ResNeXt V100 formal 模板对齐到上一轮 main-study winner：`freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`，保持原始 `fusion_hidden_dim=256` / `256x8` / mean pooling 几何不变，并在 `GPU 2` 上做 1 次 direct formal confirmation；commit `072e601`） |
-| 上次结果 | keep（direct formal confirmation 得到 `val_acc=0.925531914893617`, `val_auc=0.9563636363636363`, `val_f1=0.9176470588235294`，较此前 fair-backbone stable winner `resnext` 的 `0.9148936170212766 / 0.9404545454545454` 再提升 `+0.0106382978723404` accuracy 与 `+0.0159090909090909` AUC。说明上一轮 main-study 的 trial-3 角点并非一次性搜索噪声，而是能转化为更强 direct formal 证据的新 best keep。） |
-| 下一步 | 若继续该独立 ResNeXt V100 side campaign，优先对这个 fixed-config formal winner 做 1 次 alternate-seed formal confirmation（先测 `seed=123` 或 `seed=456`），确认 `0.9255 / 0.9564` 的稳定性；不要回到 `384` head，也不要补 `resunet / senet / cspnet`。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-SEED123（保持 dedicated ResNeXt V100 retuned formal winner 的 `freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`, `fusion_hidden_dim=256` / `256x8` / mean pooling 几何完全不变，仅把 `seed` 从 `42` 改为 `123`，并在 `GPU 2` 上做 1 次 alternate-seed direct formal confirmation；commit `e6f36d0`） |
+| 上次结果 | discard（alternate-seed direct formal 只得到 `val_acc=0.8829787234042553`, `val_auc=0.91`, `val_f1=0.8571428571428571`，较当前 retained keep `0.925531914893617 / 0.9563636363636363` 明显回落 `0.0425531914893617 / 0.0463636363636363`，也低于旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454`。说明当前新 anchor 至少在 `seed=123` 上没有稳定复现，应暂时视为 seed-sensitive 证据，而不是已确认稳定的新配方。） |
+| 下一步 | 若继续该独立 ResNeXt V100 side campaign，优先补 1 次 `seed=456` direct formal confirmation；在得到第二个 alternate-seed 结果前，不要围绕当前 anchor 再开 fresh adaptive main study，也不要回到 `384` head 或补非 `resnext` backbone。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0 |
+| 连续 discard 计数 | 1 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -144,6 +144,20 @@
 - [x] **CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM**：`configs/autoresearch_formal_resnext_v100.yaml`（`head256`, `freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）→ `val_acc=0.925531914893617`, `val_auc=0.9563636363636363`, `val_f1=0.9176470588235294`, `peak_vram=6.23 GiB`, `total_seconds=824.0` → **keep**（较上一轮 main-study winner 的 `0.9042553191489362 / 0.9368181818181818` 再提升 `+0.0212765957446808` accuracy 与 `+0.0195454545454545` AUC，也较此前 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 提升 `+0.0106382978723404` accuracy 与 `+0.0159090909090909` AUC；说明这组更激进的解冻与优化标量能够稳定转化为更强的 direct formal 证据。）
 - **本轮结论**：上一轮 main-study 的 trial-3 角点不是一次性搜索噪声，而是当前独立 ResNeXt V100 side campaign 的新 best keep；它现在取代旧的 fair-backbone stable winner，成为该 campaign 最强的 retained evidence。
 - **推荐动作**：若后续继续该独立 side campaign，应先做 1 次 alternate-seed formal confirmation（优先 `seed=123` 或 `seed=456`）来检验稳定性，再决定是否围绕这一新 anchor 开 fresh adaptive main study；不要回到 `head384`，也不要重新补非 `resnext` backbone。
+
+---
+
+## 2026-04-18：ResNeXt V100 Alternate-Seed Formal Confirmation（seed123）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何与 retuned winner 标量完全不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`, `freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`。
+> - 唯一离散改动：把 dedicated formal template `configs/autoresearch_formal_resnext_v100.yaml` 的 `seed` 从 `42` 改为 `123`，然后直接做 1 次 alternate-seed formal confirmation。
+> - 本轮运行 commit 为 `e6f36d0`；由于这是 fixed-config confirmation 而不是 fresh study，直接在允许的单卡 fallback `GPU 2` 上运行 `train.py --config configs/autoresearch_formal_resnext_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-FORMAL-SEED123**：`configs/autoresearch_formal_resnext_v100.yaml`（仅 `seed=123`，其余保持当前 retuned winner 不变）→ `val_acc=0.8829787234042553`, `val_auc=0.91`, `val_f1=0.8571428571428571`, `peak_vram=6.23 GiB`, `total_seconds=827.9` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 回落 `0.0425531914893617 / 0.0463636363636363`，也较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 低 `0.0319148936170213 / 0.0304545454545454`；说明当前新 anchor 至少在 `seed=123` 上并不稳定，不能把上一轮 keep 直接视为已完成多 seed 证实的新配方。）
+- **本轮结论**：上一轮 direct formal keep 仍然是该独立 ResNeXt V100 side campaign 的最强单点证据，但它现在应被视为存在明显 seed sensitivity 的 anchor，而不是已经通过 alternate-seed confirmation 的稳定 winner。
+- **推荐动作**：若后续继续该独立 side campaign，应优先补 1 次 `seed=456` direct formal confirmation，先判断这次回落是 `seed=123` 特例还是更普遍的不稳定；在此之前不要围绕当前 anchor 再开 fresh adaptive main study。
 
 ---
 
