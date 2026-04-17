@@ -1,0 +1,34 @@
+study:
+  name: autoresearch_resnext_v100_proxy_tuning
+  phase: proxy
+  base_config: configs/autoresearch_proxy_resnext_v100.yaml
+  study_root: runs/optuna_proxy_resnext_v100
+  direction: maximize
+  n_trials: 6
+  timeout_minutes: 120
+  trial_timeout_minutes: 45
+  failed_score: -1.0
+  sampler: tpe
+  sampler_seed: 42
+  startup_trials: 2
+  pruner: none
+  objective_metric: val_accuracy
+  enqueue_current_template: true
+
+python_candidates:
+  - .venv/bin/python
+  - .venv/Scripts/python.exe
+
+search_space:
+  model.freeze_layers:
+    type: categorical
+    choices: [2, 3]
+  train.lr:
+    type: categorical
+    choices: [5.0e-5, 7.5e-5, 1.0e-4, 1.25e-4]
+  train.weight_decay:
+    type: categorical
+    choices: [1.0e-4, 5.0e-4]
+  model.dropout:
+    type: categorical
+    choices: [0.25, 0.3, 0.35]

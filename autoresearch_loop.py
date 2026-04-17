@@ -85,6 +85,11 @@ def build_prompt(
     max_utilization: int,
     python_cmd: str,
     iteration_plan: dict[str, str],
+    main_search_template: str,
+    proxy_search_template: str,
+    formal_config: str,
+    proxy_config: str,
+    campaign_note: str,
 ) -> str:
     main_study_command = shell_join(
         [
@@ -130,11 +135,11 @@ def build_prompt(
     )
     formal_command = (
         f"CUDA_VISIBLE_DEVICES={fallback_gpu_id} timeout 10800 "
-        f"{shell_join([python_cmd, 'train.py', '--config', 'configs/autoresearch_formal.yaml'])} > run.log 2>&1"
+        f"{shell_join([python_cmd, 'train.py', '--config', formal_config])} > run.log 2>&1"
     )
     proxy_command = (
         f"CUDA_VISIBLE_DEVICES={fallback_gpu_id} timeout 3600 "
-        f"{shell_join([python_cmd, 'train.py', '--config', 'configs/autoresearch_proxy.yaml'])} > proxy.log 2>&1"
+        f"{shell_join([python_cmd, 'train.py', '--config', proxy_config])} > proxy.log 2>&1"
     )
 
     lane_labels = {
@@ -147,7 +152,7 @@ def build_prompt(
 
     primary_lane_instructions = {
         "main-study": f"""默认优先主流程：
-- 把 `configs/optuna_main_search.yaml` 复制成 `{iteration_plan["main_search_config"]}`，并把其中 `study.study_root` 改成 `{iteration_plan["main_study_root"]}`。
+- 把 `{main_search_template}` 复制成 `{iteration_plan["main_search_config"]}`，并把其中 `study.study_root` 改成 `{iteration_plan["main_study_root"]}`。
 - 优先运行多卡自适应 main study：
   {main_study_command} > optuna_main.log 2>&1
 - study 结束后运行 monitor 汇总：
@@ -155,7 +160,7 @@ def build_prompt(
 - 以最佳 completed trial 的 `summary.json.best_val.accuracy` 为主指标，`best_val.auc` 为 tie-break；只有在需要最终确认时才补 1 次 direct formal：
   {formal_command}""",
         "proxy-study": f"""默认优先主流程：
-- 把 `configs/optuna_proxy_search.yaml` 复制成 `{iteration_plan["proxy_search_config"]}`，并把其中 `study.study_root` 改成 `{iteration_plan["proxy_study_root"]}`。
+- 把 `{proxy_search_template}` 复制成 `{iteration_plan["proxy_search_config"]}`，并把其中 `study.study_root` 改成 `{iteration_plan["proxy_study_root"]}`。
 - 优先运行自适应 proxy study：
   {proxy_study_command} > optuna_proxy.log 2>&1
 - study 结束后运行 monitor 汇总：
@@ -194,12 +199,19 @@ def build_prompt(
 - 单卡 fallback 槽位：CUDA_VISIBLE_DEVICES={fallback_gpu_id}
 - 默认研究 lane：{default_lane_text}
 - 默认优先使用 `scripts/autoresearch_main.py` / `scripts/autoresearch_proxy.py` 这两个兼容入口；它们底层分别委托给当前 canonical `scripts/optuna_main.py` / `scripts/optuna_proxy.py`
+- 本轮 main search 模板：`{main_search_template}`
+- 本轮 proxy search 模板：`{proxy_search_template}`
+- 本轮 direct formal 配置：`{formal_config}`
+- 本轮 direct proxy 配置：`{proxy_config}`
 - fresh run 默认必须使用新的 `study_root`；只有你明确想续跑同一个 study 时才允许 `--resume`
 - 不要修改 train.py、src/dataset.py、src/utils.py、tools/、任何数据文件或数据集划分
 - 不要使用测试集指标做模型选择
 - 不要阅读全文日志；只允许 `tail -30`
 - 不要问“是否继续”；外层 loop 会继续
 - 不要在本 session 里再自行写无限循环；做完一轮就退出
+
+本轮 campaign 额外约束（高优先级）：
+{campaign_note if campaign_note else "- 无额外约束。"}
 
 本轮预留的 fresh study 路径：
 - main search-config copy：{iteration_plan["main_search_config"]}
@@ -296,6 +308,31 @@ def parse_args() -> argparse.Namespace:
         help="Idle-GPU utilization threshold passed to adaptive Optuna entrypoints.",
     )
     parser.add_argument(
+        "--main-search-template",
+        default="configs/optuna_main_search.yaml",
+        help="Main-study search-config template copied for each loop iteration.",
+    )
+    parser.add_argument(
+        "--proxy-search-template",
+        default="configs/optuna_proxy_search.yaml",
+        help="Proxy-study search-config template copied for each loop iteration.",
+    )
+    parser.add_argument(
+        "--formal-config",
+        default="configs/autoresearch_formal.yaml",
+        help="Direct-formal config used in prompt fallback commands.",
+    )
+    parser.add_argument(
+        "--proxy-config",
+        default="configs/autoresearch_proxy.yaml",
+        help="Direct-proxy config used in prompt fallback commands.",
+    )
+    parser.add_argument(
+        "--campaign-note",
+        default="",
+        help="Extra high-priority prompt note injected into every coordinator iteration.",
+    )
+    parser.add_argument(
         "--min-disk-free-gb",
         type=int,
         default=10,
@@ -327,6 +364,11 @@ def main() -> None:
         max_utilization=args.max_utilization,
         python_cmd=python_cmd,
         iteration_plan=preview_plan,
+        main_search_template=args.main_search_template,
+        proxy_search_template=args.proxy_search_template,
+        formal_config=args.formal_config,
+        proxy_config=args.proxy_config,
+        campaign_note=args.campaign_note,
     )
 
     if args.print_prompt:
@@ -353,6 +395,11 @@ def main() -> None:
     base_env["AUTORESEARCH_LOOP_MAX_USED_MEMORY_MB"] = str(args.max_used_memory_mb)
     base_env["AUTORESEARCH_LOOP_MAX_UTILIZATION"] = str(args.max_utilization)
     base_env["AUTORESEARCH_LOOP_FALLBACK_GPU_ID"] = str(args.gpu_id)
+    base_env["AUTORESEARCH_LOOP_MAIN_SEARCH_TEMPLATE"] = args.main_search_template
+    base_env["AUTORESEARCH_LOOP_PROXY_SEARCH_TEMPLATE"] = args.proxy_search_template
+    base_env["AUTORESEARCH_LOOP_FORMAL_CONFIG"] = args.formal_config
+    base_env["AUTORESEARCH_LOOP_PROXY_CONFIG"] = args.proxy_config
+    base_env["AUTORESEARCH_LOOP_CAMPAIGN_NOTE"] = args.campaign_note
 
     max_iterations_text = "infinite" if args.max_iterations == 0 else str(args.max_iterations)
 
@@ -366,6 +413,10 @@ def main() -> None:
     print(f" Max workers:     {args.max_workers}")
     print(f" GPU idle rule:   used<={args.max_used_memory_mb} MiB, util<={args.max_utilization}%")
     print(f" Fallback slot:   CUDA_VISIBLE_DEVICES={args.gpu_id}")
+    print(f" Main template:   {args.main_search_template}")
+    print(f" Proxy template:  {args.proxy_search_template}")
+    print(f" Formal config:   {args.formal_config}")
+    print(f" Proxy config:    {args.proxy_config}")
     print(f" Python:          {python_cmd}")
     print(f" Workdir:         {REPO_ROOT}")
     print(f" HOME:            {home_dir}")
@@ -391,6 +442,11 @@ def main() -> None:
             max_utilization=args.max_utilization,
             python_cmd=python_cmd,
             iteration_plan=iteration_plan,
+            main_search_template=args.main_search_template,
+            proxy_search_template=args.proxy_search_template,
+            formal_config=args.formal_config,
+            proxy_config=args.proxy_config,
+            campaign_note=args.campaign_note,
         )
         log_file = log_dir / f"run_{iteration}_{timestamp}.log"
         last_msg_file = log_dir / f"run_{iteration}_{timestamp}.last.txt"
