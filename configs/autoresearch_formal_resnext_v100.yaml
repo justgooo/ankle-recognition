@@ -24,7 +24,7 @@ model:
   freeze_layers: 3
   fusion_hidden_dim: 256
   dropout: 0.3
-  use_attention_pooling: false
+  use_attention_pooling: true
 
 train:
   epochs: 15
