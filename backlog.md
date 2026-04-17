@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-STABLE-DROPOUT035（保持 dedicated ResNeXt V100 stable freeze3 锚点不变：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `gradient_clip_norm=1.0`, `fusion_hidden_dim=256`, `256x8`, feature-fusion + mean pooling，只把 `dropout` 从 `0.3` 上调到 `0.35`，并在 `GPU 2` 上做 1 次 direct formal confirmation；commit `eb823b7`） |
-| 上次结果 | discard（direct formal 只得到 `val_acc=0.8936170212765957`, `val_auc=0.9404545454545454`, `val_f1=0.8809523809523809`。它较上一轮 freeze3 fresh main-study winner `0.925531914893617 / 0.9486363636363636` 回落 `0.0319148936170213 / 0.0081818181818182`，较当前 retained keep `0.925531914893617 / 0.9563636363636363` 低 `0.0319148936170213 / 0.0159090909090909`，且连旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 都没超过（AUC 仅持平、accuracy 低 `0.0212765957446809`）。说明 `freeze_layers=3 + dropout=0.35` 的高点并没有在 direct formal 语义下复现，应视为 search-only 波动而不是新的稳定锚点。） |
-| 下一步 | 若继续该独立 ResNeXt V100 side campaign，应停止继续围绕 `freeze_layers=3 + dropout=0.35` 做 fresh main-study 或 direct formal，并把 dedicated formal template 保持在旧 fair-backbone stable winner（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）作为默认锚点。若外层 loop 仍要求再给该 side campaign 1 次 closure check，唯一还算信息充足的动作是做 1 次 exact old stable winner 的 direct formal rerun；否则应收束该 ResNeXt V100 side campaign。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-STABLE-RERUN（保持 dedicated ResNeXt V100 old stable winner 完全不变：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`, `fusion_hidden_dim=256`, `256x8`, feature-fusion + mean pooling，仅在 `GPU 2` 上对 exact old stable winner 做 1 次 direct formal closure rerun；commit `bf4bd4d`） |
+| 上次结果 | discard（direct formal rerun 得到 `val_acc=0.9042553191489362`, `val_auc=0.9404545454545453`, `val_f1=0.9010989010989011`。它较当前 retained keep `0.925531914893617 / 0.9563636363636363` 低 `0.0212765957446808 / 0.015909090909091`，也较旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 低 `0.0106382978723404` accuracy，AUC 仅近乎持平。虽然它比上一轮 `dropout=0.35` direct formal discard 回升 `0.0106382978723405` accuracy，证明 old stable winner 的排序质量确实更可信，但 exact rerun 仍未把 accuracy 拉回原始 `0.9148936170212766`，说明这条 ResNeXt freeze3 stable 线在当前环境下也没有形成足够稳的 closure evidence。） |
+| 下一步 | 默认应收束该独立 ResNeXt V100 side campaign：当前连续 discard 已达 5，且 exact old stable winner rerun 仍未回到原始 `0.9149`，说明在既定 `resnext` / `256x8` / feature-fusion + mean pooling / 单变量小步标量空间内，已没有新的低风险高信息量动作。若外层 loop 仍强制 continuation，应视为需要人类拍板的新假设，而不是继续盲跑 fresh main-study 或 direct formal。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 4 |
+| 连续 discard 计数 | 5 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -201,6 +201,20 @@
 - [x] **CMP-FAIR-V100-RESNEXT-FORMAL-STABLE-DROPOUT035**：`configs/autoresearch_formal_resnext_v100.yaml`（仅把 stable freeze3 锚点的 `dropout` 从 `0.3` 上调到 `0.35`）→ `val_acc=0.8936170212765957`, `val_auc=0.9404545454545454`, `val_f1=0.8809523809523809`, `peak_vram=2.14 GiB`, `total_seconds=813.1` → **discard**（较上一轮 fresh main-study winner `CMP-FAIR-V100-RESNEXT-MAIN-STABLE-FREEZE3` 的 `0.925531914893617 / 0.9486363636363636` 回落 `0.0319148936170213 / 0.0081818181818182`，说明 search 中出现的 `dropout=0.35` 高点没有在 direct formal 语义下复现；它也较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0319148936170213 / 0.0159090909090909`，并且 accuracy 还比旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766` 低 `0.0212765957446809`，AUC 仅与旧 stable winner 持平。）
 - **本轮结论**：`freeze_layers=3 + dropout=0.35` 不能晋升为新的稳定锚点。上一轮 fresh main-study 所揭示的高点更像 search-only 波动，而不是可直接复现的 formal 改进；对这条线继续投入已缺乏回报。
 - **推荐动作**：若后续继续该独立 side campaign，应把 dedicated formal template 保持在旧 fair-backbone stable winner（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）作为默认锚点，不再继续围绕 `dropout=0.35` 做 fresh main-study 或 direct formal。若外层 loop 仍要求再给该 side campaign 1 次 closure check，唯一还算信息充足的动作是做 1 次 exact old stable winner 的 direct formal rerun；否则应收束该 side campaign。
+
+---
+
+## 2026-04-18：ResNeXt V100 Direct Formal Closure Rerun（exact old stable winner）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何与 old stable winner 完全不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`, `freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`。
+> - 唯一离散动作：不再继续 search 或改动标量，只对 exact old stable winner 做 1 次 direct formal closure rerun，判断它在经历近期 search-only 波动后是否仍能直接回到原始 stable winner 水平。
+> - 本轮运行 commit 为 `bf4bd4d`；由于这是 fixed-config rerun 而不是 fresh study，直接在允许的单卡 fallback `GPU 2` 上运行 `train.py --config configs/autoresearch_formal_resnext_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-FORMAL-STABLE-RERUN**：`configs/autoresearch_formal_resnext_v100.yaml`（exact old stable winner，无任何超参改动）→ `val_acc=0.9042553191489362`, `val_auc=0.9404545454545453`, `val_f1=0.9010989010989011`, `peak_vram=2.14 GiB`, `total_seconds=811.5` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0212765957446808 / 0.015909090909091`；较 old fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 也低 `0.0106382978723404` accuracy，AUC 基本持平。它虽然比上一轮 `dropout=0.35` direct formal discard 回升 `0.0106382978723405` accuracy，说明把模板留在 old stable winner 上确实优于继续追逐 search-only dropout 波动，但 exact rerun 本身仍未复现原始 stable winner 的 accuracy ceiling。）  
+- **本轮结论**：closure check 已完成，而且结果偏负面。当前 ResNeXt V100 side campaign 在既定 `256x8` / feature-fusion + mean pooling / freeze3 stable-family 语义下，已经没有足够强的 direct formal 证据支持继续做新的小步扫描。
+- **推荐动作**：默认收束并归档该独立 side campaign。若外层 loop 仍要求 continuation，应先由人类明确给出新的离散假设；按协议，当前已属于“连续 5 个以上实验 discard 且没有新思路”的状态，不应继续盲跑。
 
 ---
 
