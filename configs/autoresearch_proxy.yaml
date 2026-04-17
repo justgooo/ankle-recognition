@@ -1,15 +1,15 @@
-# Fast proxy config for local 8 GB GPUs such as RTX 2070 SUPER.
-# Keeps the current ResUNet + AttentionPooling + VRG decision-fusion path,
-# but trims geometry so proxy runs stay within the local memory budget.
+# Fast proxy config for the main autoresearch lane.
+# Keeps the current ResUNet + AttentionPooling + VRG decision-fusion path
+# with the full default geometry.
 experiment_name: autoresearch_proxy
 output_dir: runs/autoresearch_proxy
 seed: 42
 
 data:
-  csv_path: autoresearch_logs/local_metadata_fixed.csv
+  csv_path: data/realdata/metadata.csv
   base_dir: .
-  image_size: 256
-  num_slices_per_view: 8
+  image_size: 512
+  num_slices_per_view: 16
   trim_edge_slices: 1
   batch_size: 2
   num_workers: 0

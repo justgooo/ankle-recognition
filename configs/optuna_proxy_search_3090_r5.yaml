@@ -17,8 +17,7 @@ study:
 
 python_candidates:
   - .venv/bin/python
-  - python3
-  - python
+  - .venv/Scripts/python.exe
 
 fixed_overrides:
   model.freeze_layers: 3

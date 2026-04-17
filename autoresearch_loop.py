@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -38,58 +39,195 @@ def repo_python_display(python_path: Path) -> str:
         return str(python_path)
 
 
-def build_prompt(default_lane: str, gpu_id: int, python_cmd: str) -> str:
+def repo_relative(path: Path) -> str:
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def resolve_home_dir() -> Path:
+    raw_home = os.environ.get("HOME")
+    if raw_home:
+        return Path(raw_home).expanduser()
+    return Path.home()
+
+
+def resolve_codex_home(home_dir: Path) -> Path:
+    raw_codex_home = os.environ.get("CODEX_HOME")
+    if raw_codex_home:
+        return Path(raw_codex_home).expanduser()
+    return home_dir / ".codex"
+
+
+def shell_join(parts: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def build_iteration_plan(iteration: int, timestamp: str) -> dict[str, str]:
+    tag = f"iter_{iteration:04d}_{timestamp}"
+    generated_dir = REPO_ROOT / "autoresearch_logs" / "generated_search_configs"
+    return {
+        "tag": tag,
+        "main_search_config": repo_relative(generated_dir / f"optuna_main_search_{tag}.yaml"),
+        "proxy_search_config": repo_relative(generated_dir / f"optuna_proxy_search_{tag}.yaml"),
+        "main_study_root": f"runs/optuna_main_autoloop/{tag}",
+        "proxy_study_root": f"runs/optuna_proxy_autoloop/{tag}",
+    }
+
+
+def build_prompt(
+    default_lane: str,
+    fallback_gpu_id: int,
+    gpu_ids: str,
+    max_workers: str,
+    max_used_memory_mb: int,
+    max_utilization: int,
+    python_cmd: str,
+    iteration_plan: dict[str, str],
+) -> str:
+    main_study_command = shell_join(
+        [
+            "timeout",
+            "43200",
+            python_cmd,
+            "scripts/autoresearch_main.py",
+            "--search-config",
+            iteration_plan["main_search_config"],
+            "--gpu-ids",
+            gpu_ids,
+            "--max-workers",
+            max_workers,
+            "--max-used-memory-mb",
+            str(max_used_memory_mb),
+            "--max-utilization",
+            str(max_utilization),
+        ]
+    )
+    proxy_study_command = shell_join(
+        [
+            "timeout",
+            "14400",
+            python_cmd,
+            "scripts/autoresearch_proxy.py",
+            "--search-config",
+            iteration_plan["proxy_search_config"],
+            "--gpu-ids",
+            gpu_ids,
+            "--max-workers",
+            max_workers,
+            "--max-used-memory-mb",
+            str(max_used_memory_mb),
+            "--max-utilization",
+            str(max_utilization),
+        ]
+    )
+    main_monitor_command = shell_join(
+        [python_cmd, "scripts/monitor_optuna.py", "--study-dir", iteration_plan["main_study_root"]]
+    )
+    proxy_monitor_command = shell_join(
+        [python_cmd, "scripts/monitor_optuna.py", "--study-dir", iteration_plan["proxy_study_root"]]
+    )
     formal_command = (
-        f"CUDA_VISIBLE_DEVICES={gpu_id} timeout 10800 "
-        f"{python_cmd} train.py --config configs/autoresearch_formal.yaml > run.log 2>&1"
+        f"CUDA_VISIBLE_DEVICES={fallback_gpu_id} timeout 10800 "
+        f"{shell_join([python_cmd, 'train.py', '--config', 'configs/autoresearch_formal.yaml'])} > run.log 2>&1"
     )
     proxy_command = (
-        f"CUDA_VISIBLE_DEVICES={gpu_id} timeout 3600 "
-        f"{python_cmd} train.py --config configs/autoresearch_proxy.yaml > proxy.log 2>&1"
+        f"CUDA_VISIBLE_DEVICES={fallback_gpu_id} timeout 3600 "
+        f"{shell_join([python_cmd, 'train.py', '--config', 'configs/autoresearch_proxy.yaml'])} > proxy.log 2>&1"
     )
-    default_lane_text = "formal/main" if default_lane == "formal" else "proxy"
 
-    return f"""你是一个完全自主的 ML 研究者。本 session 只做一轮实验迭代，然后退出；外层 autoresearch_loop.py 会在你退出后决定是否再次启动你。
+    lane_labels = {
+        "main-study": "adaptive main-study",
+        "proxy-study": "adaptive proxy-study",
+        "formal": "direct formal",
+        "proxy": "direct proxy",
+    }
+    default_lane_text = lane_labels[default_lane]
+
+    primary_lane_instructions = {
+        "main-study": f"""默认优先主流程：
+- 把 `configs/optuna_main_search.yaml` 复制成 `{iteration_plan["main_search_config"]}`，并把其中 `study.study_root` 改成 `{iteration_plan["main_study_root"]}`。
+- 优先运行多卡自适应 main study：
+  {main_study_command} > optuna_main.log 2>&1
+- study 结束后运行 monitor 汇总：
+  {main_monitor_command}
+- 以最佳 completed trial 的 `summary.json.best_val.accuracy` 为主指标，`best_val.auc` 为 tie-break；只有在需要最终确认时才补 1 次 direct formal：
+  {formal_command}""",
+        "proxy-study": f"""默认优先主流程：
+- 把 `configs/optuna_proxy_search.yaml` 复制成 `{iteration_plan["proxy_search_config"]}`，并把其中 `study.study_root` 改成 `{iteration_plan["proxy_study_root"]}`。
+- 优先运行自适应 proxy study：
+  {proxy_study_command} > optuna_proxy.log 2>&1
+- study 结束后运行 monitor 汇总：
+  {proxy_monitor_command}
+- proxy 只作低显存 / 快速诊断 / 便宜筛查；若出现强 winner，再决定是否升到 formal/main：
+  {formal_command}""",
+        "formal": f"""默认优先主流程：
+- 先做 direct formal：
+  {formal_command}
+- 如果当前结构改动明显更适合系统性多卡调参，再升级到 fresh main study：
+  {main_study_command} > optuna_main.log 2>&1
+  然后运行：
+  {main_monitor_command}""",
+        "proxy": f"""默认优先主流程：
+- 先做 direct proxy：
+  {proxy_command}
+- 如果当前结构改动需要系统性多卡调参，再升级到 fresh proxy study 或 fresh main study：
+  {proxy_study_command} > optuna_proxy.log 2>&1
+  或
+  {main_study_command} > optuna_main.log 2>&1""",
+    }[default_lane]
+
+    return f"""你是这个仓库本轮唯一的 coordinator agent。本 session 只做一轮研究迭代，然后退出；外层 autoresearch_loop.py 会在你退出后决定是否再次启动你。
 
 必须严格遵守以下顺序：
 1. 先读 backlog.md
 2. 再读 program.md
 
-当前环境与硬约束：
+当前 coordinator 模式与硬约束：
 - 工作目录：{REPO_ROOT}
 - Shell：Bash on Ubuntu
-- GPU 默认槽位：CUDA_VISIBLE_DEVICES={gpu_id}
 - 所有 Python 命令必须使用：{python_cmd}
+- 你是唯一 agent；不要再起多个 codex exec 或多个并行改代码 agent
+- 真正的并行应交给自适应 Optuna worker，而不是多个 agent
+- adaptive GPU policy：`--gpu-ids {gpu_ids}`，`--max-workers {max_workers}`，idle 阈值 `used<= {max_used_memory_mb} MiB` 且 `util<= {max_utilization}%`
+- 单卡 fallback 槽位：CUDA_VISIBLE_DEVICES={fallback_gpu_id}
 - 默认研究 lane：{default_lane_text}
-- 默认直接跑 formal/main；proxy 只用于显存不足、快速 smoke、训练 bug 定位或低成本诊断
+- 默认优先使用 `scripts/autoresearch_main.py` / `scripts/autoresearch_proxy.py` 这两个兼容入口；它们底层分别委托给当前 canonical `scripts/optuna_main.py` / `scripts/optuna_proxy.py`
+- fresh run 默认必须使用新的 `study_root`；只有你明确想续跑同一个 study 时才允许 `--resume`
 - 不要修改 train.py、src/dataset.py、src/utils.py、tools/、任何数据文件或数据集划分
 - 不要使用测试集指标做模型选择
-- 不要阅读全文日志；只允许 tail -30
+- 不要阅读全文日志；只允许 `tail -30`
 - 不要问“是否继续”；外层 loop 会继续
 - 不要在本 session 里再自行写无限循环；做完一轮就退出
+
+本轮预留的 fresh study 路径：
+- main search-config copy：{iteration_plan["main_search_config"]}
+- main study_root：{iteration_plan["main_study_root"]}
+- proxy search-config copy：{iteration_plan["proxy_search_config"]}
+- proxy study_root：{iteration_plan["proxy_study_root"]}
 
 本轮任务（exactly one research iteration）：
 1. 阅读 backlog.md 和 program.md，理解当前主线、最新 best record、允许修改范围和实验协议。
 2. 自主判断这一轮最值得做的一项实验性改动。backlog 不是严格 machine-readable 队列，你可以根据当前仓库状态自行判断，但必须对齐文档主线。
 3. 只做一项离散、可解释的研究改动；不要把多个独立想法混在同一轮。
-4. 在训练前 git commit 本轮改动。
-5. 默认直接运行 formal：
-   {formal_command}
-6. 只有在你能明确说明理由时，才改用 proxy：
+4. 在训练或调参前 git commit 本轮改动。
+{primary_lane_instructions}
+5. 只有在低显存、快速 smoke、训练 bug 定位或更便宜的诊断场景下，才允许改走 proxy：
    {proxy_command}
-7. 如果本轮更适合用 Optuna study，也可以使用：
-   - {python_cmd} scripts/optuna_main.py ...
-   - {python_cmd} scripts/optuna_proxy.py ...
-   - {python_cmd} scripts/monitor_optuna.py ...
-   但必须遵守 fresh/resume 语义、val_acc 主指标规则，以及当前“默认 direct formal”的总策略。
-8. 训练失败时，只读最后 30 行日志，按 OOM / timeout / code bug / data issue 分类处理。
+   或 fresh proxy study：
+   {proxy_study_command} > optuna_proxy.log 2>&1
+   然后运行：
+   {proxy_monitor_command}
+6. fresh study 如果因为已有 sqlite / storage 报错，优先理解为你忘了给本轮 fresh study 使用新的 `study_root`；先修正这个问题，不要直接把这种错误记成 crash。
+7. 训练或 study 失败时，只读最后 30 行日志，按 OOM / timeout / code bug / data issue 分类处理。
    - data issue：停止本轮并输出阻塞原因
    - code bug：可以修复后重跑 1 次
    - 其他失败：按 crash 记录
-9. 训练成功时，从 summary.json 读取 best_val.accuracy 作为主指标；若 val_acc 持平，再比较 best_val.auc。
-10. 更新 results.tsv（只追加；并行风险下使用 flock -x /tmp/ankle_results.lock）和 backlog.md，包括 Agent 状态、上次实验、上次结果、下一步。
-11. 最后输出一行机器可读总结，格式必须是：
-    EXPERIMENT_DONE: <keep|discard|crash> | lane=<formal|proxy|main-study|proxy-study> | description=<...> | val_acc=<...> | val_auc=<...> | commit=<...>
+8. 更新 results.tsv（只追加；并行风险下使用 `flock -x /tmp/ankle_results.lock`）和 backlog.md，包括 Agent 状态、上次实验、上次结果、下一步。
+9. `results.tsv` 的 config 列仍保持 `formal` / `proxy` 语义：main-study 或 direct formal 记为 `formal`；proxy-study 或 direct proxy 记为 `proxy`。
+10. 最后输出一行机器可读总结，格式必须是：
+    EXPERIMENT_DONE: <keep|discard|crash> | lane=<main-study|proxy-study|formal|proxy> | description=<...> | val_acc=<...> | val_auc=<...> | commit=<...>
 
 如果你遇到真正需要人类拍板的阻塞，不要继续盲跑；只输出一行：
 LOOP_BLOCKED: <reason>
@@ -108,7 +246,9 @@ def latest_summary_line(path: Path) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Continuously relaunch one Codex experiment iteration at a time.")
+    parser = argparse.ArgumentParser(
+        description="Continuously relaunch one coordinator Codex session at a time while adaptive Optuna workers use the GPUs."
+    )
     parser.add_argument(
         "--max-iterations",
         type=int,
@@ -125,13 +265,35 @@ def parse_args() -> argparse.Namespace:
         "--gpu-id",
         type=int,
         default=1,
-        help="CUDA_VISIBLE_DEVICES value exported to inner Codex sessions. Defaults to slot 1.",
+        help="Fallback CUDA_VISIBLE_DEVICES slot for direct formal/proxy smoke commands. Defaults to slot 1.",
     )
     parser.add_argument(
         "--default-lane",
-        choices=["formal", "proxy"],
-        default="formal",
-        help="Default lane described to the inner agent. Defaults to direct formal/main.",
+        choices=["main-study", "proxy-study", "formal", "proxy"],
+        default="main-study",
+        help="Default lane described to the inner coordinator agent. Defaults to adaptive multi-GPU main-study.",
+    )
+    parser.add_argument(
+        "--gpu-ids",
+        default="auto",
+        help="GPU set passed to adaptive Optuna entrypoints. Use 'auto' or a comma-separated nvidia-smi GPU list.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        default="auto",
+        help="Maximum adaptive Optuna workers. Use 'auto' or an integer.",
+    )
+    parser.add_argument(
+        "--max-used-memory-mb",
+        type=int,
+        default=1024,
+        help="Idle-GPU threshold passed to adaptive Optuna entrypoints.",
+    )
+    parser.add_argument(
+        "--max-utilization",
+        type=int,
+        default=20,
+        help="Idle-GPU utilization threshold passed to adaptive Optuna entrypoints.",
     )
     parser.add_argument(
         "--min-disk-free-gb",
@@ -150,38 +312,67 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    if shutil.which("codex") is None:
+    if not args.print_prompt and shutil.which("codex") is None:
         raise SystemExit("codex CLI was not found in PATH.")
 
     python_path = detect_repo_python()
     python_cmd = repo_python_display(python_path)
-    prompt = build_prompt(args.default_lane, args.gpu_id, python_cmd)
+    preview_plan = build_iteration_plan(1, datetime.now().strftime("%Y%m%d_%H%M%S"))
+    preview_prompt = build_prompt(
+        default_lane=args.default_lane,
+        fallback_gpu_id=args.gpu_id,
+        gpu_ids=args.gpu_ids,
+        max_workers=str(args.max_workers),
+        max_used_memory_mb=args.max_used_memory_mb,
+        max_utilization=args.max_utilization,
+        python_cmd=python_cmd,
+        iteration_plan=preview_plan,
+    )
 
     if args.print_prompt:
-        print(prompt)
+        print(preview_prompt)
         return
 
     log_dir = REPO_ROOT / "autoresearch_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    prompt_path = log_dir / "autoresearch_loop.prompt.txt"
-    prompt_path.write_text(prompt, encoding="utf-8")
+    latest_prompt_path = log_dir / "autoresearch_loop.prompt.txt"
+    home_dir = resolve_home_dir()
+    codex_home = resolve_codex_home(home_dir)
+    codex_config_path = codex_home / "config.toml"
+    codex_auth_path = codex_home / "auth.json"
 
-    env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
-    env.setdefault("PYTHONIOENCODING", "utf-8")
+    base_env = os.environ.copy()
+    base_env.pop("CUDA_VISIBLE_DEVICES", None)
+    base_env.setdefault("PYTHONIOENCODING", "utf-8")
+    base_env["HOME"] = str(home_dir)
+    base_env["CODEX_HOME"] = str(codex_home)
+    base_env["AUTORESEARCH_LOOP_MODE"] = "coordinator"
+    base_env["AUTORESEARCH_LOOP_DEFAULT_LANE"] = args.default_lane
+    base_env["AUTORESEARCH_LOOP_GPU_IDS"] = str(args.gpu_ids)
+    base_env["AUTORESEARCH_LOOP_MAX_WORKERS"] = str(args.max_workers)
+    base_env["AUTORESEARCH_LOOP_MAX_USED_MEMORY_MB"] = str(args.max_used_memory_mb)
+    base_env["AUTORESEARCH_LOOP_MAX_UTILIZATION"] = str(args.max_utilization)
+    base_env["AUTORESEARCH_LOOP_FALLBACK_GPU_ID"] = str(args.gpu_id)
 
     max_iterations_text = "infinite" if args.max_iterations == 0 else str(args.max_iterations)
 
     print("")
     print("============================================================")
-    print(" Autoresearch Loop - Ankle CT Classifier")
+    print(" Autoresearch Coordinator Loop - Ankle CT Classifier")
     print(f" Max iterations:  {max_iterations_text}")
     print(f" Cooldown:        {args.cooldown_seconds}s between experiments")
-    print(f" GPU slot:        CUDA_VISIBLE_DEVICES={args.gpu_id}")
     print(f" Default lane:    {args.default_lane}")
+    print(f" Adaptive GPUs:   {args.gpu_ids}")
+    print(f" Max workers:     {args.max_workers}")
+    print(f" GPU idle rule:   used<={args.max_used_memory_mb} MiB, util<={args.max_utilization}%")
+    print(f" Fallback slot:   CUDA_VISIBLE_DEVICES={args.gpu_id}")
     print(f" Python:          {python_cmd}")
     print(f" Workdir:         {REPO_ROOT}")
-    print(f" Prompt file:     {prompt_path.relative_to(REPO_ROOT).as_posix()}")
+    print(f" HOME:            {home_dir}")
+    print(f" CODEX_HOME:      {codex_home}")
+    print(f" Codex config:    {codex_config_path} ({'found' if codex_config_path.is_file() else 'missing'})")
+    print(f" Codex auth:      {codex_auth_path} ({'found' if codex_auth_path.is_file() else 'missing'})")
+    print(f" Prompt file:     {latest_prompt_path.relative_to(REPO_ROOT).as_posix()}")
     print("============================================================")
     print("")
 
@@ -190,8 +381,22 @@ def main() -> None:
 
     for iteration in iteration_source:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        iteration_plan = build_iteration_plan(iteration, timestamp)
+        prompt = build_prompt(
+            default_lane=args.default_lane,
+            fallback_gpu_id=args.gpu_id,
+            gpu_ids=args.gpu_ids,
+            max_workers=str(args.max_workers),
+            max_used_memory_mb=args.max_used_memory_mb,
+            max_utilization=args.max_utilization,
+            python_cmd=python_cmd,
+            iteration_plan=iteration_plan,
+        )
         log_file = log_dir / f"run_{iteration}_{timestamp}.log"
         last_msg_file = log_dir / f"run_{iteration}_{timestamp}.last.txt"
+        prompt_file = log_dir / f"run_{iteration}_{timestamp}.prompt.txt"
+        prompt_file.write_text(prompt, encoding="utf-8")
+        latest_prompt_path.write_text(prompt, encoding="utf-8")
 
         print("")
         print("----------------------------------------")
@@ -210,14 +415,28 @@ def main() -> None:
 
         gpu_lines = query_nvidia_smi("index,name,memory.used,memory.total,utilization.gpu")
         if gpu_lines:
-            matching_lines = [line for line in gpu_lines if line.startswith(f"{args.gpu_id},")]
-            for line in matching_lines[:1]:
+            if str(args.gpu_ids).strip().lower() == "auto":
+                selected_lines = gpu_lines
+            else:
+                prefixes = [f"{token.strip()}," for token in str(args.gpu_ids).split(",") if token.strip()]
+                selected_lines = [
+                    line for line in gpu_lines if any(line.startswith(prefix) for prefix in prefixes)
+                ] or gpu_lines
+            for line in selected_lines[:8]:
                 print(f"  GPU status: {line}")
 
         remove_nonbest_checkpoints(REPO_ROOT / "runs")
 
+        env = base_env.copy()
+        env["AUTORESEARCH_LOOP_ITERATION_TAG"] = iteration_plan["tag"]
+        env["AUTORESEARCH_LOOP_MAIN_SEARCH_CONFIG"] = iteration_plan["main_search_config"]
+        env["AUTORESEARCH_LOOP_PROXY_SEARCH_CONFIG"] = iteration_plan["proxy_search_config"]
+        env["AUTORESEARCH_LOOP_MAIN_STUDY_ROOT"] = iteration_plan["main_study_root"]
+        env["AUTORESEARCH_LOOP_PROXY_STUDY_ROOT"] = iteration_plan["proxy_study_root"]
+
         print("  Starting Codex session...")
         print(f"  Session log: autoresearch_logs/{log_file.name}")
+        print(f"  Prompt copy:  autoresearch_logs/{prompt_file.name}")
         started = time.time()
         with log_file.open("w", encoding="utf-8") as handle:
             result = subprocess.run(

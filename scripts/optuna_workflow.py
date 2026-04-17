@@ -472,8 +472,44 @@ def select_gpu_devices(
         idle_devices.sort(key=lambda device: (device.memory_used_mb, device.utilization_gpu, device.index))
         return idle_devices
 
-    devices.sort(key=lambda device: (device.memory_used_mb, device.utilization_gpu, device.index))
-    return devices[:1]
+    return []
+
+
+def format_gpu_devices(devices: list[GPUDeviceInfo]) -> list[str]:
+    return [
+        (
+            f"GPU {device.index}: {device.name} | "
+            f"used={device.memory_used_mb} MiB / {device.memory_total_mb} MiB | "
+            f"util={device.utilization_gpu}%"
+        )
+        for device in devices
+    ]
+
+
+def project_python_candidates(candidates: list[str] | None = None) -> list[str]:
+    ordered_candidates: list[str] = []
+    ordered_candidates.extend(BUNDLED_PYTHON_CANDIDATES)
+    if candidates:
+        ordered_candidates.extend(str(candidate) for candidate in candidates)
+
+    resolved_candidates: list[str] = []
+    seen: set[str] = set()
+    venv_root = (REPO_ROOT / ".venv").absolute()
+    for candidate in ordered_candidates:
+        resolved = resolve_python_candidate(candidate)
+        if not resolved:
+            continue
+        candidate_path = Path(resolved).absolute()
+        normalized = str(candidate_path)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            candidate_path.relative_to(venv_root)
+        except ValueError:
+            continue
+        resolved_candidates.append(normalized)
+    return resolved_candidates
 
 
 def resolve_python_candidate(candidate: str) -> str | None:
@@ -510,34 +546,43 @@ def python_candidate_works(candidate_to_run: str) -> bool:
 
 
 def detect_python_executable(candidates: list[str] | None = None) -> str:
-    ordered_candidates = []
-    ordered_candidates.extend(BUNDLED_PYTHON_CANDIDATES)
-    if candidates:
-        ordered_candidates.extend(str(candidate) for candidate in candidates)
-    ordered_candidates.extend(
-        [
-            "python3",
-            "python",
-        ]
-    )
-
-    seen: set[str] = set()
-    for candidate in ordered_candidates:
-        resolved = resolve_python_candidate(candidate)
-        if not resolved or resolved in seen:
-            continue
-        seen.add(resolved)
+    resolved_candidates = project_python_candidates(candidates)
+    for resolved in resolved_candidates:
         if python_candidate_works(resolved):
             return resolved
 
     tried_candidates = [
-        candidate
-        for candidate in ordered_candidates
-        if candidate and candidate not in seen
+        str((REPO_ROOT / candidate).absolute())
+        for candidate in BUNDLED_PYTHON_CANDIDATES
     ]
     raise RuntimeError(
-        "Could not find a usable project Python executable. Tried: "
-        + ", ".join(tried_candidates or ordered_candidates)
+        "Could not find a usable project virtualenv Python executable. "
+        "Expected one of: "
+        + ", ".join(tried_candidates)
+    )
+
+
+def ensure_running_in_project_python(python_executable: str) -> None:
+    current_python = Path(sys.executable).absolute()
+    current_prefix = Path(sys.prefix).absolute()
+    selected_python = Path(python_executable).absolute()
+    venv_root = (REPO_ROOT / ".venv").absolute()
+
+    try:
+        current_python.relative_to(venv_root)
+        current_uses_project_venv = True
+    except ValueError:
+        current_uses_project_venv = current_prefix == venv_root
+
+    if current_uses_project_venv:
+        return
+
+    raise SystemExit(
+        "This Optuna workflow must be launched with the project virtualenv interpreter. "
+        f"Current interpreter: {current_python}. "
+        f"Current prefix: {current_prefix}. "
+        f"Expected under: {venv_root}. "
+        f"Detected study interpreter: {selected_python}."
     )
 
 
@@ -1235,7 +1280,6 @@ def prepare_study(
     max_trials_override: int | None = None,
     resume: bool = False,
 ) -> PreparedStudy:
-    optuna = import_optuna()
     config_path, search_cfg = load_search_config(search_config_path)
     study_cfg = search_cfg["study"]
     objective_metric = str(study_cfg.get("objective_metric", "val_accuracy"))
@@ -1248,6 +1292,8 @@ def prepare_study(
     base_config = load_yaml(base_config_path)
     search_space = search_cfg["search_space"]
     python_executable = detect_python_executable(search_cfg.get("python_candidates"))
+    ensure_running_in_project_python(python_executable)
+    optuna = import_optuna()
     ensure_cuda_ready(python_executable, env=build_env(study_cfg))
 
     study_root = resolve_path(study_cfg["study_root"])
@@ -1264,7 +1310,7 @@ def prepare_study(
         base_config["data"]["csv_path"] = preflight_config["data"]["csv_path"]
 
     resolved_base_config = study_root / "base_config.resolved.yaml"
-    dump_yaml(resolved_base_config, base_config)
+    dump_yaml(resolved_base_config, preflight_config)
     resolved_source_study = resolve_path(source_study_dir) if source_study_dir else None
 
     save_json(
@@ -1481,15 +1527,6 @@ def run_study_adaptive(
     max_utilization: int = 20,
     worker_cooldown_seconds: float = 0.0,
 ) -> Path:
-    if sequential:
-        return run_study(
-            search_config_path=search_config_path,
-            source_study_dir=source_study_dir,
-            top_k=top_k,
-            max_trials_override=max_trials_override,
-            resume=resume,
-        )
-
     explicit_ids = parse_gpu_id_spec(gpu_ids)
     selected_devices = select_gpu_devices(
         gpu_id_spec=gpu_ids,
@@ -1503,21 +1540,34 @@ def run_study_adaptive(
             raise ValueError(
                 f"Some explicit --gpu-ids entries were not found via nvidia-smi: {missing_ids}"
             )
-
-    worker_limit = parse_max_workers(max_workers, default=len(selected_devices) or 1)
-    selected_devices = selected_devices[:worker_limit]
-    selected_gpu_ids = [device.index for device in selected_devices]
+    elif str(gpu_ids).strip().lower() == "auto":
+        discovered_devices = discover_gpu_devices()
+        if discovered_devices and not selected_devices:
+            details = "\n".join(f"  {line}" for line in format_gpu_devices(discovered_devices))
+            raise SystemExit(
+                "Adaptive GPU selection found no idle GPUs that satisfy the configured thresholds. "
+                f"Thresholds: used<={max_used_memory_mb} MiB, util<={max_utilization}%. "
+                "Refusing to grab a busy GPU.\n"
+                f"{details}"
+            )
 
     if selected_devices:
+        worker_limit = parse_max_workers(max_workers, default=len(selected_devices))
+        selected_devices = selected_devices[:worker_limit]
+        selected_gpu_ids = [device.index for device in selected_devices]
         print("Adaptive GPU selection:")
-        for device in selected_devices:
-            print(
-                f"  GPU {device.index}: {device.name} | "
-                f"used={device.memory_used_mb} MiB / {device.memory_total_mb} MiB | "
-                f"util={device.utilization_gpu}%"
-            )
+        for line in format_gpu_devices(selected_devices):
+            print(f"  {line}")
     else:
+        selected_gpu_ids = []
         print("Adaptive GPU selection: nvidia-smi unavailable, falling back to sequential execution.")
+
+    if sequential and len(selected_gpu_ids) > 1:
+        print(
+            "Sequential mode requested; using the first selected GPU only: "
+            f"{selected_gpu_ids[0]}"
+        )
+        selected_gpu_ids = selected_gpu_ids[:1]
 
     if len(selected_gpu_ids) <= 1:
         env_overrides = {"CUDA_VISIBLE_DEVICES": str(selected_gpu_ids[0])} if selected_gpu_ids else None

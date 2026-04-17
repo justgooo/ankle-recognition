@@ -1,4 +1,4 @@
-# Formal config for slot 0 (RTX 3090, GPU index=0).
+# Formal config for slot 0 (GPU index=0).
 # Identical search space to slot 1 but with independent output_dir
 # and reduced num_workers to conserve CPU on a busy server.
 experiment_name: autoresearch_formal_slot0
