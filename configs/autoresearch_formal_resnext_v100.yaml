@@ -21,18 +21,18 @@ model:
   fusion_type: feature
   share_backbone: false
   use_pretrained: true
-  freeze_layers: 3
+  freeze_layers: 2
   fusion_hidden_dim: 256
-  dropout: 0.25
+  dropout: 0.35
   use_attention_pooling: false
 
 train:
   epochs: 15
-  lr: 5.0e-5
-  weight_decay: 5.0e-4
+  lr: 1.25e-4
+  weight_decay: 1.0e-4
   class_weight: true
   device: auto
   augmentation: true
   scheduler: none
   label_smoothing: 0.0
-  gradient_clip_norm: 1.0
+  gradient_clip_norm: 2.0
