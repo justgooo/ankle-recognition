@@ -2,7 +2,7 @@ study:
   name: autoresearch_resnext_v100_main_tuning
   phase: main
   base_config: configs/autoresearch_formal_resnext_v100.yaml
-  study_root: runs/optuna_main_resnext_v100
+  study_root: runs/optuna_main_autoloop/iter_0010_20260418_065657
   direction: maximize
   n_trials: 4
   timeout_minutes: 240
