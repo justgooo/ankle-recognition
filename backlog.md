@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-SEED123（保持 dedicated ResNeXt V100 retuned formal winner 的 `freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`, `fusion_hidden_dim=256` / `256x8` / mean pooling 几何完全不变，仅把 `seed` 从 `42` 改为 `123`，并在 `GPU 2` 上做 1 次 alternate-seed direct formal confirmation；commit `e6f36d0`） |
-| 上次结果 | discard（alternate-seed direct formal 只得到 `val_acc=0.8829787234042553`, `val_auc=0.91`, `val_f1=0.8571428571428571`，较当前 retained keep `0.925531914893617 / 0.9563636363636363` 明显回落 `0.0425531914893617 / 0.0463636363636363`，也低于旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454`。说明当前新 anchor 至少在 `seed=123` 上没有稳定复现，应暂时视为 seed-sensitive 证据，而不是已确认稳定的新配方。） |
-| 下一步 | 若继续该独立 ResNeXt V100 side campaign，优先补 1 次 `seed=456` direct formal confirmation；在得到第二个 alternate-seed 结果前，不要围绕当前 anchor 再开 fresh adaptive main study，也不要回到 `384` head 或补非 `resnext` backbone。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-STABLE-FREEZE3（把 dedicated ResNeXt V100 formal template 从 seed-sensitive 的 `freeze_layers=2` retuned anchor 回锚到旧 fair-backbone stable winner：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`，并把 fresh adaptive main-study 的搜索固定在 `freeze_layers=3`，只继续扫描 stable-anchor 周围的标量；commit `a1baefd`） |
+| 上次结果 | discard（fresh adaptive main-study 的 best completed trial 为 `freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=1.0`，得到 `val_acc=0.925531914893617`, `val_auc=0.9486363636363636`, `val_f1=0.9156626506024096`。它较旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 提升 `0.0106382978723404 / 0.0081818181818182`，说明回到 `freeze_layers=3` 并上调 `dropout` 仍有竞争力；但它与当前 retained keep `0.925531914893617 / 0.9563636363636363` 在 accuracy 上完全持平，AUC 仍低 `0.0077272727272727`，因此按 tie-break 记 **discard**。） |
+| 下一步 | 若继续该独立 ResNeXt V100 side campaign，优先对本轮 winner `freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=1.0` 做 1 次 direct formal confirmation（GPU 2 即可），先判断这条较稳的 `freeze_layers=3` 线能否再次命中 `0.9255` accuracy；在此之前不要恢复 `freeze_layers=2` fresh main-study，也不要回到 `384` head 或非 `resnext` backbone。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1 |
+| 连续 discard 计数 | 3 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -158,6 +158,35 @@
 - [x] **CMP-FAIR-V100-RESNEXT-FORMAL-SEED123**：`configs/autoresearch_formal_resnext_v100.yaml`（仅 `seed=123`，其余保持当前 retuned winner 不变）→ `val_acc=0.8829787234042553`, `val_auc=0.91`, `val_f1=0.8571428571428571`, `peak_vram=6.23 GiB`, `total_seconds=827.9` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 回落 `0.0425531914893617 / 0.0463636363636363`，也较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 低 `0.0319148936170213 / 0.0304545454545454`；说明当前新 anchor 至少在 `seed=123` 上并不稳定，不能把上一轮 keep 直接视为已完成多 seed 证实的新配方。）
 - **本轮结论**：上一轮 direct formal keep 仍然是该独立 ResNeXt V100 side campaign 的最强单点证据，但它现在应被视为存在明显 seed sensitivity 的 anchor，而不是已经通过 alternate-seed confirmation 的稳定 winner。
 - **推荐动作**：若后续继续该独立 side campaign，应优先补 1 次 `seed=456` direct formal confirmation，先判断这次回落是 `seed=123` 特例还是更普遍的不稳定；在此之前不要围绕当前 anchor 再开 fresh adaptive main study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Alternate-Seed Formal Confirmation（seed456）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何与 retuned winner 标量完全不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`, `freeze_layers=2`, `lr=1.25e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`。
+> - 唯一离散改动：把 dedicated formal template `configs/autoresearch_formal_resnext_v100.yaml` 的 `seed` 从 `42` 改为 `456`，然后直接做 1 次 alternate-seed direct formal confirmation。
+> - 本轮运行 commit 为 `b2539f1`；由于这是 fixed-config confirmation 而不是 fresh study，直接在允许的单卡 fallback `GPU 2` 上运行 `train.py --config configs/autoresearch_formal_resnext_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-FORMAL-SEED456**：`configs/autoresearch_formal_resnext_v100.yaml`（仅 `seed=456`，其余保持当前 retuned winner 不变）→ `val_acc=0.8829787234042553`, `val_auc=0.945`, `val_f1=0.8571428571428571`, `peak_vram=6.23 GiB`, `total_seconds=830.4` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 仍低 `0.0425531914893617 / 0.0113636363636362`；虽然 `val_auc` 较 `seed123` confirmation 的 `0.91` 回升 `0.035`，也较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9404545454545454` 略高 `0.0045454545454547`，但 `val_acc` 仍比旧 stable winner 低 `0.0319148936170213`。说明当前 `freeze_layers=2` retuned anchor 的排序质量并非完全崩坏，但它在 alternate seeds 上仍稳定掉回 `0.8829787234042553` accuracy floor，无法复现 `seed=42` 的 direct formal keep。）
+- **本轮结论**：两次 alternate-seed direct formal（`seed=123 / 456`）都未复现 `seed=42` 的 `0.925531914893617` accuracy，因此当前 retuned anchor 应被视为“最强单点 keep，但明显 seed-sensitive”的证据；相比之下，旧 fair-backbone stable winner 仍是更可靠的多 seed 参考配方。
+- **推荐动作**：若后续继续该独立 side campaign，不要围绕当前 `freeze_layers=2` retuned anchor 再开 fresh adaptive main study；优先把工作锚点降回旧 stable winner（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`）再决定是否做新的小步验证，且仍只推进 `resnext`、不回到 `384` head 或非 `resnext` backbone。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（回锚 stable freeze3 lane）
+
+> **独立 campaign 说明**
+> - 这一轮显式延续 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256` 不变。
+> - 唯一离散改动：把 dedicated formal template 回锚到旧 fair-backbone stable winner（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`），并把 fresh adaptive main-study 的搜索固定在 `freeze_layers=3`，只继续扫描 stable-anchor 周围的标量。
+> - 本轮 fresh study 为 `runs/optuna_main_autoloop/iter_0006_20260418_050606`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0006_20260418_050606.yaml`，运行 commit 为 `a1baefd`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-STABLE-FREEZE3**：`configs/autoresearch_formal_resnext_v100.yaml`（回锚到旧 stable winner）+ `configs/optuna_main_search_resnext_v100.yaml`（`freeze_layers` 固定为 `3`）→ best completed trial 为 **trial 3**（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=1.0`）→ `val_acc=0.925531914893617`, `val_auc=0.9486363636363636`, `val_f1=0.9156626506024096`, `peak_vram=2.14 GiB`, `total_seconds=848.4` → **discard**（较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 提升 `0.0106382978723404 / 0.0081818181818182`，说明回到 `freeze_layers=3` 并仅上调 `dropout` 到 `0.35` 仍能把 accuracy 拉回当前顶档；但它与当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 在 accuracy 上完全持平，AUC 仍低 `0.0077272727272727`，因此按 tie-break 不能取代当前 best keep。）
+- **Monitor takeaways**：在固定 `freeze_layers=3` 的 4 个 completed trial 里，旧 stable winner 本体（trial 0：`dropout=0.3`, `lr=1e-4`, `wd=1e-4`, `clip=1.0`）恢复到 `0.9042553191489362 / 0.94`，说明把搜索锚点降回稳定配方是正确方向；唯一进一步冲到 `0.925531914893617` 的是只把 `dropout` 上调到 `0.35` 的 trial 3。相反，更低 `lr=7.5e-5` 或更强正则（`lr=5e-5`, `weight_decay=5e-4`, `dropout=0.25`）都退到 `0.8829787234042553` 或 `0.8723404255319149`，说明当前 freeze3 家族最值得继续验证的不是更低学习率，而是“保留 stable winner 标量，只把 dropout 提到 `0.35`”这一单点。
+- **本轮结论**：backlog 所建议的“先回锚旧 stable winner，再做小步验证”是有效的；它证明 `freeze_layers=3` 这条较稳的线并没有失去 ceiling，只是当前最有信息量的增量不再是重新解冻到 `freeze_layers=2`，而是更温和的 `dropout` 上调。
+- **推荐动作**：若后续继续该独立 side campaign，优先对 trial 3 做 1 次 direct formal confirmation；若它能再次打到 `0.925531914893617` 且 AUC 更接近或超过当前 keep，再考虑把 freeze3/dropout0.35 升级为新的稳定锚点。若直接 confirmation 回落，则停止继续围绕这条 freeze3 标量线做 fresh main-study。
 
 ---
 
