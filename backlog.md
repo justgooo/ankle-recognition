@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-STABLE-RERUN（保持 dedicated ResNeXt V100 old stable winner 完全不变：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`, `fusion_hidden_dim=256`, `256x8`, feature-fusion + mean pooling，仅在 `GPU 2` 上对 exact old stable winner 做 1 次 direct formal closure rerun；commit `bf4bd4d`） |
-| 上次结果 | discard（direct formal rerun 得到 `val_acc=0.9042553191489362`, `val_auc=0.9404545454545453`, `val_f1=0.9010989010989011`。它较当前 retained keep `0.925531914893617 / 0.9563636363636363` 低 `0.0212765957446808 / 0.015909090909091`，也较旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 低 `0.0106382978723404` accuracy，AUC 仅近乎持平。虽然它比上一轮 `dropout=0.35` direct formal discard 回升 `0.0106382978723405` accuracy，证明 old stable winner 的排序质量确实更可信，但 exact rerun 仍未把 accuracy 拉回原始 `0.9148936170212766`，说明这条 ResNeXt freeze3 stable 线在当前环境下也没有形成足够稳的 closure evidence。） |
-| 下一步 | 默认应收束该独立 ResNeXt V100 side campaign：当前连续 discard 已达 5，且 exact old stable winner rerun 仍未回到原始 `0.9149`，说明在既定 `resnext` / `256x8` / feature-fusion + mean pooling / 单变量小步标量空间内，已没有新的低风险高信息量动作。若外层 loop 仍强制 continuation，应视为需要人类拍板的新假设，而不是继续盲跑 fresh main-study 或 direct formal。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-BS12（保持 dedicated ResNeXt V100 fair-backbone 几何与 mean pooling 不变：`freeze_layers` 仍固定在 stable `3` lane，`fusion_hidden_dim=256`、`256x8`、feature-fusion 不变；唯一离散改动是把 `configs/autoresearch_formal_resnext_v100.yaml` 的 `batch_size` 从 `6` 提到 `12`，然后跑 fresh adaptive main-study `runs/optuna_main_autoloop/iter_0009_20260418_061533`；commit `d118031`） |
+| 上次结果 | discard（fresh adaptive main-study 4/4 completed，best completed trial 为 trial 0：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`，得到 `val_acc=0.9042553191489362`, `val_auc=0.9504545454545454`, `val_f1=0.8888888888888888`。它较当前 retained keep `0.925531914893617 / 0.9563636363636363` 仍低 `0.0212765957446808 / 0.0059090909090909`，也较旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 低 `0.0106382978723404` accuracy。虽然 AUC 较旧 stable winner 反而高 `0.01`，且 peak VRAM 只升到约 `3.64 GiB`，但更大 batch 仍没有把 accuracy ceiling 拉回 `0.9149+`，说明近期波动并不主要来自 `batch_size=6` 的梯度噪声假设。） |
+| 下一步 | 该独立 ResNeXt V100 side campaign 现在已连续 6 次 discard，且连“增大 batch 以降低梯度噪声”这类最后一档低侵入新假设也未能改善 accuracy。默认应停止继续盲跑；若外层 loop 仍要求 continuation，应先由人类明确新的离散假设，而不是继续在当前 freeze3 / scalar 家族内做 fresh main-study 或 direct formal。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 5 |
+| 连续 discard 计数 | 6 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -215,6 +215,21 @@
 - [x] **CMP-FAIR-V100-RESNEXT-FORMAL-STABLE-RERUN**：`configs/autoresearch_formal_resnext_v100.yaml`（exact old stable winner，无任何超参改动）→ `val_acc=0.9042553191489362`, `val_auc=0.9404545454545453`, `val_f1=0.9010989010989011`, `peak_vram=2.14 GiB`, `total_seconds=811.5` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0212765957446808 / 0.015909090909091`；较 old fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 也低 `0.0106382978723404` accuracy，AUC 基本持平。它虽然比上一轮 `dropout=0.35` direct formal discard 回升 `0.0106382978723405` accuracy，说明把模板留在 old stable winner 上确实优于继续追逐 search-only dropout 波动，但 exact rerun 本身仍未复现原始 stable winner 的 accuracy ceiling。）  
 - **本轮结论**：closure check 已完成，而且结果偏负面。当前 ResNeXt V100 side campaign 在既定 `256x8` / feature-fusion + mean pooling / freeze3 stable-family 语义下，已经没有足够强的 direct formal 证据支持继续做新的小步扫描。
 - **推荐动作**：默认收束并归档该独立 side campaign。若外层 loop 仍要求 continuation，应先由人类明确给出新的离散假设；按协议，当前已属于“连续 5 个以上实验 discard 且没有新思路”的状态，不应继续盲跑。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（batch_size=12）
+
+> **独立 campaign 说明**
+> - 这一轮是在外层 loop 显式要求 continuation 的前提下，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，并继续把 main-study 固定在 `freeze_layers=3` stable lane。
+> - 唯一离散改动：把 dedicated formal template `configs/autoresearch_formal_resnext_v100.yaml` 的 `batch_size` 从 `6` 提到 `12`，利用 V100 的显存余量测试“更大 batch 是否能降低梯度噪声并抬回 accuracy ceiling”。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0009_20260418_061533`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0009_20260418_061533.yaml`，运行 commit 为 `d118031`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-BS12**：`configs/autoresearch_formal_resnext_v100.yaml`（仅把 `batch_size` 从 `6` 提到 `12`）+ fresh adaptive main-study → best completed trial 为 **trial 0**（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）→ `val_acc=0.9042553191489362`, `val_auc=0.9504545454545454`, `val_f1=0.8888888888888888`, `peak_vram=3.64 GiB`, `total_seconds=994.1` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0212765957446808 / 0.0059090909090909`；也较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 低 `0.0106382978723404` accuracy。虽然 AUC 相比旧 stable winner 提高 `0.01`，但按主指标 `val_acc` 仍不足以晋升。）
+- **Monitor takeaways**：在 batch-size 加倍后的 4 个 completed trial 里，enqueued 的 stable-winner 本体（trial 0）仍然是 accuracy 最优，说明更大 batch 并没有把搜索重点推离旧 stable family；更低学习率 `7.5e-5` 或更强正则组合（`lr=5e-5`, `weight_decay=5e-4`, `dropout=0.25`）都把 accuracy 压回 `0.8830 ~ 0.8936`。VRAM 只从此前 freeze3 家族常见的约 `2.14 GiB` 升到 `3.64 GiB`，说明硬件余量确实充足，但 ceiling 仍未抬升。
+- **本轮结论**：把 `batch_size` 从 `6` 提到 `12` 没有解决当前 ResNeXt side campaign 的核心问题。近期的 accuracy 回落更像配方本身缺乏可复现增益，而不是单纯由小 batch 引起的训练噪声。
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要继续，应先由人类明确新的离散假设；在现有 `resnext` / `256x8` / feature-fusion + mean pooling / stable-freeze3 标量空间内，不再建议继续 fresh main-study。
 
 ---
 
