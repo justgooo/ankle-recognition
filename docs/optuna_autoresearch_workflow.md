@@ -19,6 +19,7 @@ GPU selection is adaptive by default. On a multi-GPU host, the AutoResearch Optu
 - Do not assume `nvidia-smi` ordering and PyTorch/CUDA runtime ordering are identical on a new host.
 - Before a long run, verify the visible devices with `torch.cuda.device_count()` and `torch.cuda.get_device_name(...)`.
 - Use `--gpu-ids 0,1,...` when you want to hard-pin a specific GPU set.
+- In `--gpu-ids auto` mode, the workflow now fails closed if no GPU satisfies the idle thresholds; it does not grab a busy GPU.
 - Use `--sequential` when you intentionally want single-process serial execution.
 
 The canonical entrypoint on this host is:
@@ -59,7 +60,8 @@ The wrappers now require the project virtualenv.
 
 - Expected interpreter: `./.venv/bin/python` on Linux/macOS, `./.venv/Scripts/python.exe` on Windows
 - If the project `.venv` is missing, the Optuna workflow fails closed with a clear error
-- The wrappers no longer fall back to `python3`, `python`, or the current interpreter
+- The wrappers no longer fall back to `python3`, `python`, or any non-project interpreter
+- The wrapper process itself must be launched with the same project `.venv`; otherwise it exits before importing Optuna
 
 ## Study lifecycle rules
 
@@ -126,7 +128,7 @@ Failure handling:
 
 # 4) Monitor the running study in another shell.
 ./.venv/bin/python scripts/monitor_optuna.py \
-  --study-dir runs/optuna_proxy \
+  --study-dir runs/optuna_main \
   --watch \
   --interval-seconds 30
 
@@ -165,7 +167,7 @@ Typical multi-GPU invocations:
 ./.venv/bin/python scripts/optuna_proxy.py --gpu-ids 0,2
 
 # Fall back to single-process serial behavior on one GPU.
-CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/optuna_main.py --sequential
+./.venv/bin/python scripts/optuna_main.py --sequential --gpu-ids 1
 ```
 
 ## Notes

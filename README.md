@@ -365,9 +365,9 @@ model:
 
 - 不要把同一病人的不同切片拆到训练集和验证集
 - 不要一开始就上完整 3D 三分支模型
-- 当前双卡服务器上，`nvidia-smi` 与 PyTorch 的设备编号顺序相反：`nvidia-smi` 显示 `0=3090`、`1=4090`，但 PyTorch 实测是 `cuda:0=4090`、`cuda:1=3090`
-- 因此如果训练代码里显式写 `torch.device("cuda:1")`，实际使用的是 **3090**；同理，`CUDA_VISIBLE_DEVICES=1` 暴露给进程的也是 **3090**。如果你要显式指定 **4090**，应改用 `torch.device("cuda:0")` 或 `CUDA_VISIBLE_DEVICES=0`
-- 不要把 `nvidia-smi` 的 index 直接当作训练配置里的 CUDA device id；长跑前先用 `torch.cuda.get_device_name(...)` 核对一次
+- 当前项目的目标硬件配置是 4 张 NVIDIA GPU，单卡显存约 24 GB 或以上；现有脚本仍默认按 `slot 0` / `slot 1` 两个主训练槽位运行
+- 当前可见宿主机资源（2026-04-16 实测）：Intel Xeon Gold 6426Y，2 sockets / 32 物理核 / 64 线程，内存 125 GiB
+- 不要把 `nvidia-smi` 的 index 直接当作训练配置里的 CUDA device id；不同宿主环境里，`nvidia-smi` 与 PyTorch/CUDA 的编号可能不一致，长跑前先用 `torch.cuda.device_count()` 和 `torch.cuda.get_device_name(...)` 核对一次
 - 数据量较小且参数量大时，极易因过拟合导致指标崩盘。建议直接修改代码内的配置（如冻结骨干网络的大部分层：设 `DEFAULT_FREEZE_LAYERS = 2 或 3`），只放开最后的层与分类头。
 - 主决策只看验证集 `best_val.accuracy`，同时把 `AUC` 和 `threshold_eval` 当作辅助稳定性信号
 - 验证集太小时，`AUC` 波动很大是正常现象，强烈建议看多个随机种子 (Seed)
