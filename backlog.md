@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-BS12（保持 dedicated ResNeXt V100 fair-backbone 几何与 mean pooling 不变：`freeze_layers` 仍固定在 stable `3` lane，`fusion_hidden_dim=256`、`256x8`、feature-fusion 不变；唯一离散改动是把 `configs/autoresearch_formal_resnext_v100.yaml` 的 `batch_size` 从 `6` 提到 `12`，然后跑 fresh adaptive main-study `runs/optuna_main_autoloop/iter_0009_20260418_061533`；commit `d118031`） |
-| 上次结果 | discard（fresh adaptive main-study 4/4 completed，best completed trial 为 trial 0：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`，得到 `val_acc=0.9042553191489362`, `val_auc=0.9504545454545454`, `val_f1=0.8888888888888888`。它较当前 retained keep `0.925531914893617 / 0.9563636363636363` 仍低 `0.0212765957446808 / 0.0059090909090909`，也较旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 低 `0.0106382978723404` accuracy。虽然 AUC 较旧 stable winner 反而高 `0.01`，且 peak VRAM 只升到约 `3.64 GiB`，但更大 batch 仍没有把 accuracy ceiling 拉回 `0.9149+`，说明近期波动并不主要来自 `batch_size=6` 的梯度噪声假设。） |
-| 下一步 | 该独立 ResNeXt V100 side campaign 现在已连续 6 次 discard，且连“增大 batch 以降低梯度噪声”这类最后一档低侵入新假设也未能改善 accuracy。默认应停止继续盲跑；若外层 loop 仍要求 continuation，应先由人类明确新的离散假设，而不是继续在当前 freeze3 / scalar 家族内做 fresh main-study 或 direct formal。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-REOPEN-FREEZE2（保持 dedicated ResNeXt V100 fair-backbone 几何与 mean pooling 不变：`fusion_hidden_dim=256`、`256x8`、feature-fusion 不变，base formal template 仍锚定 old stable winner；唯一离散改动是把 `configs/optuna_main_search_resnext_v100.yaml` 的 `model.freeze_layers` 搜索从固定 `[3]` 重新开放到 `[2, 3]`，然后跑 fresh adaptive main-study `runs/optuna_main_autoloop/iter_0010_20260418_065657`；search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0010_20260418_065657.yaml`；commit `87c1e9b`） |
+| 上次结果 | discard（fresh adaptive main-study 4/4 completed，best completed trial 仍是 enqueued stable template 的 trial 0：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`，得到 `val_acc=0.925531914893617`, `val_auc=0.94`, `val_f1=0.9213483146067416`。它虽在 accuracy 上追平当前 retained keep `0.925531914893617 / 0.9563636363636363`，但 AUC 仍低 `0.0163636363636363`，因此按 tie-break 不能晋升。更关键的是，这轮唯一的 `freeze_layers=2` completed trial（trial 2：`lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）只得到 `0.8829787234042553 / 0.9440909090909091`，较 trial 0 低 `0.0425531914893617` accuracy，说明把搜索重新开放到 freeze2 并没有重现此前 seed42 direct formal keep 的优势。） |
+| 下一步 | 该独立 ResNeXt V100 side campaign 现在已连续 7 次 discard，且 “reopen freeze2” 这个最后仍有信息量的新假设也给出负面结果。默认应停止继续盲跑；若外层 loop 仍强制 continuation，应先由人类明确一个超出当前 `freeze_layers` / stable-scalar 轴的新离散假设，而不是继续在同一 `resnext` `256x8` mean-pooling 配方里做 fresh main-study 或 direct formal。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 6 |
+| 连续 discard 计数 | 7 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -230,6 +230,21 @@
 - **Monitor takeaways**：在 batch-size 加倍后的 4 个 completed trial 里，enqueued 的 stable-winner 本体（trial 0）仍然是 accuracy 最优，说明更大 batch 并没有把搜索重点推离旧 stable family；更低学习率 `7.5e-5` 或更强正则组合（`lr=5e-5`, `weight_decay=5e-4`, `dropout=0.25`）都把 accuracy 压回 `0.8830 ~ 0.8936`。VRAM 只从此前 freeze3 家族常见的约 `2.14 GiB` 升到 `3.64 GiB`，说明硬件余量确实充足，但 ceiling 仍未抬升。
 - **本轮结论**：把 `batch_size` 从 `6` 提到 `12` 没有解决当前 ResNeXt side campaign 的核心问题。近期的 accuracy 回落更像配方本身缺乏可复现增益，而不是单纯由小 batch 引起的训练噪声。
 - **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要继续，应先由人类明确新的离散假设；在现有 `resnext` / `256x8` / feature-fusion + mean pooling / stable-freeze3 标量空间内，不再建议继续 fresh main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（reopen freeze2 vs freeze3）
+
+> **独立 campaign 说明**
+> - 这一轮是在外层 loop 显式要求 continuation 的前提下，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，base formal template 继续锚定 old stable winner（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）。
+> - 唯一离散改动：把 `configs/optuna_main_search_resnext_v100.yaml` 的 `model.freeze_layers` 搜索从固定 `[3]` 重新开放到 `[2, 3]`，用一轮 fresh adaptive main-study 检验“freeze2 本身是否仍有可重复收益”，而不再引入新的几何或 backbone 改动。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0010_20260418_065657`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0010_20260418_065657.yaml`，运行 commit 为 `87c1e9b`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-REOPEN-FREEZE2**：`configs/optuna_main_search_resnext_v100.yaml`（仅把 `model.freeze_layers` 搜索从 `[3]` 重新开放到 `[2, 3]`）+ fresh adaptive main-study → best completed trial 为 **trial 0**（即 enqueued stable template：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）→ `val_acc=0.925531914893617`, `val_auc=0.94`, `val_f1=0.9213483146067416`, `peak_vram=2.14 GiB`, `total_seconds=855.8` → **discard**（虽然它在 accuracy 上追平当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617`，并较 old fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 高 `0.0106382978723404` accuracy，但它的 AUC 仍比当前 retained keep 低 `0.0163636363636363`，且还比 old stable winner 低 `0.0004545454545454` AUC，因此不能替换现有 best keep。）  
+- **Monitor takeaways**：这轮 reopen 后唯一的 `freeze_layers=2` completed trial（trial 2：`lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）只得到 `val_acc=0.8829787234042553`, `val_auc=0.9440909090909091`，显存升到约 `6.23 GiB`，但 accuracy 仍比 trial 0 低 `0.0425531914893617`。其余 completed trial 也都停留在 `0.8723 ~ 0.8936` accuracy 区间，说明“freeze2 被先前搜索空间限制掩盖”的假设在当前 budget 下没有得到支持。  
+- **本轮结论**：把搜索重新开放到 `freeze_layers=2` 并没有恢复当前 ResNeXt side campaign 的可复现上行空间；反而再次说明目前最强的 search-time 点仍然是 old stable winner 本体，而不是更深解冻。  
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要求 continuation，应先由人类明确一个超出当前 `freeze_layers` / stable-scalar 轴的新离散假设；否则不再建议继续围绕 `resnext` 的这条 `256x8` mean-pooling 配方做 fresh main-study。
 
 ---
 
