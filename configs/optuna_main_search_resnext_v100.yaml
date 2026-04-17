@@ -22,7 +22,7 @@ python_candidates:
 search_space:
   model.freeze_layers:
     type: categorical
-    choices: [2, 3]
+    choices: [3]
   train.lr:
     type: categorical
     choices: [5.0e-5, 7.5e-5, 1.0e-4, 1.25e-4]
