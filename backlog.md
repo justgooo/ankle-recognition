@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-STABLE-FREEZE3（把 dedicated ResNeXt V100 formal template 从 seed-sensitive 的 `freeze_layers=2` retuned anchor 回锚到旧 fair-backbone stable winner：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`，并把 fresh adaptive main-study 的搜索固定在 `freeze_layers=3`，只继续扫描 stable-anchor 周围的标量；commit `a1baefd`） |
-| 上次结果 | discard（fresh adaptive main-study 的 best completed trial 为 `freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=1.0`，得到 `val_acc=0.925531914893617`, `val_auc=0.9486363636363636`, `val_f1=0.9156626506024096`。它较旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 提升 `0.0106382978723404 / 0.0081818181818182`，说明回到 `freeze_layers=3` 并上调 `dropout` 仍有竞争力；但它与当前 retained keep `0.925531914893617 / 0.9563636363636363` 在 accuracy 上完全持平，AUC 仍低 `0.0077272727272727`，因此按 tie-break 记 **discard**。） |
-| 下一步 | 若继续该独立 ResNeXt V100 side campaign，优先对本轮 winner `freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.35`, `gradient_clip_norm=1.0` 做 1 次 direct formal confirmation（GPU 2 即可），先判断这条较稳的 `freeze_layers=3` 线能否再次命中 `0.9255` accuracy；在此之前不要恢复 `freeze_layers=2` fresh main-study，也不要回到 `384` head 或非 `resnext` backbone。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-STABLE-DROPOUT035（保持 dedicated ResNeXt V100 stable freeze3 锚点不变：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `gradient_clip_norm=1.0`, `fusion_hidden_dim=256`, `256x8`, feature-fusion + mean pooling，只把 `dropout` 从 `0.3` 上调到 `0.35`，并在 `GPU 2` 上做 1 次 direct formal confirmation；commit `eb823b7`） |
+| 上次结果 | discard（direct formal 只得到 `val_acc=0.8936170212765957`, `val_auc=0.9404545454545454`, `val_f1=0.8809523809523809`。它较上一轮 freeze3 fresh main-study winner `0.925531914893617 / 0.9486363636363636` 回落 `0.0319148936170213 / 0.0081818181818182`，较当前 retained keep `0.925531914893617 / 0.9563636363636363` 低 `0.0319148936170213 / 0.0159090909090909`，且连旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 都没超过（AUC 仅持平、accuracy 低 `0.0212765957446809`）。说明 `freeze_layers=3 + dropout=0.35` 的高点并没有在 direct formal 语义下复现，应视为 search-only 波动而不是新的稳定锚点。） |
+| 下一步 | 若继续该独立 ResNeXt V100 side campaign，应停止继续围绕 `freeze_layers=3 + dropout=0.35` 做 fresh main-study 或 direct formal，并把 dedicated formal template 保持在旧 fair-backbone stable winner（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）作为默认锚点。若外层 loop 仍要求再给该 side campaign 1 次 closure check，唯一还算信息充足的动作是做 1 次 exact old stable winner 的 direct formal rerun；否则应收束该 ResNeXt V100 side campaign。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 3 |
+| 连续 discard 计数 | 4 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -187,6 +187,20 @@
 - **Monitor takeaways**：在固定 `freeze_layers=3` 的 4 个 completed trial 里，旧 stable winner 本体（trial 0：`dropout=0.3`, `lr=1e-4`, `wd=1e-4`, `clip=1.0`）恢复到 `0.9042553191489362 / 0.94`，说明把搜索锚点降回稳定配方是正确方向；唯一进一步冲到 `0.925531914893617` 的是只把 `dropout` 上调到 `0.35` 的 trial 3。相反，更低 `lr=7.5e-5` 或更强正则（`lr=5e-5`, `weight_decay=5e-4`, `dropout=0.25`）都退到 `0.8829787234042553` 或 `0.8723404255319149`，说明当前 freeze3 家族最值得继续验证的不是更低学习率，而是“保留 stable winner 标量，只把 dropout 提到 `0.35`”这一单点。
 - **本轮结论**：backlog 所建议的“先回锚旧 stable winner，再做小步验证”是有效的；它证明 `freeze_layers=3` 这条较稳的线并没有失去 ceiling，只是当前最有信息量的增量不再是重新解冻到 `freeze_layers=2`，而是更温和的 `dropout` 上调。
 - **推荐动作**：若后续继续该独立 side campaign，优先对 trial 3 做 1 次 direct formal confirmation；若它能再次打到 `0.925531914893617` 且 AUC 更接近或超过当前 keep，再考虑把 freeze3/dropout0.35 升级为新的稳定锚点。若直接 confirmation 回落，则停止继续围绕这条 freeze3 标量线做 fresh main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Direct Formal Confirmation（stable freeze3 + dropout0.35）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 matched V100 几何与 stable freeze3 锚点完全不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`, `freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `gradient_clip_norm=1.0`。
+> - 唯一离散改动：把 dedicated formal template `configs/autoresearch_formal_resnext_v100.yaml` 的 `dropout` 从 `0.3` 上调到上一轮 fresh main-study winner 所暗示的 `0.35`，然后直接做 1 次 formal confirmation。
+> - 本轮运行 commit 为 `eb823b7`；由于这是 fixed-config confirmation 而不是 fresh study，直接在允许的单卡 fallback `GPU 2` 上运行 `train.py --config configs/autoresearch_formal_resnext_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-FORMAL-STABLE-DROPOUT035**：`configs/autoresearch_formal_resnext_v100.yaml`（仅把 stable freeze3 锚点的 `dropout` 从 `0.3` 上调到 `0.35`）→ `val_acc=0.8936170212765957`, `val_auc=0.9404545454545454`, `val_f1=0.8809523809523809`, `peak_vram=2.14 GiB`, `total_seconds=813.1` → **discard**（较上一轮 fresh main-study winner `CMP-FAIR-V100-RESNEXT-MAIN-STABLE-FREEZE3` 的 `0.925531914893617 / 0.9486363636363636` 回落 `0.0319148936170213 / 0.0081818181818182`，说明 search 中出现的 `dropout=0.35` 高点没有在 direct formal 语义下复现；它也较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0319148936170213 / 0.0159090909090909`，并且 accuracy 还比旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766` 低 `0.0212765957446809`，AUC 仅与旧 stable winner 持平。）
+- **本轮结论**：`freeze_layers=3 + dropout=0.35` 不能晋升为新的稳定锚点。上一轮 fresh main-study 所揭示的高点更像 search-only 波动，而不是可直接复现的 formal 改进；对这条线继续投入已缺乏回报。
+- **推荐动作**：若后续继续该独立 side campaign，应把 dedicated formal template 保持在旧 fair-backbone stable winner（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）作为默认锚点，不再继续围绕 `dropout=0.35` 做 fresh main-study 或 direct formal。若外层 loop 仍要求再给该 side campaign 1 次 closure check，唯一还算信息充足的动作是做 1 次 exact old stable winner 的 direct formal rerun；否则应收束该 side campaign。
 
 ---
 
