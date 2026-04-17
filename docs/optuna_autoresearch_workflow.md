@@ -14,24 +14,25 @@ The existing training entrypoint stays unchanged:
 
 The Optuna layer is optional. If you do not run Optuna, the original training flow still works exactly as before.
 
-GPU selection is inherited from the shell environment. On this host, `nvidia-smi` ordering and PyTorch/CUDA runtime ordering are reversed:
+GPU selection is adaptive by default. On a multi-GPU host, the AutoResearch Optuna entrypoints inspect visible devices, select idle GPUs, and launch one worker per selected card unless you force a different policy with CLI flags.
 
-- `nvidia-smi`: `0=RTX 3090`, `1=RTX 4090`
-- PyTorch runtime: `cuda:0=RTX 4090`, `cuda:1=RTX 3090`
-- As a result, `torch.device("cuda:1")` and `CUDA_VISIBLE_DEVICES=1` both land on the **3090** on this machine; use `torch.device("cuda:0")` or `CUDA_VISIBLE_DEVICES=0` for the **4090**
+- Do not assume `nvidia-smi` ordering and PyTorch/CUDA runtime ordering are identical on a new host.
+- Before a long run, verify the visible devices with `torch.cuda.device_count()` and `torch.cuda.get_device_name(...)`.
+- Use `--gpu-ids 0,1,...` when you want to hard-pin a specific GPU set.
+- Use `--sequential` when you intentionally want single-process serial execution.
 
-If you want to reproduce the current project convention on this host, prefix the command:
+The canonical entrypoint on this host is:
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_proxy.py
+./.venv/bin/python scripts/optuna_main.py
 ```
 
 ## Files
 
-- `scripts/run_optuna_proxy.py`
-  - Small, fast search around the current proxy candidate.
-- `scripts/run_optuna_main.py`
-  - Narrower, deeper search or confirmation on the formal candidate.
+- `scripts/optuna_main.py`
+  - Adaptive main/formal search entrypoint. This is the default lane on 24GB+ GPUs.
+- `scripts/optuna_proxy.py`
+  - Adaptive low-memory proxy fallback entrypoint. Use it when you need a cheaper or faster study.
 - `scripts/monitor_optuna.py`
   - Reads trial artifacts, summarizes progress, flags training failures, emits threshold warnings, and writes monitor reports.
 - `scripts/optuna_workflow.py`
@@ -112,16 +113,16 @@ Failure handling:
 
 ```bash
 # 1) Check the current candidate still trains.
-./.venv/bin/python train.py --config configs/autoresearch_proxy.yaml
+./.venv/bin/python train.py --config configs/autoresearch_formal.yaml
 ./.venv/bin/python tools/evaluate_threshold.py \
-  --run_dir runs/autoresearch_proxy \
-  --config configs/autoresearch_proxy.yaml
+  --run_dir runs/autoresearch_formal \
+  --config configs/autoresearch_formal.yaml
 
 # 2) Apply one high-level AutoResearch change.
 #    Keep it discrete: one structural or regularization idea at a time.
 
-# 3) Launch a small fresh proxy Optuna study on top of that candidate.
-CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_proxy.py
+# 3) Launch a fresh main Optuna study on top of that candidate.
+./.venv/bin/python scripts/optuna_main.py
 
 # 4) Monitor the running study in another shell.
 ./.venv/bin/python scripts/monitor_optuna.py \
@@ -130,12 +131,10 @@ CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_proxy.py
   --interval-seconds 30
 
 # 5) Resume only when you explicitly want to continue the same study.
-CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_proxy.py --resume
+./.venv/bin/python scripts/optuna_main.py --resume
 
-# 6) If the tuned proxy winner improves validation accuracy, run a deeper pass.
-CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/run_optuna_main.py \
-  --source-study-dir runs/optuna_proxy \
-  --top-k 3
+# 6) Only if you need a lower-memory or faster fallback, run the proxy lane.
+./.venv/bin/python scripts/optuna_proxy.py
 
 # 7) Summarize the formal study.
 ./.venv/bin/python scripts/monitor_optuna.py \
@@ -148,13 +147,26 @@ Use this loop for each research iteration:
 
 1. Propose one high-level change.
 2. Run one ordinary baseline/smoke check.
-3. Run `scripts/run_optuna_proxy.py` as a fresh study unless you intentionally want to resume.
+3. Run `scripts/optuna_main.py` as a fresh study unless you intentionally want to resume.
 4. Run `scripts/monitor_optuna.py` on the resulting study.
 5. Compare the best tuned trial against the current keep version by validation accuracy.
 6. If `val_acc` is tied, compare `val_auc`.
 7. Only keep the change if the tuned candidate is better.
-8. If it wins, run the main/formal pass and monitor it again.
+8. If you intentionally fall back to the proxy lane, promote only strong proxy winners into a main/formal pass and monitor it again.
 9. Then update `backlog.md`, `results.tsv`, and the best config reference.
+
+Typical multi-GPU invocations:
+
+```bash
+# Auto-select all currently idle GPUs.
+./.venv/bin/python scripts/optuna_main.py
+
+# Restrict the proxy fallback study to GPUs 0 and 2.
+./.venv/bin/python scripts/optuna_proxy.py --gpu-ids 0,2
+
+# Fall back to single-process serial behavior on one GPU.
+CUDA_VISIBLE_DEVICES=1 ./.venv/bin/python scripts/optuna_main.py --sequential
+```
 
 ## Notes
 

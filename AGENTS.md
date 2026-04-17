@@ -15,7 +15,7 @@
 - 每个实验结束后追加 `results.tsv`
 - 遵守 `program.md` 中的超时规则和资源保护规则
 - 使用分配给你的 GPU 执行 Python 命令（slot 0: `CUDA_VISIBLE_DEVICES=0`，slot 1: `CUDA_VISIBLE_DEVICES=1`）
-- 如果未明确分配 slot，默认使用 `CUDA_VISIBLE_DEVICES=1`（slot 1 / RTX 4090）
+- 如果未明确分配 slot，默认使用 `CUDA_VISIBLE_DEVICES=1`（slot 1 / 默认主训练槽位）
 - 并行模式下，写 `results.tsv` 时使用 `flock -x /tmp/ankle_results.lock`
 
 ## NEVER
@@ -51,11 +51,11 @@ LOOP:
 
 - OS: Ubuntu，Shell: Bash
 - Python: `.venv/bin/python`（torch 2.2.0+cu121）
-- CPU: Intel Xeon Silver 4310 @ 2.10GHz × 12 核（⚠️ 注意监控 CPU 占用率，占用不高时可尝试调高 num_workers）
-- RAM: 128GB
-- GPU 0: NVIDIA RTX 3090（24GB VRAM）→ Slot 0，`CUDA_VISIBLE_DEVICES=0`
-- GPU 1: NVIDIA RTX 4090（24GB VRAM）→ Slot 1，`CUDA_VISIBLE_DEVICES=1`
-- 设备映射提醒：某些宿主环境里 `nvidia-smi` 与 PyTorch 的设备顺序可能不一致；长跑前先用 `.venv/bin/python -c "import torch; print(torch.cuda.get_device_name(0))"` 实测当前命中的 GPU
+- CPU: Intel Xeon Gold 6426Y，2 sockets / 32 物理核 / 64 线程（2026-04-16 `lscpu` 实测；⚠️ 注意监控 CPU 占用率，占用不高时可尝试调高 num_workers）
+- RAM: 125 GiB（2026-04-16 `free -h` 实测）
+- GPU（申请目标）: 4 张 NVIDIA GPU，单卡显存约 24 GB 或以上
+- 槽位约定：主训练配置仍保留 `slot 0 -> CUDA_VISIBLE_DEVICES=0`、`slot 1 -> CUDA_VISIBLE_DEVICES=1` 两个槽位；自适应 Optuna 入口会按当前可见且空闲的 GPU 数量自动并行调参，也可用 `--gpu-ids` 显式指定卡列表
+- 设备映射提醒：某些宿主环境里 `nvidia-smi` 与 PyTorch 的设备顺序可能不一致；长跑前先用 `.venv/bin/python -c "import torch; print(torch.cuda.device_count()); [print(i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]"` 实测当前可见 GPU
 - `num_workers`: 默认 1（注意：如果 CPU 占用不高，Agent 可以自动调整 num_workers 的水平以加速训练）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
 
@@ -66,7 +66,6 @@ LOOP:
 - `configs/autoresearch_proxy_slot0.yaml`、`configs/autoresearch_formal_slot0.yaml`
 - `configs/optuna_*.yaml`（Optuna 搜索配置）
 - `scripts/`（Optuna 工作流脚本 + 并行训练脚本）
-- `autoresearch_parallel_loop.py`（双进程自动循环）
 - `backlog.md`（实验待办，每次实验后必须更新）
 - `results.tsv`（只追加）
 - 可新增依赖（限 `optuna` 等实验工具，需记录在 `requirements.txt`）
@@ -78,13 +77,13 @@ LOOP:
 | `program.md` | 完整实验协议（必读） |
 | `backlog.md` | 实验待办清单 + 当前最优纪录 + Agent 状态（必读、必更新） |
 | `results.tsv` | 实验结果记录（只追加，并行时加 flock） |
-| `configs/autoresearch_proxy.yaml` | Slot 1 (4090) proxy 配置 |
-| `configs/autoresearch_formal.yaml` | Slot 1 (4090) formal 配置 |
-| `configs/autoresearch_proxy_slot0.yaml` | Slot 0 (3090) proxy 配置 |
-| `configs/autoresearch_formal_slot0.yaml` | Slot 0 (3090) formal 配置 |
+| `configs/autoresearch_proxy.yaml` | 主训练槽位（slot 1）proxy 配置 |
+| `configs/autoresearch_formal.yaml` | 主训练槽位（slot 1）formal 配置 |
+| `configs/autoresearch_proxy_slot0.yaml` | 辅助训练槽位（slot 0）proxy 配置 |
+| `configs/autoresearch_formal_slot0.yaml` | 辅助训练槽位（slot 0）formal 配置 |
 | `src/model.py` | 模型代码（可修改） |
-| `scripts/parallel_train.py` | 双 GPU 并行训练启动器 |
+| `scripts/parallel_train.py` | 双槽位并行训练启动器（当前实现） |
 | `scripts/parallel_status.py` | 双槽位状态监控 |
-| `autoresearch_parallel_loop.py` | 双进程 autoresearch 自动循环 |
-| `scripts/run_optuna_proxy.py` | Optuna proxy 超参搜索（可修改） |
+| `scripts/optuna_proxy.py` | 自适应 GPU proxy 超参搜索入口（可修改） |
+| `scripts/optuna_main.py` | 自适应 GPU formal 超参搜索入口（可修改） |
 | `scripts/monitor_optuna.py` | Optuna 结果监控（可修改） |

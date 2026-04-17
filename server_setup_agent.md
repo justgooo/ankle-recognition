@@ -1,6 +1,6 @@
 # 服务器环境配置 Agent 指令
 
-> **目标**：在一台 Ubuntu + RTX 3090 + RTX 4090 双 GPU 服务器上，将「足踝 CT 分类」项目配置到可运行状态。
+> **目标**：在一台 Ubuntu + 4 张 24GB+ GPU 服务器上，将「足踝 CT 分类」项目配置到可运行状态。
 > 项目 GitHub 仓库已克隆到服务器，数据集已传输到位。
 
 ---
@@ -8,10 +8,9 @@
 ## 前置假设
 
 - OS：Ubuntu（22.04 或更高）
-- GPU 0：NVIDIA RTX 3090（24GB VRAM）
-- GPU 1：NVIDIA RTX 4090（24GB VRAM）
-- CPU：Intel Xeon Silver 4310 @ 2.10GHz × 12 核（⚠️ 其他进程已占 ~70%）
-- RAM：128GB
+- GPU：4 × NVIDIA GPU（单卡显存约 24 GB 或以上；具体型号可不同）
+- CPU：Intel Xeon Gold 6426Y，2 sockets / 32 物理核 / 64 线程（按当前宿主机实测）
+- RAM：125 GiB
 - 项目仓库已通过 `git clone` 拉取到服务器本地
 - 数据集目录 `data/realdata/` 已放置在项目根目录下
 - 服务器有 sudo 权限
@@ -24,7 +23,7 @@
 nvidia-smi
 ```
 
-- 确认输出中能看到 **RTX 3090** 和 **RTX 4090** 以及 **Driver Version**。
+- 确认输出中能看到 **4 张 GPU**、每张显存约 **24GB 或以上**，以及 **Driver Version**。
 - 如果 `nvidia-smi` 不可用或驱动版本过低（< 470），需要安装/升级驱动：
 
 ```bash
@@ -80,10 +79,10 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 安装后验证：
 
 ```bash
-python -c "import torch; print(f'torch={torch.__version__}, cuda={torch.version.cuda}, gpu={torch.cuda.get_device_name(0)}')"
+python -c "import torch; print(f'torch={torch.__version__}, cuda={torch.version.cuda}, available={torch.cuda.is_available()}, count={torch.cuda.device_count()}'); [print(i, torch.cuda.get_device_name(i), round(torch.cuda.get_device_properties(i).total_memory / 1024**3, 1), 'GiB') for i in range(torch.cuda.device_count())]"
 ```
 
-预期输出应包含 `NVIDIA GeForce RTX 3090` 和 `RTX 4090` 且 `cuda` 版本非空。
+预期输出应包含 `count=4`，且每张卡的显存约 `24 GiB` 或以上；具体 GPU 型号不作硬编码要求。
 
 ---
 
@@ -159,20 +158,20 @@ sed -i 's|OS: Windows，Shell: PowerShell|OS: Ubuntu，Shell: Bash|g' AGENTS.md
 
 服务器目标环境不依赖可执行脚本入口，项目中的调度/批处理入口统一改为 `.py`：
 
-- `autoresearch_loop.py`
-- `autoresearch_parallel_loop.py`
 - `run_paper_validation.py`
 - `scripts/parallel_train.py`
 - `scripts/parallel_status.py`
+- `scripts/optuna_proxy.py`
+- `scripts/optuna_main.py`
 
 调用方式统一为：
 
 ```bash
-python autoresearch_loop.py
-python autoresearch_parallel_loop.py
 python run_paper_validation.py
 python scripts/parallel_train.py
 python scripts/parallel_status.py
+python scripts/optuna_proxy.py
+python scripts/optuna_main.py
 ```
 
 这样部署时只要求服务器能运行 Python，不再依赖 `.sh` / `.ps1` 的执行权限与 shell 兼容性。
@@ -181,18 +180,18 @@ python scripts/parallel_status.py
 
 ## 第 9 步：调整训练参数
 
-服务器 CPU 已被其他进程占用约 70%，需要低 CPU 模式。
+建议先用保守的数据加载配置启动，再根据 CPU 占用情况逐步放宽。
 
 修改所有 `configs/autoresearch_*.yaml`：
 
 ```yaml
 data:
-  batch_size: 4      # 24GB VRAM 足够
-  num_workers: 1     # ⚠️ 硬限制：CPU 已被占用 ~70%，不要提高
+  batch_size: 4      # 24GB 级别显存通常足够
+  num_workers: 1     # 先从保守值起步，观察 CPU 使用率后再决定是否提高
 ```
 
-> **注意**：`num_workers` 必须保持为 1。服务器 12 核 CPU 已被其他进程占用约 70%，
-> 特别是在双 GPU 并行模式下（两个训练进程 + 其 DataLoader 子进程），提高此值会导致 CPU 过载。
+> **注意**：当前仓库的并行脚本仍以双槽位为主，建议先用 `num_workers=1` 验证稳定性；
+> 如果 CPU 占用明显不高，可以逐步提升到 `2` 或 `4`，但每次调整前都要先观察是否出现 DataLoader 抖动或整体吞吐下降。
 
 ---
 
@@ -219,7 +218,7 @@ python train.py --config configs/autoresearch_proxy.yaml
 nvidia-smi
 ```
 
-确认 GPU 利用率 > 0%，且显存使用量合理（batch_size=4 时预计 10-16GB）。
+确认 GPU 利用率 > 0%，且显存使用量合理（`batch_size=4` 时通常预计 10-16GB）。
 
 ### 10.3 双 GPU 并行测试
 
@@ -228,9 +227,16 @@ python scripts/parallel_train.py
 ```
 
 确认：
-- 两张 GPU 都有负载（`nvidia-smi` 显示两卡均有显存占用）
+- 当前实现默认会拉起两个训练槽位；确认至少两张 GPU 有负载（`nvidia-smi` 显示两卡均有显存占用）
 - CPU 使用率没有飙到 100%
 - 两个进程各自的日志正常输出
+
+其余第 3 / 4 张卡可先做单卡可见性检查：
+
+```bash
+CUDA_VISIBLE_DEVICES=2 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count(), torch.cuda.get_device_name(0))"
+CUDA_VISIBLE_DEVICES=3 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count(), torch.cuda.get_device_name(0))"
+```
 
 监控状态：
 ```bash
@@ -243,13 +249,15 @@ python scripts/parallel_status.py
 
 以下条件全部满足即视为配置成功：
 
-- [x] `nvidia-smi` 正常显示 3090 和 4090
+- [x] `nvidia-smi` 正常显示 4 张 GPU，且每张显存约 24GB 或以上
 - [x] `python -c "import torch; print(torch.cuda.is_available())"` 输出 `True`
+- [x] `python -c "import torch; print(torch.cuda.device_count())"` 输出 `4`
 - [x] `pip list` 中包含 torch、torchvision、numpy、pandas、scikit-learn、Pillow、PyYAML、tqdm、pydicom
 - [x] `python train.py --config configs/autoresearch_proxy.yaml` 能完整跑完 4 个 epoch 且生成 `summary.json`
 - [x] AGENTS.md 中的路径已改为 Linux 格式
 - [x] `data/realdata/metadata.csv` 中的路径均为正斜杠格式
-- [ ] `python scripts/parallel_train.py` 能同时在两张卡上启动训练
+- [ ] `python scripts/parallel_train.py` 能同时在两个主训练槽位上启动训练
+- [ ] `CUDA_VISIBLE_DEVICES=2/3` 的单卡检查均能正常识别 GPU
 
 ---
 
@@ -272,4 +280,3 @@ python scripts/parallel_status.py
 | `results.tsv` | 实验结果 | 只追加 |
 | `scripts/parallel_train.py` | 双 GPU 并行训练启动器 | ✅ |
 | `scripts/parallel_status.py` | 双槽位状态监控 | ✅ |
-| `autoresearch_parallel_loop.py` | 双进程 autoresearch 自动循环 | ✅ |

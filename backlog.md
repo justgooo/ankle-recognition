@@ -7,6 +7,8 @@
 > **⚠️ 指标体系切换**：本项目已从「零漏诊 (no_miss_val_acc)」切换到「验证集准确率 (val_acc)」。
 > 旧实验记录使用 `no_miss_val_acc`，保留不变。新实验使用 `summary.json` 中的 `best_val.accuracy`。
 > 新实验的 keep 判定基于 val_acc，不再使用 evaluate_threshold.py 作为主评估工具。
+>
+> **⚠️ 执行策略更新（2026-04-17）**：在单卡显存 `>= 24 GiB` 且当前算力充足的环境里，默认直接运行 `main/formal` lane；`proxy` 不再作为常规筛选步骤，仅保留给低显存 fallback 或快速诊断。
 
 ---
 
@@ -16,10 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-LOCAL8G-BB（按本地 `RTX 2070 SUPER 8GB` 预算进行的 feature-fusion backbone quick compare；`resunet / resnext / senet / cspnet` 统一使用 `image_size=256`, `num_slices_per_view=8`, `batch_size=2`, `num_workers=0`, `epochs=1`；commit `e486601`） |
-| 上次结果 | keep（本轮本地 8GB 快筛排名：`resunet` `val_acc=0.8085106382978723`, `val_auc=0.915`, `peak_vram=1.23 GiB` > `cspnet` `0.7553191489361702`, `0.8818181818181818`, `5.61 GiB` >>> `senet` `0.5319148936170213`, `0.7781818181818181`, `1.46 GiB` > `resnext` `0.46808510638297873`, `0.7272727272727272`, `1.32 GiB`。说明在当前 2070S-safe 几何下，`resunet` 明显是最优 backbone，`cspnet` 是唯一仍有继续推进价值的备选，而 `senet / resnext` 应停止继续投入。） |
-| 下一步 | 若继续当前本地 8GB 路线，应只推进 `resunet` 与 `cspnet` 做 `4-epoch proxy` 对比；`senet / resnext` 直接关闭。当前 canonical `val_acc` 主线仍与旧 `512x16 / decision fusion` 记录分开记账，不直接比较。 |
-| 连续 discard 计数 | 30 |
+| 上次实验 | CMP-FAIR-V100-STAGE3-MULTISEED（沿 `docs/fair_backbone_compare.md` 的 Stage 3，在与上一轮完全相同的 matched V100 formal recipe 上，对 `resunet / resnext` 补做 `seed=123 / 456` 稳定性确认；共 4 个 formal run；commit `2123941`） |
+| 上次结果 | keep（Stage 3 完成后，`resnext` 在 `seed=42/123/456` 上的 `val_acc` 为 `0.9148936170212766 / 0.9148936170212766 / 0.9042553191489362`，`val_auc` 为 `0.9404545454545454 / 0.9695454545454545 / 0.9413636363636364`；`resunet` 对应为 `0.9148936170212766 / 0.8829787234042553 / 0.9042553191489362` 和 `0.9222727272727274 / 0.9363636363636363 / 0.9309090909090909`。`resnext` 在 3 个 seed 上 accuracy 从不输给 `resunet`，且 AUC 3/3 全胜，因此该独立 fair-backbone campaign 的 stable winner 可以正式定为 `resnext`。） |
+| 下一步 | `fair_backbone_compare` 路线到此可收束：若继续推进该独立 backbone campaign，只保留 `resnext`；若回到仓库主任务，应重新切回当前 canonical `val_acc` 主线（阶段 10），而不是继续补 `resunet` 对照。 |
+| 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
+| 连续 discard 计数 | 0 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -45,7 +48,7 @@
 > - 这一轮是 **本地兼容性 + backbone 快筛**，不与当前 canonical `val_acc` 主线（`a60c3e0` / `c30fcae`）直接比较。
 > - 当前本地环境于 **2026-04-16** 实测为：Windows `.venv\\Scripts\\python.exe` + 单卡 `NVIDIA GeForce RTX 2070 SUPER (8192 MiB)`。
 > - 原始 `data/realdata/metadata.csv` 在本地存在 `CTdata2/` 路径漂移；本轮通过 `scripts/prepare_local_metadata.py` 生成 `autoresearch_logs/local_metadata_fixed.csv` 供训练使用，**未修改原始数据文件与 split**。
-> - 为适配 8GB 显存与本地路径现状，当前 `configs/autoresearch_proxy.yaml` / `configs/autoresearch_formal.yaml` 已同步切到 `autoresearch_logs/local_metadata_fixed.csv`，并收紧到：`image_size=256`, `num_slices_per_view=8`, `batch_size=2`, `num_workers=0`。
+> - 当日为适配 8GB 显存与本地路径现状，`configs/autoresearch_proxy.yaml` / `configs/autoresearch_formal.yaml` 曾同步切到 `autoresearch_logs/local_metadata_fixed.csv`，并临时收紧到：`image_size=256`, `num_slices_per_view=8`, `batch_size=2`, `num_workers=0`。
 > - backbone 对比使用统一 quick-compare 配方：`feature fusion`, `share_backbone=false`, `freeze_layers=3`, `use_pretrained=true`, `dropout=0.3`, `lr=5e-5`, `weight_decay=1e-4`, `epochs=1`。
 
 - [x] **CMP-LOCAL8G-RESUNET**：`configs/cmp_local8g_feature_resunet.yaml` → `val_acc=0.8085106382978723`, `val_auc=0.915`, `val_f1=0.7857142857142857`, `peak_vram=1.23 GiB`, `total_seconds=443.9` → **keep**（本轮四个 backbone 中 accuracy / AUC 均最佳，且显存余量最充足，是当前 2070S 路线的首选 backbone）
@@ -55,6 +58,47 @@
 
 - **本轮结论**：`resunet` > `cspnet` >>> `senet` > `resnext`
 - **推荐动作**：若继续本地 8GB 路线，只保留 `resunet` 与 `cspnet` 做后续 `4-epoch proxy`；`senet / resnext` 直接停止
+
+---
+
+## 2026-04-17：V100 Fair Backbone Formal Compare
+
+> **独立 campaign 说明**
+> - 这一轮按 `docs/fair_backbone_compare.md` 的“equal protocol treatment”语义执行，但把运行平台升级到 `3 x Tesla V100-PCIE-32GB`。
+> - 这仍是 **独立 backbone compare campaign**，不与当前 canonical `val_acc` 主线（`a60c3e0` / `c30fcae`）直接比较，也不用于覆盖 decision-fusion 主线最优纪录。
+> - 四个 backbone 统一使用 matched formal recipe：`feature fusion`, `share_backbone=false`, `use_attention_pooling=false`, `freeze_layers=3`, `dropout=0.3`, `lr=1e-4`, `weight_decay=1e-4`, `epochs=15`, `image_size=256`, `num_slices_per_view=8`, `batch_size=6`, `num_workers=12`。
+> - 运行 commit 为 `25f17f0`。三卡并发脚本成功完成前三个 backbone，但未自动派发最后一个 `cspnet`；该 run 随后在空闲 `GPU 0` 上手动补跑完成。
+
+- [x] **CMP-FAIR-V100-FORMAL-RESUNET**：`configs/cmp_fair_v100_formal_resunet.yaml` → `val_acc=0.9148936170212766`, `val_auc=0.9222727272727274`, `val_f1=0.9047619047619048`, `peak_vram=2.97 GiB`, `total_seconds=870.2` → **discard**（与 `resnext` 同分最高 `val_acc`，但按 campaign tie-break 在 `val_auc` 上低 `0.018181818181818`；说明 `resunet` 在 equal-budget formal 下仍然非常强，但不再像本地 1-epoch quick screen 那样有绝对优势。）
+- [x] **CMP-FAIR-V100-FORMAL-RESNEXT**：`configs/cmp_fair_v100_formal_resnext.yaml` → `val_acc=0.9148936170212766`, `val_auc=0.9404545454545454`, `val_f1=0.9090909090909091`, `peak_vram=2.14 GiB`, `total_seconds=888.3` → **keep**（本轮 campaign winner；与 `resunet` 持平最高 `val_acc`，并以更高 `val_auc` 获胜，同时显存也更低。说明在统一 15-epoch matched recipe 下，`resnext` 的上限被此前 quick screen 明显低估。）
+- [x] **CMP-FAIR-V100-FORMAL-SENET**：`configs/cmp_fair_v100_formal_senet.yaml` → `val_acc=0.851063829787234`, `val_auc=0.9195454545454544`, `val_f1=0.8157894736842105`, `peak_vram=2.16 GiB`, `total_seconds=878.0` → **discard**（较 campaign winner `0.9148936170212766` 低 `0.0638297872340426`；虽然相比本地 quick screen 有显著回升，但仍明显落后于 `resnext / resunet`。）
+- [x] **CMP-FAIR-V100-FORMAL-CSPNET**：`configs/cmp_fair_v100_formal_cspnet.yaml` → `val_acc=0.8829787234042553`, `val_auc=0.9213636363636363`, `val_f1=0.8705882352941177`, `peak_vram=1.87 GiB`, `total_seconds=793.7` → **discard**（本轮最强非冠军；较 campaign winner `0.9148936170212766` 低 `0.0319148936170213`。说明 `cspnet` 在 equal-budget formal 下比本地 8GB 快筛表现更有竞争力，但仍不足以挤进第一梯队。）
+
+- **本轮 formal 排名**：`resnext` >= `resunet` > `cspnet` > `senet`
+- **按规则的最终胜者**：`resnext`
+- **推荐动作**：Stage 3 稳定性确认现已完成（见下节）；该独立 fair-backbone campaign 可正式收束为 `resnext` stable winner，`resunet` 降为次优对照保留结论
+
+---
+
+## 2026-04-17：V100 Fair Backbone Stage 3 Stability Confirmation
+
+> **独立 campaign 说明**
+> - 本节严格承接上面的 `CMP-FAIR-V100-FORMAL`，不修改 recipe，只补做 `seed=123 / 456`。
+> - 两个 backbone 都沿用同一 matched formal recipe：`feature fusion`, `share_backbone=false`, `use_attention_pooling=false`, `freeze_layers=3`, `dropout=0.3`, `lr=1e-4`, `weight_decay=1e-4`, `epochs=15`, `image_size=256`, `num_slices_per_view=8`, `batch_size=6`, `num_workers=12`。
+> - 本轮运行 commit 为 `2123941`。起跑顺序为三卡并发 `resunet_s123 / resnext_s123 / resunet_s456`，随后补跑 `resnext_s456`。
+
+- [x] **CMP-FAIR-V100-STAGE3-RESUNET-S123**：`configs/cmp_fair_v100_formal_resunet_s123.yaml` → `val_acc=0.8829787234042553`, `val_auc=0.9363636363636363`, `val_f1=0.8607594936708861`, `peak_vram=2.97 GiB`, `total_seconds=859.8` → **discard**（较 `resnext_s123` 低 `0.0319148936170213` accuracy，AUC 也低 `0.0331818181818182`；说明 `resunet` 在 alternate seed 上比 seed-42 更易回落。）
+- [x] **CMP-FAIR-V100-STAGE3-RESNEXT-S123**：`configs/cmp_fair_v100_formal_resnext_s123.yaml` → `val_acc=0.9148936170212766`, `val_auc=0.9695454545454545`, `val_f1=0.9047619047619048`, `peak_vram=2.15 GiB`, `total_seconds=880.6` → **keep**（与 seed-42 持平最高 accuracy，并把 AUC 再抬高 `0.0290909090909091`；强力支持 `resnext` 不是一次性赢家。）
+- [x] **CMP-FAIR-V100-STAGE3-RESUNET-S456**：`configs/cmp_fair_v100_formal_resunet_s456.yaml` → `val_acc=0.9042553191489362`, `val_auc=0.9309090909090909`, `val_f1=0.8860759493670886`, `peak_vram=2.97 GiB`, `total_seconds=862.6` → **discard**（较 `seed=42` 回落 `0.0106382978723404` accuracy；虽然恢复到竞争区，但与 `resnext_s456` 持平 accuracy 时仍输 AUC。）
+- [x] **CMP-FAIR-V100-STAGE3-RESNEXT-S456**：`configs/cmp_fair_v100_formal_resnext_s456.yaml` → `val_acc=0.9042553191489362`, `val_auc=0.9413636363636364`, `val_f1=0.891566265060241`, `peak_vram=2.15 GiB`, `total_seconds=809.6` → **keep**（开局极慢热，前 2 个 epoch 一度掉到 `0.4681`，但最终仍把 best 拉回与 `resunet_s456` 持平的 accuracy，并再赢 `0.0104545454545455` AUC；说明 `resnext` 的优化轨迹更抖，但最终上限依旧稳住。）
+
+- **按 seed 的 head-to-head 结果**
+- `seed=42`：`resnext` 与 `resunet` 持平 `val_acc=0.9148936170212766`，AUC `0.9404545454545454 > 0.9222727272727274`
+- `seed=123`：`resnext` 以 `0.9148936170212766 / 0.9695454545454545` 明显胜过 `resunet` 的 `0.8829787234042553 / 0.9363636363636363`
+- `seed=456`：两者同为 `val_acc=0.9042553191489362`，但 `resnext` 仍以 `val_auc=0.9413636363636364` 胜过 `resunet` 的 `0.9309090909090909`
+
+- **Stage 3 结论**：`resnext` 在 3 个 seed 上 accuracy 从不输给 `resunet`，AUC 则 3/3 全胜，因此该独立 `fair_backbone_compare` campaign 的稳定胜者正式定为 `resnext`
+- **附带观察**：`resnext` 的训练曲线明显比 `resunet` 更慢热、更波动，尤其 `seed=456` 前半程多次掉到 `0.8` 以下；但以 `best_val_accuracy_then_auc` 作为规则时，它最终仍保持对 `resunet` 的系统性优势
 
 ---
 

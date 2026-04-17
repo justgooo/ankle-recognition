@@ -11,6 +11,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -83,6 +84,32 @@ class TrialOutcome:
     timestamps: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class GPUDeviceInfo:
+    index: int
+    name: str
+    memory_used_mb: int
+    memory_total_mb: int
+    utilization_gpu: int
+
+
+@dataclass
+class PreparedStudy:
+    optuna_module: Any
+    config_path: Path
+    search_cfg: dict[str, Any]
+    study_cfg: dict[str, Any]
+    base_config: dict[str, Any]
+    search_space: dict[str, Any]
+    python_executable: str
+    study_root: Path
+    study: Any
+    source_study_dir: Path | None
+    target_trials: int
+    existing_trials: int
+    remaining_trials: int
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -100,8 +127,12 @@ def dump_yaml(path: Path, data: dict[str, Any]) -> None:
 
 def save_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, ensure_ascii=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
@@ -347,6 +378,104 @@ def build_env(study_cfg: dict[str, Any]) -> dict[str, str]:
     return env
 
 
+def nvidia_smi_query(fields: str) -> list[str]:
+    if shutil.which("nvidia-smi") is None:
+        return []
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", f"--query-gpu={fields}", "--format=csv,noheader,nounits"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, PermissionError):
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def parse_nvidia_int(raw: str) -> int:
+    token = str(raw).strip().split()[0]
+    return int(float(token))
+
+
+def discover_gpu_devices() -> list[GPUDeviceInfo]:
+    lines = nvidia_smi_query("index,name,memory.used,memory.total,utilization.gpu")
+    devices: list[GPUDeviceInfo] = []
+    for line in lines:
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 5:
+            continue
+        try:
+            devices.append(
+                GPUDeviceInfo(
+                    index=parse_nvidia_int(parts[0]),
+                    name=parts[1],
+                    memory_used_mb=parse_nvidia_int(parts[2]),
+                    memory_total_mb=parse_nvidia_int(parts[3]),
+                    utilization_gpu=parse_nvidia_int(parts[4]),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return devices
+
+
+def parse_gpu_id_spec(raw_value: str | None) -> list[int] | None:
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value or value.lower() == "auto":
+        return None
+    gpu_ids: list[int] = []
+    for token in value.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        gpu_ids.append(int(token))
+    return gpu_ids
+
+
+def parse_max_workers(raw_value: str | int | None, default: int) -> int:
+    if raw_value is None:
+        return max(1, default)
+    if isinstance(raw_value, int):
+        return max(1, raw_value)
+    value = str(raw_value).strip().lower()
+    if not value or value == "auto":
+        return max(1, default)
+    return max(1, int(value))
+
+
+def select_gpu_devices(
+    gpu_id_spec: str | None,
+    max_used_memory_mb: int,
+    max_utilization: int,
+) -> list[GPUDeviceInfo]:
+    devices = discover_gpu_devices()
+    if not devices:
+        return []
+
+    explicit_ids = parse_gpu_id_spec(gpu_id_spec)
+    if explicit_ids is not None:
+        selected = [device for device in devices if device.index in explicit_ids]
+        selected.sort(key=lambda device: explicit_ids.index(device.index))
+        return selected
+
+    idle_devices = [
+        device
+        for device in devices
+        if device.memory_used_mb <= max_used_memory_mb and device.utilization_gpu <= max_utilization
+    ]
+    if idle_devices:
+        idle_devices.sort(key=lambda device: (device.memory_used_mb, device.utilization_gpu, device.index))
+        return idle_devices
+
+    devices.sort(key=lambda device: (device.memory_used_mb, device.utilization_gpu, device.index))
+    return devices[:1]
+
+
 def resolve_python_candidate(candidate: str) -> str | None:
     candidate = str(candidate).strip()
     if not candidate:
@@ -356,7 +485,7 @@ def resolve_python_candidate(candidate: str) -> str | None:
     if candidate_path.is_absolute():
         resolved_path = candidate_path
     elif any(sep in candidate for sep in (os.sep, "/", "\\")) or candidate.startswith("."):
-        resolved_path = (REPO_ROOT / candidate_path).resolve()
+        resolved_path = (REPO_ROOT / candidate_path).absolute()
     else:
         return shutil.which(candidate)
 
@@ -412,6 +541,65 @@ def detect_python_executable(candidates: list[str] | None = None) -> str:
     )
 
 
+def probe_torch_cuda(python_executable: str, env: dict[str, str] | None = None) -> dict[str, Any]:
+    probe_code = (
+        "import json, torch; "
+        "device_count = int(torch.cuda.device_count()); "
+        "payload = {"
+        "'cuda_available': bool(torch.cuda.is_available()), "
+        "'device_count': device_count, "
+        "'device_names': [torch.cuda.get_device_name(i) for i in range(device_count)] "
+        "if torch.cuda.is_available() else []"
+        "}; "
+        "print(json.dumps(payload))"
+    )
+    try:
+        result = subprocess.run(
+            [python_executable, "-c", probe_code],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+            env=env,
+        )
+    except (FileNotFoundError, PermissionError, subprocess.SubprocessError) as exc:
+        raise SystemExit(
+            "CUDA preflight failed because the project Python environment could not be queried. "
+            f"Python={python_executable!r}, error={exc!r}"
+        ) from exc
+
+    stdout_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not stdout_lines:
+        raise SystemExit(
+            "CUDA preflight failed because the probe returned no output. "
+            f"Python={python_executable!r}"
+        )
+
+    try:
+        return json.loads(stdout_lines[-1])
+    except json.JSONDecodeError as exc:
+        stderr_text = result.stderr.strip()
+        raise SystemExit(
+            "CUDA preflight returned an unreadable response. "
+            f"stdout_tail={stdout_lines[-1]!r}, stderr={stderr_text!r}"
+        ) from exc
+
+
+def ensure_cuda_ready(python_executable: str, env: dict[str, str] | None = None) -> dict[str, Any]:
+    cuda_info = probe_torch_cuda(python_executable, env=env)
+    if bool(cuda_info.get("cuda_available")) and int(cuda_info.get("device_count", 0)) > 0:
+        return cuda_info
+
+    raise SystemExit(
+        "CUDA preflight failed for AutoResearch. "
+        f"Python={python_executable!r}, "
+        f"cuda_available={cuda_info.get('cuda_available')}, "
+        f"device_count={cuda_info.get('device_count')}. "
+        "This workflow must not fall back to CPU; fix the CUDA environment first."
+    )
+
+
 def import_optuna():
     try:
         import optuna  # type: ignore[import-not-found]
@@ -462,6 +650,31 @@ def build_study(optuna_module, search_cfg: dict[str, Any], study_root: Path, res
         sampler=choose_sampler(optuna_module, study_cfg),
         pruner=choose_pruner(optuna_module, study_cfg),
     )
+
+
+def fail_stale_running_trials(study, study_root: Path, optuna_module) -> int:
+    running_state = optuna_module.trial.TrialState.RUNNING
+    failed_state = optuna_module.trial.TrialState.FAIL
+    stale_trials = [trial for trial in study.trials if trial.state == running_state]
+    if not stale_trials:
+        return 0
+
+    stale_reason = "Marked failed on resume after a stale RUNNING Optuna trial was detected."
+    finished_at = now_iso()
+    for trial in stale_trials:
+        study.tell(trial.number, state=failed_state)
+        trial_file = study_root / "trials" / f"trial_{trial.number:04d}" / "trial.json"
+        payload = read_json(trial_file) or {"trial_number": trial.number}
+        payload["status"] = "crash"
+        payload["failure_reason"] = stale_reason
+        payload.setdefault("params", dict(trial.params))
+        timestamps = payload.get("timestamps")
+        if not isinstance(timestamps, dict):
+            timestamps = {}
+        timestamps.setdefault("finished_at", finished_at)
+        payload["timestamps"] = timestamps
+        save_json(trial_file, payload)
+    return len(stale_trials)
 
 
 def suggest_value(trial, key: str, spec: dict[str, Any]) -> Any:
@@ -741,9 +954,13 @@ def run_single_trial(
     params: dict[str, Any],
     trial_dir: Path,
     trial_number: int,
+    env_overrides: dict[str, str] | None = None,
+    worker_label: str | None = None,
 ) -> TrialOutcome:
     study_cfg = search_cfg["study"]
     env = build_env(study_cfg)
+    if env_overrides:
+        env.update({str(key): str(value) for key, value in env_overrides.items()})
     trial_timeout_minutes = study_cfg.get("trial_timeout_minutes")
     trial_timeout_seconds = None
     if trial_timeout_minutes is not None:
@@ -761,6 +978,7 @@ def run_single_trial(
         "config_path": str(config_path),
         "run_dir": config["output_dir"],
         "started_at": now_iso(),
+        "worker_label": worker_label,
     }
     save_json(trial_dir / "trial.json", metadata)
 
@@ -814,6 +1032,8 @@ def run_single_trial(
         outcome.total_seconds = duration_seconds
     outcome.paths["config_yaml"] = str(config_path)
     outcome.paths["trial_dir"] = str(trial_dir)
+    if worker_label:
+        outcome.paths["worker_label"] = worker_label
 
     if train_result == "timeout":
         outcome.status = "timeout"
@@ -955,7 +1175,66 @@ def run_study(
     top_k: int = 0,
     max_trials_override: int | None = None,
     resume: bool = False,
+    env_overrides: dict[str, str] | None = None,
+    worker_label: str | None = None,
 ) -> Path:
+    prepared = prepare_study(
+        search_config_path=search_config_path,
+        source_study_dir=source_study_dir,
+        top_k=top_k,
+        max_trials_override=max_trials_override,
+        resume=resume,
+    )
+    if prepared.remaining_trials <= 0:
+        finalize_study(prepared, state="completed")
+        return prepared.study_root
+
+    def objective(trial) -> float:
+        params = sample_trial_params(trial, prepared.search_space)
+        trial_dir = prepared.study_root / "trials" / f"trial_{trial.number:04d}"
+        outcome = run_single_trial(
+            python_executable=prepared.python_executable,
+            base_config=prepared.base_config,
+            search_cfg=prepared.search_cfg,
+            params=params,
+            trial_dir=trial_dir,
+            trial_number=trial.number,
+            env_overrides=env_overrides,
+            worker_label=worker_label,
+        )
+        annotate_trial_result(trial, outcome)
+        return float(outcome.objective)
+
+    def callback(current_study, _trial) -> None:
+        records = load_trial_records(prepared.study_root)
+        save_study_status(prepared.study_root, prepared.search_cfg, records, state="running")
+
+    optimize_kwargs: dict[str, Any] = {
+        "n_trials": prepared.remaining_trials,
+        "callbacks": [callback],
+    }
+    if prepared.study_cfg.get("timeout_minutes") is not None:
+        optimize_kwargs["timeout"] = int(float(prepared.study_cfg["timeout_minutes"]) * 60)
+    try:
+        prepared.study.optimize(objective, **optimize_kwargs)
+    except KeyboardInterrupt:
+        finalize_study(prepared, state="interrupted")
+        raise
+    except Exception:
+        finalize_study(prepared, state="failed")
+        raise
+
+    finalize_study(prepared, state="completed")
+    return prepared.study_root
+
+
+def prepare_study(
+    search_config_path: str | Path,
+    source_study_dir: str | Path | None = None,
+    top_k: int = 0,
+    max_trials_override: int | None = None,
+    resume: bool = False,
+) -> PreparedStudy:
     optuna = import_optuna()
     config_path, search_cfg = load_search_config(search_config_path)
     study_cfg = search_cfg["study"]
@@ -969,6 +1248,7 @@ def run_study(
     base_config = load_yaml(base_config_path)
     search_space = search_cfg["search_space"]
     python_executable = detect_python_executable(search_cfg.get("python_candidates"))
+    ensure_cuda_ready(python_executable, env=build_env(study_cfg))
 
     study_root = resolve_path(study_cfg["study_root"])
     study_root.mkdir(parents=True, exist_ok=True)
@@ -983,6 +1263,10 @@ def run_study(
         base_config = copy.deepcopy(base_config)
         base_config["data"]["csv_path"] = preflight_config["data"]["csv_path"]
 
+    resolved_base_config = study_root / "base_config.resolved.yaml"
+    dump_yaml(resolved_base_config, base_config)
+    resolved_source_study = resolve_path(source_study_dir) if source_study_dir else None
+
     save_json(
         study_root / "search_config.snapshot.json",
         {
@@ -990,107 +1274,273 @@ def run_study(
             "search_config": search_cfg,
             "python_executable": python_executable,
             "resume": resume,
+            "resolved_base_config": str(resolved_base_config),
+            "source_study_dir": str(resolved_source_study) if resolved_source_study else None,
         },
     )
 
     study = build_study(optuna, search_cfg, study_root, resume=resume)
+    if resume:
+        fail_stale_running_trials(study, study_root, optuna)
     existing_trials = len(study.trials)
     target_trials = int(max_trials_override or study_cfg.get("n_trials", 10))
     remaining_trials = max(0, target_trials - existing_trials)
     if bool(study_cfg.get("enqueue_current_template", True)) and existing_trials == 0:
         enqueue_template_trial(study, preflight_config, search_space)
-    if source_study_dir and top_k > 0 and existing_trials == 0:
-        enqueue_source_trials(study, resolve_path(source_study_dir), top_k, search_space)
+    if resolved_source_study and top_k > 0 and existing_trials == 0:
+        enqueue_source_trials(study, resolved_source_study, top_k, search_space)
     save_study_status(study_root, search_cfg, load_trial_records(study_root), state="running")
 
-    def objective(trial) -> float:
-        params = sample_trial_params(trial, search_space)
-        trial_dir = study_root / "trials" / f"trial_{trial.number:04d}"
-        outcome = run_single_trial(
-            python_executable=python_executable,
-            base_config=base_config,
-            search_cfg=search_cfg,
-            params=params,
-            trial_dir=trial_dir,
-            trial_number=trial.number,
-        )
-        trial.set_user_attr("status", outcome.status)
-        trial.set_user_attr("params", outcome.params)
-        for key in [
-            "val_accuracy",
-            "threshold_val_accuracy",
-            "val_auc",
-            "val_f1",
-            "train_loss",
-            "val_loss",
-            "total_seconds",
-            "peak_vram_mb",
-            "no_miss_threshold",
-        ]:
-            trial.set_user_attr(key, getattr(outcome, key))
-        if outcome.failure_reason:
-            trial.set_user_attr("failure_reason", outcome.failure_reason)
-        return float(outcome.objective)
+    return PreparedStudy(
+        optuna_module=optuna,
+        config_path=config_path,
+        search_cfg=search_cfg,
+        study_cfg=study_cfg,
+        base_config=base_config,
+        search_space=search_space,
+        python_executable=python_executable,
+        study_root=study_root,
+        study=study,
+        source_study_dir=resolved_source_study,
+        target_trials=target_trials,
+        existing_trials=existing_trials,
+        remaining_trials=remaining_trials,
+    )
 
-    def callback(current_study, _trial) -> None:
-        records = load_trial_records(study_root)
-        save_study_status(study_root, search_cfg, records, state="running")
 
-    if remaining_trials <= 0:
-        records = load_trial_records(study_root)
-        save_study_status(study_root, search_cfg, records, state="completed")
-        summary = summarize_records(records)
-        save_json(
-            study_root / "study_summary.json",
-            {
-                "study_name": study_cfg["name"],
-                "updated_at": now_iso(),
-                "search_config": str(config_path),
-                "source_study_dir": str(source_study_dir) if source_study_dir else None,
-                "selection_rule": "val_accuracy_then_val_auc",
-                "target_trials": target_trials,
-                "existing_trials": existing_trials,
-                "remaining_trials": 0,
-                "summary": summary,
-            },
-        )
-        return study_root
+def annotate_trial_result(trial, outcome: TrialOutcome) -> None:
+    trial.set_user_attr("status", outcome.status)
+    trial.set_user_attr("params", outcome.params)
+    for key in [
+        "val_accuracy",
+        "threshold_val_accuracy",
+        "val_auc",
+        "val_f1",
+        "train_loss",
+        "val_loss",
+        "total_seconds",
+        "peak_vram_mb",
+        "no_miss_threshold",
+    ]:
+        trial.set_user_attr(key, getattr(outcome, key))
+    if outcome.failure_reason:
+        trial.set_user_attr("failure_reason", outcome.failure_reason)
 
-    optimize_kwargs: dict[str, Any] = {
-        "n_trials": remaining_trials,
-        "callbacks": [callback],
-    }
-    if study_cfg.get("timeout_minutes") is not None:
-        optimize_kwargs["timeout"] = int(float(study_cfg["timeout_minutes"]) * 60)
-    try:
-        study.optimize(objective, **optimize_kwargs)
-    except KeyboardInterrupt:
-        records = load_trial_records(study_root)
-        save_study_status(study_root, search_cfg, records, state="interrupted")
-        raise
-    except Exception:
-        records = load_trial_records(study_root)
-        save_study_status(study_root, search_cfg, records, state="failed")
-        raise
 
-    records = load_trial_records(study_root)
-    save_study_status(study_root, search_cfg, records, state="completed")
+def record_trial_result(study, trial, outcome: TrialOutcome) -> None:
+    annotate_trial_result(trial, outcome)
+    study.tell(trial, float(outcome.objective))
+
+
+def finalize_study(prepared: PreparedStudy, state: str) -> None:
+    records = load_trial_records(prepared.study_root)
+    save_study_status(prepared.study_root, prepared.search_cfg, records, state=state)
+    if state != "completed":
+        return
+
     summary = summarize_records(records)
     save_json(
-        study_root / "study_summary.json",
+        prepared.study_root / "study_summary.json",
         {
-            "study_name": study_cfg["name"],
+            "study_name": prepared.study_cfg["name"],
             "updated_at": now_iso(),
-            "search_config": str(config_path),
-            "source_study_dir": str(source_study_dir) if source_study_dir else None,
+            "search_config": str(prepared.config_path),
+            "source_study_dir": str(prepared.source_study_dir) if prepared.source_study_dir else None,
             "selection_rule": "val_accuracy_then_val_auc",
-            "target_trials": target_trials,
-            "existing_trials": existing_trials,
-            "remaining_trials": remaining_trials,
+            "target_trials": prepared.target_trials,
+            "existing_trials": prepared.existing_trials,
+            "remaining_trials": prepared.remaining_trials,
             "summary": summary,
         },
     )
-    return study_root
+
+
+def run_study_parallel(
+    search_config_path: str | Path,
+    source_study_dir: str | Path | None = None,
+    top_k: int = 0,
+    max_trials_override: int | None = None,
+    resume: bool = False,
+    gpu_ids: list[int] | None = None,
+    worker_cooldown_seconds: float = 0.0,
+) -> Path:
+    prepared = prepare_study(
+        search_config_path=search_config_path,
+        source_study_dir=source_study_dir,
+        top_k=top_k,
+        max_trials_override=max_trials_override,
+        resume=resume,
+    )
+    if prepared.remaining_trials <= 0:
+        finalize_study(prepared, state="completed")
+        return prepared.study_root
+
+    selected_gpu_ids = [int(gpu_id) for gpu_id in (gpu_ids or [])]
+    print("Launching Optuna worker(s) on GPUs: " + ", ".join(str(gpu_id) for gpu_id in selected_gpu_ids))
+
+    study_lock = threading.Lock()
+    print_lock = threading.Lock()
+    stop_event = threading.Event()
+    worker_errors: list[BaseException] = []
+    failed_score = float(prepared.study_cfg.get("failed_score", DEFAULT_FAILED_SCORE))
+
+    def log_line(message: str) -> None:
+        with print_lock:
+            print(message, flush=True)
+
+    def worker_loop(worker_index: int, gpu_id: int) -> None:
+        worker_label = f"worker{worker_index}/gpu{gpu_id}"
+        env_overrides = {"CUDA_VISIBLE_DEVICES": str(gpu_id)}
+        while not stop_event.is_set():
+            with study_lock:
+                if len(prepared.study.trials) >= prepared.target_trials:
+                    return
+                trial = prepared.study.ask()
+                params = sample_trial_params(trial, prepared.search_space)
+                trial_number = trial.number
+            log_line(
+                f"[{worker_label}] trial {trial_number} started"
+                + (f" ({compact_params(params)})" if params else "")
+            )
+
+            try:
+                outcome = run_single_trial(
+                    python_executable=prepared.python_executable,
+                    base_config=prepared.base_config,
+                    search_cfg=prepared.search_cfg,
+                    params=params,
+                    trial_dir=prepared.study_root / "trials" / f"trial_{trial_number:04d}",
+                    trial_number=trial_number,
+                    env_overrides=env_overrides,
+                    worker_label=worker_label,
+                )
+            except Exception as exc:  # pragma: no cover - defensive runtime guard
+                with study_lock:
+                    trial.set_user_attr("status", "crash")
+                    trial.set_user_attr("failure_reason", f"Unhandled worker exception: {exc!r}")
+                    prepared.study.tell(trial, failed_score)
+                    records = load_trial_records(prepared.study_root)
+                    save_study_status(prepared.study_root, prepared.search_cfg, records, state="running")
+                worker_errors.append(exc)
+                stop_event.set()
+                log_line(f"[{worker_label}] trial {trial_number} aborted by worker exception: {exc!r}")
+                return
+
+            with study_lock:
+                record_trial_result(prepared.study, trial, outcome)
+                records = load_trial_records(prepared.study_root)
+                save_study_status(prepared.study_root, prepared.search_cfg, records, state="running")
+            metric_text = (
+                f"val_acc={outcome.val_accuracy:.6f}"
+                if outcome.val_accuracy is not None
+                else f"status={outcome.status}"
+            )
+            log_line(f"[{worker_label}] trial {trial_number} finished: {metric_text}")
+            if worker_cooldown_seconds > 0:
+                time.sleep(worker_cooldown_seconds)
+
+    threads = [
+        threading.Thread(
+            target=worker_loop,
+            args=(worker_index, gpu_id),
+            name=f"optuna-gpu-{gpu_id}",
+            daemon=False,
+        )
+        for worker_index, gpu_id in enumerate(selected_gpu_ids)
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    except KeyboardInterrupt:
+        stop_event.set()
+        for thread in threads:
+            thread.join()
+        finalize_study(prepared, state="interrupted")
+        raise
+
+    if worker_errors:
+        finalize_study(prepared, state="failed")
+        raise RuntimeError(f"Parallel Optuna worker failed: {worker_errors[0]!r}")
+
+    finalize_study(prepared, state="completed")
+    return prepared.study_root
+
+
+def run_study_adaptive(
+    search_config_path: str | Path,
+    source_study_dir: str | Path | None = None,
+    top_k: int = 0,
+    max_trials_override: int | None = None,
+    resume: bool = False,
+    sequential: bool = False,
+    gpu_ids: str | None = "auto",
+    max_workers: str | int | None = "auto",
+    max_used_memory_mb: int = 1024,
+    max_utilization: int = 20,
+    worker_cooldown_seconds: float = 0.0,
+) -> Path:
+    if sequential:
+        return run_study(
+            search_config_path=search_config_path,
+            source_study_dir=source_study_dir,
+            top_k=top_k,
+            max_trials_override=max_trials_override,
+            resume=resume,
+        )
+
+    explicit_ids = parse_gpu_id_spec(gpu_ids)
+    selected_devices = select_gpu_devices(
+        gpu_id_spec=gpu_ids,
+        max_used_memory_mb=max_used_memory_mb,
+        max_utilization=max_utilization,
+    )
+    if explicit_ids is not None:
+        found_ids = {device.index for device in selected_devices}
+        missing_ids = [gpu_id for gpu_id in explicit_ids if gpu_id not in found_ids]
+        if missing_ids:
+            raise ValueError(
+                f"Some explicit --gpu-ids entries were not found via nvidia-smi: {missing_ids}"
+            )
+
+    worker_limit = parse_max_workers(max_workers, default=len(selected_devices) or 1)
+    selected_devices = selected_devices[:worker_limit]
+    selected_gpu_ids = [device.index for device in selected_devices]
+
+    if selected_devices:
+        print("Adaptive GPU selection:")
+        for device in selected_devices:
+            print(
+                f"  GPU {device.index}: {device.name} | "
+                f"used={device.memory_used_mb} MiB / {device.memory_total_mb} MiB | "
+                f"util={device.utilization_gpu}%"
+            )
+    else:
+        print("Adaptive GPU selection: nvidia-smi unavailable, falling back to sequential execution.")
+
+    if len(selected_gpu_ids) <= 1:
+        env_overrides = {"CUDA_VISIBLE_DEVICES": str(selected_gpu_ids[0])} if selected_gpu_ids else None
+        worker_label = f"gpu{selected_gpu_ids[0]}" if selected_gpu_ids else None
+        return run_study(
+            search_config_path=search_config_path,
+            source_study_dir=source_study_dir,
+            top_k=top_k,
+            max_trials_override=max_trials_override,
+            resume=resume,
+            env_overrides=env_overrides,
+            worker_label=worker_label,
+        )
+
+    return run_study_parallel(
+        search_config_path=search_config_path,
+        source_study_dir=source_study_dir,
+        top_k=top_k,
+        max_trials_override=max_trials_override,
+        resume=resume,
+        gpu_ids=selected_gpu_ids,
+        worker_cooldown_seconds=worker_cooldown_seconds,
+    )
 
 
 def build_cli(default_config: str, description: str) -> argparse.Namespace:
@@ -1121,5 +1571,38 @@ def build_cli(default_config: str, description: str) -> argparse.Namespace:
         "--resume",
         action="store_true",
         help="Resume an existing study in study_root instead of requiring a fresh study directory.",
+    )
+    parser.add_argument(
+        "--sequential",
+        action="store_true",
+        help="Disable adaptive multi-GPU workers and run the study with a single worker.",
+    )
+    parser.add_argument(
+        "--gpu-ids",
+        default="auto",
+        help="Comma-separated nvidia-smi GPU indexes to use, or 'auto' to select idle GPUs automatically.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        default="auto",
+        help="Maximum concurrent Optuna workers. Use an integer or 'auto'.",
+    )
+    parser.add_argument(
+        "--max-used-memory-mb",
+        type=int,
+        default=1024,
+        help="For --gpu-ids auto, only treat GPUs at or below this used-memory threshold as idle.",
+    )
+    parser.add_argument(
+        "--max-utilization",
+        type=int,
+        default=20,
+        help="For --gpu-ids auto, only treat GPUs at or below this utilization threshold as idle.",
+    )
+    parser.add_argument(
+        "--worker-cooldown-seconds",
+        type=float,
+        default=0.0,
+        help="Optional cooldown inserted after each worker finishes a trial.",
     )
     return parser.parse_args()

@@ -64,6 +64,7 @@
 ### 当前 baseline / Optuna 对齐规则
 
 - `configs/autoresearch_proxy.yaml` 与 `configs/autoresearch_formal.yaml` 是当前 baseline 真值来源
+- 在单卡显存 `>= 24 GiB` 且当前算力充足时，默认直接运行 `main/formal` lane（`scripts/optuna_main.py` / `configs/autoresearch_formal.yaml`）；`proxy` 仅保留作低显存 fallback 或快速诊断
 - `model.freeze_layers` 必须在 YAML 中显式声明，不再依赖修改源码常量
 - Optuna baseline trial 必须基于 **effective config**（包含 runtime 默认值），不能只复制 base YAML 中显式写出的键
 - dataset preflight 可以报告路径修复，但默认不应静默改写训练输入 CSV
@@ -73,12 +74,14 @@
 ## 硬件限制
 
 - 操作系统：Ubuntu，Shell：Bash
-- GPU：双卡环境。本机实测（2026-04-13）`nvidia-smi` 显示 `0=RTX 3090`、`1=RTX 4090`，但 PyTorch/CUDA 运行时顺序相反：`cuda:0=RTX 4090`、`cuda:1=RTX 3090`
-- 设备映射注意：当前机器上 `torch.device("cuda:1")` 实际会使用 **3090**；`CUDA_VISIBLE_DEVICES=1` 启动训练时，进程内可见的唯一设备也会是 **3090**。如果要命中 **4090**，应使用 `torch.device("cuda:0")` 或 `CUDA_VISIBLE_DEVICES=0`
+- CPU / RAM（2026-04-16 实测）：Intel Xeon Gold 6426Y，2 sockets / 32 物理核 / 64 线程；内存 125 GiB
+- GPU（申请目标）：4 张 NVIDIA GPU，单卡显存约 24 GB 或以上
+- 当前仓库的训练配置仍按 `slot 0` / `slot 1` 两个主训练槽位组织；自适应 Optuna 入口会自动探测空闲 GPU 并按可见卡数并行调参，如需固定卡集则显式传 `--gpu-ids`
+- 设备映射注意：不要假定 `nvidia-smi` 与 PyTorch/CUDA 设备编号一致；长跑前先用 `.venv/bin/python -c "import torch; print(torch.cuda.device_count()); [print(i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]"` 实测当前可见 GPU
 - 训练默认走 `.venv` 中的 PyTorch CUDA 环境
-- proxy 实验（4 epochs，当前 canonical ResUNet + AttentionPooling + VRG / decision fusion 路径）预计：约 30 分钟
-- formal 实验（15 epochs，当前 canonical ResUNet + AttentionPooling + VRG / decision fusion 路径）预计：约 90-120 分钟
-- `batch_size=4` 已验证可稳定运行（24GB 显存可支持更大 batch）
+- formal / main 实验（15 epochs，当前 canonical ResUNet + AttentionPooling + VRG / decision fusion 路径）预计：约 90-120 分钟；这是当前默认 lane
+- proxy 实验（4 epochs，当前 canonical ResUNet + AttentionPooling + VRG / decision fusion 路径）预计：约 30 分钟；仅在显存不足或需要快速 smoke 时使用
+- `batch_size=4` 已验证可稳定运行（24GB 级别显存通常还能支持更大的 batch）
 - 每次实验前确认 `runs/` 下没有残留的大 checkpoint 文件，并顺手检查磁盘剩余空间
 
 ## 准备工作
@@ -91,8 +94,9 @@
    - 如果当前分支上已经有未提交的 experiment ledger / protocol 更新，不要为了切分支而打断记录流程
 3. 先确认训练环境可用：
    - `test -f .venv/bin/python && echo OK`
-   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"`
-   - 注意：由于本机 CUDA 运行时编号与 `nvidia-smi` 相反，上述命令若打印 `NVIDIA GeForce RTX 3090` 属于当前机器的正常现象
+   - `.venv/bin/python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.device_count()); [print(i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())] if torch.cuda.is_available() else print('NO CUDA')"`
+   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.device_count()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"`
+   - 第一条命令用于全量枚举 GPU：目标申请环境下应能看到 4 张卡；第二条命令用于确认当前训练槽位实际命中的设备
    - 如果 `torch.cuda.is_available()` 不是 `True`，先停下来修环境，不要盲跑 CPU
 4. 阅读以下文件获取完整上下文：
    - `backlog.md`（**必须最先读**，了解当前最优纪录、待办优先级和已完成实验）
@@ -116,6 +120,8 @@
 - `src/cross_view_attention.py`
 - `configs/autoresearch_proxy.yaml`
 - `configs/autoresearch_formal.yaml`
+- `scripts/optuna_proxy.py`
+- `scripts/optuna_main.py`
 - `configs/optuna_proxy_search.yaml`
 - `configs/optuna_main_search.yaml`
 - `scripts/`（Optuna 工作流脚本）
@@ -144,14 +150,14 @@
 
 ## 基线
 
-第一次运行必须是没有任何实验性改动的基线版本：
+第一次运行必须是没有任何实验性改动的基线版本。若当前机器单卡显存 `>= 24 GiB`，默认直接验证 formal 配置：
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
+CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_formal.yaml > run.log 2>&1
 ```
 
 然后读取：
-- `runs/autoresearch_proxy/summary.json`
+- `runs/autoresearch_formal/summary.json`
 - `run.log`（只读最后 30 行：`tail -30 run.log`）
 
 `train.py` 日志行：
@@ -163,7 +169,7 @@ CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_p
 
 （可选）运行阈值评估获取辅助参考指标：
 ```bash
-CUDA_VISIBLE_DEVICES=1 .venv/bin/python tools/evaluate_threshold.py --run_dir runs/autoresearch_proxy --config configs/autoresearch_proxy.yaml
+CUDA_VISIBLE_DEVICES=1 .venv/bin/python tools/evaluate_threshold.py --run_dir runs/autoresearch_formal --config configs/autoresearch_formal.yaml
 ```
 
 在开始长时间无人值守运行之前：
@@ -191,7 +197,7 @@ commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
 
 旧的 results.tsv 记录保留，新实验追加到末尾。
 旧行使用 `no_miss_*` 列是正常的（历史指标体系）。
-如果发现 `runs/autoresearch_proxy/summary.json` 或 `runs/autoresearch_formal/summary.json` 已经存在但 ledger 尚未同步，先补记 `results.tsv` 与 `backlog.md`，再开始下一轮实验。
+如果发现 `runs/autoresearch_formal/summary.json` 或 `runs/autoresearch_proxy/summary.json` 已经存在但 ledger 尚未同步，先补记 `results.tsv` 与 `backlog.md`，再开始下一轮实验。
 可以提交 `results.tsv`、`backlog.md` 与 `program.md`，但不要把 `runs/`、checkpoint 或大日志提交进仓库。
 
 ## 实验循环
@@ -207,8 +213,8 @@ commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
 1. 检查当前分支和提交。
 2. 在允许修改的范围内做一项实验性改动。
 3. 在运行前先提交这次实验改动。
-4. 运行 proxy 实验：
-   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1`
+4. 默认直接运行 main / formal 实验：
+   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_formal.yaml > run.log 2>&1`
 5. 如果运行崩溃：
    - 用 `tail -30 run.log` 查看最后几行（不要读整个日志）
    - OOM → 标记为 `crash`
@@ -216,28 +222,25 @@ commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
    - 数据问题 → 立即停止
    - 其他 → 标记为 `crash`，写入 `results.tsv`，回退
 6. 如果运行成功：
-   - 读取 `runs/autoresearch_proxy/summary.json`
+   - 读取 `runs/autoresearch_formal/summary.json`
    - 将 `best_val.accuracy` 与当前保留的最佳结果比较
    - 只有当 val_acc 提升时，才保留这个提交
    - 如果 val_acc 持平，优先选择 `val_auc` 更高的版本
    - 如果两者都持平，优先选择更简单的代码
    - 否则回退这次实验
-7. 每出现 3 次 proxy 胜出后，做一次 formal 确认：
-   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_formal.yaml > formal.log 2>&1`
-   - 如果 formal 也提升了，视为新的 formal 最优结果
-   - 如果 proxy 提升但 formal 退化，优先保留上一个 formal 最优
-   - formal 结果也记入 `results.tsv`
-   - 额外：如果 proxy val_acc 单次提升超过 0.03，可以立即做 formal
+7. 只有在显存不足、需要快速 smoke，或定位训练 bug 时，才临时回退到 proxy：
+   - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml > proxy.log 2>&1`
+   - proxy 结果只作为快速诊断或低成本筛查证据，不再是当前默认门控步骤
 
 ## 超时规则
 
+- formal / main 实验（15 epochs）预计约 **90-120 分钟**
+- 超时阈值：**180 分钟**
 - proxy 实验（4 epochs）预计约 **30-35 分钟**
 - 超时阈值：**60 分钟**
-- formal 实验（15 epochs）预计约 **90-120 分钟**
-- 超时阈值：**180 分钟**
 - 使用以下方式监控运行时间：
   ```bash
-  timeout 3600 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml > run.log 2>&1
+  timeout 10800 .venv/bin/python train.py --config configs/autoresearch_formal.yaml > run.log 2>&1
   EXIT_CODE=$?
   if [ $EXIT_CODE -eq 124 ]; then echo "TIMEOUT"; fi
   ```
