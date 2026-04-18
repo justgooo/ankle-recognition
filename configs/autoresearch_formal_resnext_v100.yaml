@@ -33,6 +33,6 @@ train:
   class_weight: true
   device: auto
   augmentation: true
-  scheduler: cosine
+  scheduler: none
   label_smoothing: 0.0
   gradient_clip_norm: 1.0
