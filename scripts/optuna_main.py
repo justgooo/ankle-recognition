@@ -14,6 +14,7 @@ def main() -> None:
         top_k=args.top_k,
         max_trials_override=args.trials,
         resume=args.resume,
+        cleanup_stale_running_trials_on_resume=not args.skip_stale_running_cleanup,
         sequential=args.sequential,
         gpu_ids=args.gpu_ids,
         max_workers=args.max_workers,

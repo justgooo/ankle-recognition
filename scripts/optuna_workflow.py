@@ -1220,6 +1220,7 @@ def run_study(
     top_k: int = 0,
     max_trials_override: int | None = None,
     resume: bool = False,
+    cleanup_stale_running_trials_on_resume: bool = True,
     env_overrides: dict[str, str] | None = None,
     worker_label: str | None = None,
 ) -> Path:
@@ -1229,6 +1230,7 @@ def run_study(
         top_k=top_k,
         max_trials_override=max_trials_override,
         resume=resume,
+        cleanup_stale_running_trials_on_resume=cleanup_stale_running_trials_on_resume,
     )
     if prepared.remaining_trials <= 0:
         finalize_study(prepared, state="completed")
@@ -1279,6 +1281,7 @@ def prepare_study(
     top_k: int = 0,
     max_trials_override: int | None = None,
     resume: bool = False,
+    cleanup_stale_running_trials_on_resume: bool = True,
 ) -> PreparedStudy:
     config_path, search_cfg = load_search_config(search_config_path)
     study_cfg = search_cfg["study"]
@@ -1326,7 +1329,7 @@ def prepare_study(
     )
 
     study = build_study(optuna, search_cfg, study_root, resume=resume)
-    if resume:
+    if resume and cleanup_stale_running_trials_on_resume:
         fail_stale_running_trials(study, study_root, optuna)
     existing_trials = len(study.trials)
     target_trials = int(max_trials_override or study_cfg.get("n_trials", 10))
@@ -1354,28 +1357,49 @@ def prepare_study(
     )
 
 
-def annotate_trial_result(trial, outcome: TrialOutcome) -> None:
-    trial.set_user_attr("status", outcome.status)
-    trial.set_user_attr("params", outcome.params)
-    for key in [
-        "val_accuracy",
-        "threshold_val_accuracy",
-        "val_auc",
-        "val_f1",
-        "train_loss",
-        "val_loss",
-        "total_seconds",
-        "peak_vram_mb",
-        "no_miss_threshold",
-    ]:
-        trial.set_user_attr(key, getattr(outcome, key))
+def is_finished_trial_update_error(exc: BaseException) -> bool:
+    return exc.__class__.__name__ == "UpdateFinishedTrialError"
+
+
+def set_trial_user_attr_best_effort(trial, key: str, value: Any) -> bool:
+    try:
+        trial.set_user_attr(key, value)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive runtime guard
+        if is_finished_trial_update_error(exc):
+            return False
+        raise
+
+
+def annotate_trial_result(trial, outcome: TrialOutcome) -> bool:
+    attrs = {
+        "status": outcome.status,
+        "params": outcome.params,
+        "val_accuracy": outcome.val_accuracy,
+        "threshold_val_accuracy": outcome.threshold_val_accuracy,
+        "val_auc": outcome.val_auc,
+        "val_f1": outcome.val_f1,
+        "train_loss": outcome.train_loss,
+        "val_loss": outcome.val_loss,
+        "total_seconds": outcome.total_seconds,
+        "peak_vram_mb": outcome.peak_vram_mb,
+        "no_miss_threshold": outcome.no_miss_threshold,
+    }
     if outcome.failure_reason:
-        trial.set_user_attr("failure_reason", outcome.failure_reason)
+        attrs["failure_reason"] = outcome.failure_reason
+
+    wrote_all_attrs = True
+    for key, value in attrs.items():
+        if not set_trial_user_attr_best_effort(trial, key, value):
+            wrote_all_attrs = False
+            break
+    return wrote_all_attrs
 
 
-def record_trial_result(study, trial, outcome: TrialOutcome) -> None:
-    annotate_trial_result(trial, outcome)
-    study.tell(trial, float(outcome.objective))
+def record_trial_result(study, trial, outcome: TrialOutcome) -> bool:
+    wrote_all_attrs = annotate_trial_result(trial, outcome)
+    study.tell(trial, float(outcome.objective), skip_if_finished=True)
+    return wrote_all_attrs
 
 
 def finalize_study(prepared: PreparedStudy, state: str) -> None:
@@ -1407,6 +1431,7 @@ def run_study_parallel(
     top_k: int = 0,
     max_trials_override: int | None = None,
     resume: bool = False,
+    cleanup_stale_running_trials_on_resume: bool = True,
     gpu_ids: list[int] | None = None,
     worker_cooldown_seconds: float = 0.0,
 ) -> Path:
@@ -1416,6 +1441,7 @@ def run_study_parallel(
         top_k=top_k,
         max_trials_override=max_trials_override,
         resume=resume,
+        cleanup_stale_running_trials_on_resume=cleanup_stale_running_trials_on_resume,
     )
     if prepared.remaining_trials <= 0:
         finalize_study(prepared, state="completed")
@@ -1462,20 +1488,34 @@ def run_study_parallel(
                 )
             except Exception as exc:  # pragma: no cover - defensive runtime guard
                 with study_lock:
-                    trial.set_user_attr("status", "crash")
-                    trial.set_user_attr("failure_reason", f"Unhandled worker exception: {exc!r}")
-                    prepared.study.tell(trial, failed_score)
+                    attrs_written = True
+                    attrs_written &= set_trial_user_attr_best_effort(trial, "status", "crash")
+                    attrs_written &= set_trial_user_attr_best_effort(
+                        trial,
+                        "failure_reason",
+                        f"Unhandled worker exception: {exc!r}",
+                    )
+                    prepared.study.tell(trial, failed_score, skip_if_finished=True)
                     records = load_trial_records(prepared.study_root)
                     save_study_status(prepared.study_root, prepared.search_cfg, records, state="running")
                 worker_errors.append(exc)
                 stop_event.set()
+                if not attrs_written:
+                    log_line(
+                        f"[{worker_label}] trial {trial_number} was already finished before crash attrs were written."
+                    )
                 log_line(f"[{worker_label}] trial {trial_number} aborted by worker exception: {exc!r}")
                 return
 
             with study_lock:
-                record_trial_result(prepared.study, trial, outcome)
+                attrs_written = record_trial_result(prepared.study, trial, outcome)
                 records = load_trial_records(prepared.study_root)
                 save_study_status(prepared.study_root, prepared.search_cfg, records, state="running")
+            if not attrs_written:
+                log_line(
+                    f"[{worker_label}] trial {trial_number} finished before Optuna attrs were written; "
+                    "trial.json remains the source of truth."
+                )
             metric_text = (
                 f"val_acc={outcome.val_accuracy:.6f}"
                 if outcome.val_accuracy is not None
@@ -1520,6 +1560,7 @@ def run_study_adaptive(
     top_k: int = 0,
     max_trials_override: int | None = None,
     resume: bool = False,
+    cleanup_stale_running_trials_on_resume: bool = True,
     sequential: bool = False,
     gpu_ids: str | None = "auto",
     max_workers: str | int | None = "auto",
@@ -1593,6 +1634,7 @@ def run_study_adaptive(
             top_k=top_k,
             max_trials_override=max_trials_override,
             resume=resume,
+            cleanup_stale_running_trials_on_resume=cleanup_stale_running_trials_on_resume,
             env_overrides=env_overrides,
             worker_label=worker_label,
         )
@@ -1603,6 +1645,7 @@ def run_study_adaptive(
         top_k=top_k,
         max_trials_override=max_trials_override,
         resume=resume,
+        cleanup_stale_running_trials_on_resume=cleanup_stale_running_trials_on_resume,
         gpu_ids=selected_gpu_ids,
         worker_cooldown_seconds=worker_cooldown_seconds,
     )
@@ -1636,6 +1679,11 @@ def build_cli(default_config: str, description: str) -> argparse.Namespace:
         "--resume",
         action="store_true",
         help="Resume an existing study in study_root instead of requiring a fresh study directory.",
+    )
+    parser.add_argument(
+        "--skip-stale-running-cleanup",
+        action="store_true",
+        help="When resuming an active shared study, keep existing RUNNING trials instead of failing them as stale.",
     )
     parser.add_argument(
         "--sequential",

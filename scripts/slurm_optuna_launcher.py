@@ -79,11 +79,14 @@ def build_remote_shell(
     gpu_ids: str,
     max_workers: int,
     resume: bool,
+    skip_stale_running_cleanup: bool,
     extra_env: dict[str, str],
 ) -> str:
     forwarded = strip_conflicting_flags(argv)
     if resume and "--resume" not in forwarded:
         forwarded.append("--resume")
+    if skip_stale_running_cleanup and "--skip-stale-running-cleanup" not in forwarded:
+        forwarded.append("--skip-stale-running-cleanup")
     forwarded.extend(["--gpu-ids", gpu_ids, "--max-workers", str(max_workers)])
 
     env_prefix = {
@@ -167,6 +170,7 @@ def maybe_dispatch_to_slurm_jobs(entrypoint: str, default_search_config: str) ->
             gpu_ids=gpu_group,
             max_workers=gpu_count,
             resume=index > 0,
+            skip_stale_running_cleanup=index > 0,
             extra_env=extra_env,
         )
         launches.append((job_id, ["srun", "--jobid", job_id, "--overlap", "bash", "-lc", remote_shell]))
