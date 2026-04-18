@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-REOPEN-FREEZE2（保持 dedicated ResNeXt V100 fair-backbone 几何与 mean pooling 不变：`fusion_hidden_dim=256`、`256x8`、feature-fusion 不变，base formal template 仍锚定 old stable winner；唯一离散改动是把 `configs/optuna_main_search_resnext_v100.yaml` 的 `model.freeze_layers` 搜索从固定 `[3]` 重新开放到 `[2, 3]`，然后跑 fresh adaptive main-study `runs/optuna_main_autoloop/iter_0010_20260418_065657`；search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0010_20260418_065657.yaml`；commit `87c1e9b`） |
-| 上次结果 | discard（fresh adaptive main-study 4/4 completed，best completed trial 仍是 enqueued stable template 的 trial 0：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`，得到 `val_acc=0.925531914893617`, `val_auc=0.94`, `val_f1=0.9213483146067416`。它虽在 accuracy 上追平当前 retained keep `0.925531914893617 / 0.9563636363636363`，但 AUC 仍低 `0.0163636363636363`，因此按 tie-break 不能晋升。更关键的是，这轮唯一的 `freeze_layers=2` completed trial（trial 2：`lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）只得到 `0.8829787234042553 / 0.9440909090909091`，较 trial 0 低 `0.0425531914893617` accuracy，说明把搜索重新开放到 freeze2 并没有重现此前 seed42 direct formal keep 的优势。） |
-| 下一步 | 该独立 ResNeXt V100 side campaign 现在已连续 7 次 discard，且 “reopen freeze2” 这个最后仍有信息量的新假设也给出负面结果。默认应停止继续盲跑；若外层 loop 仍强制 continuation，应先由人类明确一个超出当前 `freeze_layers` / stable-scalar 轴的新离散假设，而不是继续在同一 `resnext` `256x8` mean-pooling 配方里做 fresh main-study 或 direct formal。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-PRENORM-NOSCHED（保持 dedicated ResNeXt V100 `256x8`、feature-fusion、mean-pooling 几何与上轮 `LayerNorm(fused_dim)` prenorm 不变；唯一新的离散改动是把 `configs/autoresearch_formal_resnext_v100.yaml` 的 `train.scheduler` 从 carry-over 的 `cosine` 解耦回 `none`，然后跑 fresh adaptive main-study `runs/optuna_main_autoloop/iter_0014_20260418_091749`；search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0014_20260418_091749.yaml`；commit `6a39df6`） |
+| 上次结果 | discard（fresh adaptive main-study 4/4 completed，best completed trial 为 trial 2：`freeze_layers=2`, `lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`，得到 `val_acc=0.9148936170212766`, `val_auc=0.9336363636363636`, `val_f1=0.9024390243902439`。它与上一轮 prenorm+cosine best 在 accuracy 上完全持平，但 AUC 低 `0.0154545454545455`；同时仍较当前 retained keep `0.925531914893617 / 0.9563636363636363` 低 `0.0106382978723404 / 0.0227272727272727`，因此不能晋升。） |
+| 下一步 | 该独立 ResNeXt V100 side campaign 现在已连续 11 次 discard，而且 backlog 明示的“prenorm 与 scheduler carry-over 解耦”验证也已经做完且结果偏负面。按协议，这里不应继续盲跑；若外层 loop 仍要求 continuation，必须先由人类或新 backlog 明确给出另一个真正新的离散假设，而不是继续沿当前 `freeze/scalar/pooling/scheduler/prenorm` 轴做小步扫描。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 7 |
+| 连续 discard 计数 | 11 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -245,6 +245,66 @@
 - **Monitor takeaways**：这轮 reopen 后唯一的 `freeze_layers=2` completed trial（trial 2：`lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）只得到 `val_acc=0.8829787234042553`, `val_auc=0.9440909090909091`，显存升到约 `6.23 GiB`，但 accuracy 仍比 trial 0 低 `0.0425531914893617`。其余 completed trial 也都停留在 `0.8723 ~ 0.8936` accuracy 区间，说明“freeze2 被先前搜索空间限制掩盖”的假设在当前 budget 下没有得到支持。  
 - **本轮结论**：把搜索重新开放到 `freeze_layers=2` 并没有恢复当前 ResNeXt side campaign 的可复现上行空间；反而再次说明目前最强的 search-time 点仍然是 old stable winner 本体，而不是更深解冻。  
 - **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要求 continuation，应先由人类明确一个超出当前 `freeze_layers` / stable-scalar 轴的新离散假设；否则不再建议继续围绕 `resnext` 的这条 `256x8` mean-pooling 配方做 fresh main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（AttentionPooling）
+
+> **独立 campaign 说明**
+> - 这一轮是在外层 loop 显式要求 continuation 的前提下，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated V100 lane 的几何与 backbone 其余部分不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `fusion_hidden_dim=256`。
+> - 唯一离散改动：把 `configs/autoresearch_formal_resnext_v100.yaml` 的 `use_attention_pooling` 从 `false` 切到 `true`，显式检验“slice attention 是否能在不改 backbone 与几何的前提下，恢复当前 ResNeXt side campaign 的 accuracy ceiling”。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0011_20260418_073137`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0011_20260418_073137.yaml`，运行 commit 为 `96bd773`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-ATTNPOOL**：`configs/autoresearch_formal_resnext_v100.yaml`（仅把 `use_attention_pooling` 从 `false` 切到 `true`）+ fresh adaptive main-study → best completed trial 为 **trial 2**（`freeze_layers=2`, `lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）→ `val_acc=0.8936170212765957`, `val_auc=0.9640909090909091`, `val_f1=0.8837209302325582`, `peak_vram=6.24 GiB`, `total_seconds=847.7` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0319148936170213` accuracy；虽然 AUC 反而高 `0.0077272727272728`，但按当前规则不能用更低 accuracy 的点晋升。它也较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 低 `0.0212765957446809` accuracy。）
+- **Monitor takeaways**：在 attention-pooling lane 的 4 个 completed trial 里，所有 `freeze_layers=3` 试次都停在 `0.8404 ~ 0.8723` accuracy，连 enqueued stable template 本体也只得到 `0.851063829787234 / 0.9336363636363636`；最优点再次回到更激进的 `freeze_layers=2 + dropout=0.35 + clip=2.0`，并把 AUC 抬到 `0.9641`，但 accuracy ceiling 仍显著低于当前 retained keep。换言之，AttentionPooling 改变了最优超参形态，却没有把 ResNeXt lane 的主指标拉回冠军区间。
+- **本轮结论**：这是一次明确超出 `freeze_layers` / stable-scalar 轴的新结构探针，但结果仍然偏负面。对于当前这条 dedicated ResNeXt `256x8` side campaign，slice AttentionPooling 并没有比原 mean-pooling 语义更强，至少在当前 budget 下没有体现为可用的 `val_acc` 改进。
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要继续，必须先由人类给出新的离散假设；不再建议继续围绕这条 ResNeXt lane 的 `mean pooling` / `AttentionPooling` 与旧 freeze/scalar 组合做 fresh main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（mean-pooling + cosine scheduler）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 先按本轮硬约束把 dedicated formal template 从上一轮残留的 AttentionPooling 状态拉回 `256x8`、feature-fusion、mean-pooling 几何；`fusion_hidden_dim=256`、`share_backbone=false` 保持不变。
+> - 唯一新的离散改动：把 `configs/autoresearch_formal_resnext_v100.yaml` 的 `train.scheduler` 从 `none` 切到 `cosine`，显式检验“较平滑的学习率衰减是否能缓解 ResNeXt 在这条 V100 side lane 上慢热且波动大的优化轨迹”。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0012_20260418_080648`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0012_20260418_080648.yaml`，运行 commit 为 `7b5f95d`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-COSINE**：`configs/autoresearch_formal_resnext_v100.yaml`（mean-pooling lane，仅把 `train.scheduler` 从 `none` 切到 `cosine`）+ fresh adaptive main-study → best completed trial 为 **trial 0**（即 enqueued stable template：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）→ `val_acc=0.9042553191489362`, `val_auc=0.9363636363636364`, `val_f1=0.8888888888888888`, `peak_vram=2.14 GiB`, `total_seconds=854.8` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0212765957446808 / 0.02`；也较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 低 `0.0106382978723404 / 0.004090909090909`，因此不能晋升。）
+- **Monitor takeaways**：在 cosine lane 的 4 个 completed trial 里，最优点没有离开 old stable winner 本体，说明引入 schedule 并没有改变当前 side campaign 的最优超参骨架。`freeze_layers=2 + dropout=0.35 + clip=2.0` 的 trial 2 虽把 `val_auc` 抬到 `0.9522727272727274`，但 `val_acc` 只有 `0.8723404255319149`；更保守的 `lr=5e-5 + wd=5e-4` 组合则直接退到 `0.8191489361702128 / 0.9254545454545455`。这说明在当前 15-epoch budget 下，cosine 衰减至多改善了部分排序质量，但没有把主指标 accuracy 拉回 keep 区间。
+- **本轮结论**：把 ResNeXt side lane 切到 cosine scheduler 没有带来新的可复现上行空间。相反，它再次证明当前这条 `256x8` mean-pooling 配方里最强的 search-time 点仍只是 old stable winner 本体，而且 even that template 在 cosine 下也只能回到 `0.9043 / 0.9364`，低于此前无 scheduler 的 direct/formal 证据。
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要求 continuation，必须先给出一个新的离散假设；不再建议继续围绕这条 ResNeXt lane 的 `mean pooling` / `AttentionPooling` / `scheduler` 与旧 freeze-scalar 组合做 fresh main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（feature-fusion head prenorm）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated ResNeXt V100 lane 的几何与 backbone 其余部分不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`。
+> - 唯一新的离散改动：在 `src/model.py` 的 `MultiViewCTClassifier` 里给拼接后的 `1536D` feature-fusion 向量加入 `LayerNorm(fused_dim)`，显式检验“轻量预归一化是否能稳定 ResNeXt lane 的 view-feature 尺度并恢复 accuracy ceiling”。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0013_20260418_084209`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0013_20260418_084209.yaml`，运行 commit 为 `7609b02`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-PRENORM**：`src/model.py`（feature-fusion 头新增 `LayerNorm(fused_dim)`）+ fresh adaptive main-study → best completed trial 为 **trial 2**（`freeze_layers=2`, `lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）→ `val_acc=0.9148936170212766`, `val_auc=0.9490909090909091`, `val_f1=0.9`, `peak_vram=6.23 GiB`, `total_seconds=866.2` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 仍低 `0.0106382978723404 / 0.0072727272727272`，因此不能晋升；但它较上一轮 cosine lane best `0.9042553191489362 / 0.9363636363636364` 回升 `0.0106382978723404 / 0.0127272727272727`，并以同样的 accuracy 追平旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766`，同时 AUC 更高 `0.0086363636363637`。）
+- **Monitor takeaways**：prenorm 明显改写了当前 cosine lane 的最优形态。旧的 `freeze_layers=3` stable-template 本体在 trial 0 只得到 `0.8829787234042553 / 0.9395454545454545`，而更激进的 `freeze_layers=2 + dropout=0.35 + clip=2.0` 在 prenorm 后恢复到 `0.9149 / 0.9491`，说明这个结构改动并非纯负面；但它把 ceiling 拉回到“旧 stable winner 附近”，还没有把主指标拉过当前 retained keep。
+- **本轮结论**：feature-fusion head prenorm 是一次有信息量的新结构稳定化探针。它成功修复了上一轮 cosine lane 的部分退化，并让 freeze2 aggressive lane 回到竞争区，但仍不足以替换当前最强 direct-formal keep，因此本轮仍记 **discard**。
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要求 continuation，必须先明确另一个新的离散假设，或显式决定是否值得做“保留 prenorm、再把 scheduler 从 `cosine` 解耦回 `none`”的单轮验证；不再建议继续旧 `freeze/scalar/pooling/scheduler` 轴的小步扫描。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（prenorm 解耦 scheduler 回退到 none）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated ResNeXt V100 lane 的几何与上一轮结构改动不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，并保留 feature-fusion 头的 `LayerNorm(fused_dim)` prenorm。
+> - 唯一新的离散改动：把 `configs/autoresearch_formal_resnext_v100.yaml` 的 `train.scheduler` 从 carry-over 的 `cosine` 解耦回 `none`，显式检验“上一轮 prenorm 的回升究竟来自 prenorm 本身，还是依赖于与 cosine scheduler 的组合”。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0014_20260418_091749`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0014_20260418_091749.yaml`，运行 commit 为 `6a39df6`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-PRENORM-NOSCHED**：`configs/autoresearch_formal_resnext_v100.yaml`（保留 prenorm，仅把 `train.scheduler` 从 `cosine` 改回 `none`）+ fresh adaptive main-study → best completed trial 为 **trial 2**（`freeze_layers=2`, `lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`）→ `val_acc=0.9148936170212766`, `val_auc=0.9336363636363636`, `val_f1=0.9024390243902439`, `peak_vram=6.23 GiB`, `total_seconds=858.9` → **discard**（与上一轮 prenorm+cosine study 的 best `0.9148936170212766 / 0.9490909090909091` 在 accuracy 上持平，但 AUC 低 `0.0154545454545455`；也仍较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0106382978723404 / 0.0227272727272727`，因此不能晋升。）
+- **Monitor takeaways**：解耦掉 cosine 后，search winner 仍然是上一轮同一组 aggressive freeze2 标量，说明 prenorm 的确改变了这条 lane 的最优超参形态；但它没有继续提高 accuracy ceiling，而且 AUC 明显回落。作为对照，旧 freeze3 stable template（trial 0）恢复到 `0.9042553191489362 / 0.9409090909090909`，比 cosine lane 同模板的 `0.9042553191489362 / 0.9363636363636364` 略好，说明当前负面结果并不是“scheduler=none 普遍更差”，而是 **prenorm 带来的排序质量改善并没有在无 scheduler 条件下保留下来**。
+- **本轮结论**：backlog 明示的“prenorm 与 scheduler carry-over 解耦”验证已经完成，而且结果偏负面。它没有带来比 prenorm+cosine 更强的证据，也没有把 direct-formal retained keep 推翻；因此这条 ResNeXt V100 side campaign 现阶段应视为已经完成 closure。
+- **推荐动作**：按协议停止继续盲跑。若未来还要重开这条 side campaign，必须先提出另一个真正新的离散假设；在此之前，不再建议继续沿当前 `freeze/scalar/pooling/scheduler/prenorm` 组合轴做 fresh adaptive main-study。
 
 ---
 
