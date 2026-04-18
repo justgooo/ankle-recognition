@@ -459,6 +459,23 @@ class ResidualPerViewMLP(nn.Module):
         return self.norm(view_feature + self.mlp(view_feature))
 
 
+class ViewFeatureRecalibration(nn.Module):
+    """Identity-initialized per-view channel gate for feature-fusion models."""
+
+    def __init__(self, feature_dim: int = 512) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(feature_dim)
+        self.gate = nn.Linear(feature_dim, feature_dim)
+        nn.init.zeros_(self.gate.weight)
+        nn.init.zeros_(self.gate.bias)
+
+    def forward(self, view_feature: torch.Tensor) -> torch.Tensor:
+        # Start from an exact identity map, then learn to up/down-weight
+        # each pooled view channel before multi-view concatenation.
+        gate = 2.0 * torch.sigmoid(self.gate(self.norm(view_feature)))
+        return view_feature * gate
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -619,6 +636,10 @@ class MultiViewCTClassifier(MultiViewEncoder):
         # 3 个视角拼接后的总维度：512 * 3 = 1536
         fused_dim = self.feature_dim * 3
 
+        self.view_recalibrators = nn.ModuleList(
+            [ViewFeatureRecalibration(self.feature_dim) for _ in range(3)]
+        )
+
         # 分类器：一个两层的全连接网络（MLP）
         self.classifier = nn.Sequential(
             nn.LayerNorm(fused_dim),                 # 稳定跨视角拼接特征的尺度
@@ -639,9 +660,16 @@ class MultiViewCTClassifier(MultiViewEncoder):
             logits: (B, 2) 的张量，每个样本有 2 个分数（正常/异常）
                     分数越高表示模型越倾向于认为是该类别
         """
-        # 第 1 步：提取 3 个视角的特征并拼接
+        # 第 1 步：提取 3 个视角的特征，并在拼接前做轻量 per-view 重标定
         # encode_views 返回 3 个 (B, 512) -> cat 后变成 (B, 1536)
-        image_feature = torch.cat(self.encode_views(images), dim=1)
+        view_features = self.encode_views(images)
+        image_feature = torch.cat(
+            [
+                recalibrator(feature)
+                for recalibrator, feature in zip(self.view_recalibrators, view_features)
+            ],
+            dim=1,
+        )
         # 第 2 步：送进分类器，得到分类结果
         return self.classifier(image_feature)
 
