@@ -697,9 +697,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
     工作流程：
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
-        2. 每个视角先经过轻量 GLU gated classifier head，提高单视角 logit 的乘性表达能力
+        2. 每个视角先经过 baseline plain classifier，避免继续扰动 classifier path
         3. reliability estimation 分支保留轻量 residual cross-view attention，
-           让融合权重读取少量跨视角上下文
+           并在 raw reliability logit 上叠加一个 gated residual adapter
         4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
     """
@@ -726,9 +726,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.view_classifiers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.LayerNorm(self.feature_dim),                       # 稳定特征分布
-                    nn.Linear(self.feature_dim, fusion_hidden_dim * 2),   # value / gate 双分支
-                    nn.GLU(dim=-1),
+                    nn.LayerNorm(self.feature_dim),                  # 稳定特征分布
+                    nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 -> 256
+                    nn.ReLU(inplace=True),
                     nn.Dropout(dropout),
                     nn.Linear(fusion_hidden_dim, 2),  # 256 -> 2（正常/异常）
                 )
@@ -736,8 +736,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             ]
         )
         # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
-        # per-view classifier 只换成 gated head，其余 pooled-feature 路径不再额外改写；
-        # richer cross-view context 只用于 fusion weighting，测试瓶颈是否主要在 classifier head。
+        # per-view classifier 保持 baseline pooled-feature 路径；
+        # richer cross-view context 只用于 fusion weighting，测试瓶颈是否主要在 reliability head。
         from .cross_view_attention import CrossViewAttention
 
         self.cross_view_mixer = CrossViewAttention(
@@ -747,8 +747,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dropout=0.1,
             residual_scale=0.125,
         )
-        # 视角可靠度门控：每个视角一个 baseline raw-logit reliability head。
-        # 保持 current winner 的 VRG 路径，不让 cross-view mixer 改写 fusion weighting。
+        # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
+        # 再叠加零初始化的 gated residual adapter，尽量把初始语义保持在 baseline 附近。
         self.confidence_heads = nn.ModuleList(
             [
                 nn.Sequential(
@@ -758,6 +758,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)
             ]
         )
+        self.confidence_adapters = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.LayerNorm(self.feature_dim),
+                    nn.Linear(self.feature_dim, fusion_hidden_dim * 2),
+                    nn.GLU(dim=-1),
+                    nn.Dropout(dropout),
+                    nn.Linear(fusion_hidden_dim, 1),
+                )
+                for _ in range(3)
+            ]
+        )
+        for adapter in self.confidence_adapters:
+            nn.init.zeros_(adapter[-1].weight)
+            nn.init.zeros_(adapter[-1].bias)
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -772,7 +787,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # 第 1 步：提取 3 个视角的 pooled feature。
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：分类 logits 只测试 gated per-view head；cross-view context 仍只送入 gating 分支。
+        # 第 2 步：分类 logits 保持 baseline 路径；cross-view context 只送入 gating 分支。
         stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
         gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
 
@@ -785,9 +800,15 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 4 步：保持 baseline raw-logit VRG 头形式，但让它读取 cross-view-enriched gating feature。
+        # 第 4 步：baseline raw-logit VRG 头上叠加 gated residual adapter，
+        # 只给融合权重估计增加受控的乘性表达力。
         confidences = torch.stack(
-            [head(feature) for head, feature in zip(self.confidence_heads, gating_features)],
+            [
+                head(feature) + adapter(feature)
+                for head, adapter, feature in zip(
+                    self.confidence_heads, self.confidence_adapters, gating_features
+                )
+            ],
             dim=1,
         )  # (B, 3, 1)
 
