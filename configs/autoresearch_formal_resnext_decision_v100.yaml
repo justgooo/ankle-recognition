@@ -1,6 +1,6 @@
 # Dedicated formal config for the ResNeXt-only V100 decision-fusion campaign.
-# Keeps the required 512x16 geometry fixed while extending the training budget
-# to diagnose whether this isolated lane is still under-trained at 15 epochs.
+# Keeps the required 512x16 geometry fixed and anchors the 30-epoch lane to the
+# latest best main-study winner before running a narrower local scalar retune.
 experiment_name: autoresearch_formal_resnext_decision_v100
 output_dir: runs/autoresearch_formal_resnext_decision_v100
 seed: 42
@@ -24,16 +24,16 @@ model:
   use_pretrained: true
   freeze_layers: 3
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.4
   use_attention_pooling: false
 
 train:
   epochs: 30
-  lr: 5.0e-5
-  weight_decay: 5.0e-4
+  lr: 3.0e-5
+  weight_decay: 1.0e-3
   class_weight: true
   device: auto
   augmentation: true
   scheduler: none
   label_smoothing: 0.0
-  gradient_clip_norm: 1.0
+  gradient_clip_norm: 1.5

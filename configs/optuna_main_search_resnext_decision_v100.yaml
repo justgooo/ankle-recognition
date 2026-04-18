@@ -25,13 +25,13 @@ search_space:
     choices: [3]
   train.lr:
     type: categorical
-    choices: [3.0e-5, 5.0e-5, 7.5e-5]
+    choices: [2.0e-5, 3.0e-5, 4.0e-5]
   train.weight_decay:
     type: categorical
-    choices: [5.0e-4, 7.5e-4, 1.0e-3]
+    choices: [7.5e-4, 1.0e-3, 1.25e-3]
   model.dropout:
     type: categorical
-    choices: [0.3, 0.35, 0.4]
+    choices: [0.35, 0.4, 0.45]
   train.gradient_clip_norm:
     type: categorical
-    choices: [0.5, 1.0, 1.5]
+    choices: [1.0, 1.5, 2.0]
