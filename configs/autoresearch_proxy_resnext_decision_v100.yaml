@@ -1,0 +1,38 @@
+# Dedicated proxy config for the ResNeXt-only V100 decision-fusion campaign.
+# Mirrors the formal decision-fusion lane with a shorter budget for fallback smoke.
+experiment_name: autoresearch_proxy_resnext_decision_v100
+output_dir: runs/autoresearch_proxy_resnext_decision_v100
+seed: 42
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 256
+  num_slices_per_view: 8
+  trim_edge_slices: 2
+  batch_size: 6
+  num_workers: 12
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnext
+  fusion_type: decision
+  share_backbone: false
+  use_pretrained: true
+  freeze_layers: 3
+  fusion_hidden_dim: 256
+  dropout: 0.25
+  use_attention_pooling: false
+
+train:
+  epochs: 4
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  class_weight: true
+  device: auto
+  augmentation: true
+  scheduler: none
+  label_smoothing: 0.0
+  gradient_clip_norm: 1.0

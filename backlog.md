@@ -20,7 +20,7 @@
 |------|-----|
 | 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-GATED-HEAD-CONFIRM（保持 dedicated ResNeXt V100 `256x8`、feature-fusion、mean-pooling 几何，以及当前 committed template 的 `trim_edge_slices=2`、`LayerNorm(fused_dim)` prenorm、per-view feature recalibration、light cross-view mixer 与 GLU-gated fusion head 完全不变；唯一动作是对 exact template / commit `15b1ef6` 做 1 次 direct formal confirmation，运行输出隔离到 `runs/autoresearch_formal_resnext_v100_confirm/iter_0020_20260418_123256`；训练提交为 `350cc9f`） |
 | 上次结果 | discard（direct formal confirmation 在固定 template / seed=42 下得到 `val_acc=0.9468085106382979`, `val_auc=0.9777272727272728`, `val_f1=0.9411764705882353`, `peak_vram=2.17 GiB`, `total_seconds=815.9`。它把上一轮 fresh main-study keep 的 `val_acc=0.9468085106382979` 完整复现了出来，只是 `val_auc` 比 `15b1ef6` 的 `0.9800000000000001` 低 `0.0022727272727273`，因此按严格 tie-break 不能替换当前 best keep；但这也说明 gated fusion head 的 accuracy 高点并非一次性 search 噪声，而是在 direct formal 语义下可复现的。） |
-| 下一步 | 既然 exact template 的 direct formal 已经复现了 `0.9468085106382979` accuracy，若外层 loop 继续这一独立 side campaign，最高优先级应改为对同一 gated-head template 做 1 次 alternate-seed direct formal confirmation（优先 `seed=123`），而不是立刻再开新的 fresh main-study 或继续叠加新结构。 |
+| 下一步 | **人类方向改动（2026-04-18）**：独立 ResNeXt V100 side campaign 不再继续 `feature fusion` 多 seed confirmation，后续改为 **`resnext + decision fusion`**。最高优先级是使用隔离的新模板 `configs/autoresearch_formal_resnext_decision_v100.yaml` / `configs/optuna_main_search_resnext_decision_v100.yaml`，先在保留 `256x8`、`trim_edge_slices=2`、`share_backbone=false`、`use_attention_pooling=false` 的前提下做 1 次 fresh adaptive main-study，单独判断“把融合语义从 feature 改为 VRG-style decision”是否优于当前 `resnext feature` lane。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 1 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
@@ -39,6 +39,16 @@
 | **tie-break** | **0.9318181818181819** | `a60c3e0` | fresh proxy study trial 0 | 与上述 winner 同一 trial 的 `best_val.auc`；当 `val_acc` 持平时仍按此决胜 |
 | canonical formal 参考 | 0.8617021276595744 | `c30fcae` | `configs/autoresearch_formal.yaml`（trial 0 模板超参） | 当前主线首个 formal confirmation；`val_auc=0.9372727272727273`，准确率低于 proxy winner 但 AUC 更高 |
 | legacy no_miss 参考 | 0.915 | `d63b49a` (formal) | 旧 Decision Fusion / 旧实验语义 | **legacy reference only**，不可与当前主线直接比较 |
+
+---
+
+## 2026-04-18：人类方向改动（ResNeXt 转到 Decision Fusion）
+
+> **方向说明**
+> - 人类已明确要求：独立 `ResNeXt V100` side campaign 的下一步不再继续当前 `feature-fusion` lane，而是改做 **`resnext + decision fusion`**。
+> - 这不是对既有 `feature-fusion` 结果的否定；`15b1ef6` 及其 direct formal confirmation 仍保留为该旧 lane 的最强证据。
+> - 为避免混淆历史 ledger、输出目录和搜索记录，新的 decision-fusion 方向必须使用**隔离的配置 / study_root / output_dir**，不能覆盖 `configs/autoresearch_formal_resnext_v100.yaml` 或 `runs/optuna_main_resnext_v100`。
+> - 新 lane 的首轮动作应优先保持几何与数据预算不变：`image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=6`, `num_workers=12`, 只把 `fusion_type` 切到 `decision`，然后再做 fresh adaptive main-study。
 
 ---
 
