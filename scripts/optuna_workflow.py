@@ -1528,19 +1528,34 @@ def run_study_adaptive(
     worker_cooldown_seconds: float = 0.0,
 ) -> Path:
     explicit_ids = parse_gpu_id_spec(gpu_ids)
-    selected_devices = select_gpu_devices(
-        gpu_id_spec=gpu_ids,
-        max_used_memory_mb=max_used_memory_mb,
-        max_utilization=max_utilization,
-    )
+    discovered_devices = discover_gpu_devices()
     if explicit_ids is not None:
-        found_ids = {device.index for device in selected_devices}
-        missing_ids = [gpu_id for gpu_id in explicit_ids if gpu_id not in found_ids]
+        discovered_by_id = {device.index: device for device in discovered_devices}
+        missing_ids = [gpu_id for gpu_id in explicit_ids if gpu_id not in discovered_by_id]
         if missing_ids:
             raise ValueError(
                 f"Some explicit --gpu-ids entries were not found via nvidia-smi: {missing_ids}"
             )
-    elif str(gpu_ids).strip().lower() == "auto":
+        selected_devices = [discovered_by_id[gpu_id] for gpu_id in explicit_ids]
+        busy_devices = [
+            device
+            for device in selected_devices
+            if device.memory_used_mb > max_used_memory_mb or device.utilization_gpu > max_utilization
+        ]
+        if busy_devices:
+            details = "\n".join(f"  {line}" for line in format_gpu_devices(selected_devices))
+            raise SystemExit(
+                "Explicit --gpu-ids entries do not satisfy the configured idle thresholds. "
+                f"Thresholds: used<={max_used_memory_mb} MiB, util<={max_utilization}%.\n"
+                f"{details}"
+            )
+    else:
+        selected_devices = select_gpu_devices(
+            gpu_id_spec=gpu_ids,
+            max_used_memory_mb=max_used_memory_mb,
+            max_utilization=max_utilization,
+        )
+    if explicit_ids is None and str(gpu_ids).strip().lower() == "auto":
         discovered_devices = discover_gpu_devices()
         if discovered_devices and not selected_devices:
             details = "\n".join(f"  {line}" for line in format_gpu_devices(discovered_devices))
