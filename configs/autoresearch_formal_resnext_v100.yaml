@@ -23,7 +23,7 @@ model:
   use_pretrained: true
   freeze_layers: 3
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.25
   use_attention_pooling: false
 
 train:
