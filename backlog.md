@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-GATED-HEAD-CONFIRM（保持 dedicated ResNeXt V100 `256x8`、feature-fusion、mean-pooling 几何，以及当前 committed template 的 `trim_edge_slices=2`、`LayerNorm(fused_dim)` prenorm、per-view feature recalibration、light cross-view mixer 与 GLU-gated fusion head 完全不变；唯一动作是对 exact template / commit `15b1ef6` 做 1 次 direct formal confirmation，运行输出隔离到 `runs/autoresearch_formal_resnext_v100_confirm/iter_0020_20260418_123256`；训练提交为 `350cc9f`） |
-| 上次结果 | discard（direct formal confirmation 在固定 template / seed=42 下得到 `val_acc=0.9468085106382979`, `val_auc=0.9777272727272728`, `val_f1=0.9411764705882353`, `peak_vram=2.17 GiB`, `total_seconds=815.9`。它把上一轮 fresh main-study keep 的 `val_acc=0.9468085106382979` 完整复现了出来，只是 `val_auc` 比 `15b1ef6` 的 `0.9800000000000001` 低 `0.0022727272727273`，因此按严格 tie-break 不能替换当前 best keep；但这也说明 gated fusion head 的 accuracy 高点并非一次性 search 噪声，而是在 direct formal 语义下可复现的。） |
-| 下一步 | **人类方向改动（2026-04-18）**：独立 ResNeXt V100 side campaign 不再继续 `feature fusion` 多 seed confirmation，后续改为 **`resnext + decision fusion`**。最高优先级是使用隔离的新模板 `configs/autoresearch_formal_resnext_decision_v100.yaml` / `configs/optuna_main_search_resnext_decision_v100.yaml`，先在保留 `256x8`、`trim_edge_slices=2`、`share_backbone=false`、`use_attention_pooling=false` 的前提下做 1 次 fresh adaptive main-study，单独判断“把融合语义从 feature 改为 VRG-style decision”是否优于当前 `resnext feature` lane。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-BUDGET30（继续 isolated `ResNeXt V100 + decision fusion` campaign，并保持人类高优先级约束的 `image_size=512`、`num_slices_per_view=16`、`backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`trim_edge_slices=2` 不变。本轮唯一改动是把 dedicated formal template 的训练预算从 `15` 扩到 `30` epochs，用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0003_20260418_204323.yaml` 和 fresh study_root `runs/optuna_main_autoloop/iter_0003_20260418_204323`，在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study；训练提交为 `c551967`。） |
+| 上次结果 | discard（这次 `512x16` long-budget main-study 4/4 trials 全部 completed，没有资源或 workflow 层 crash。最佳 completed trial 是 **trial 2**：`freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`，得到 `val_acc=0.8829787234042553`, `val_auc=0.9409090909090909`, `val_f1=0.8641975308641975`, `peak_vram≈4.67 GiB`, `total_seconds=4271.2`。这比上一轮 `512x16` local-retune best `0.851063829787234 / 0.9313636363636364` 提升了 `0.0319148936170213 / 0.0095454545454545`，并且追平了当前 canonical proxy best `a60c3e0` 的 `val_acc=0.8829787234042553`，同时 AUC 更高；但它仍明显落后于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，也仍低于旧 ResNeXt feature-fusion retained keep `15b1ef6` 的 `0.9468085106382979 / 0.9800000000000001`，因此本轮仍必须记 **discard**。） |
+| 下一步 | 若外层 loop 继续保持 **`resnext + decision fusion`** 为最高优先级，后续必须继续坚持 `512x16` pivot 和 `30`-epoch budget，不要回退到 `256x8`，也不要再把研究变量放回“更长 budget”本身。因为本轮 winner 的 best 仍出在 `epoch 13`，说明收益主要来自**更低 lr + 更高正则**而不是更晚的新峰值。下一个单一改动应优先把本轮 winner（`lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`）升格为 anchor，在同一 `30`-epoch 预算下做 1 次更窄的 local retune。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1 |
+| 连续 discard 计数 | 6 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -42,6 +42,62 @@
 
 ---
 
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 budget diagnostic to 30 epochs）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`。
+> - 唯一离散研究改动：把 dedicated formal template 的训练预算从 `15` 提到 `30` epochs，用更长 budget 诊断 `512x16` lane 是预算受限，还是几何/优化面本身失配；局部搜索空间保持上一轮 `512x16` retune 的 low-lr / high-regularization 方向，不再引入新的结构变量。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0003_20260418_204323.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0003_20260418_204323`，运行 commit 为 `c551967`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-BUDGET30**：`configs/autoresearch_formal_resnext_decision_v100.yaml`（仅把 `train.epochs` 从 `15` 扩到 `30`）+ fresh adaptive main-study（`GPU 0,1,2`）→ 4/4 trials completed，best completed trial 为 **trial 2**（`freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`）→ `val_acc=0.8829787234042553`, `val_auc=0.9409090909090909`, `val_f1=0.8641975308641975`, `peak_vram≈4.67 GiB`, `total_seconds=4271.2` → **discard**（虽然这轮长预算把 `512x16` lane 明显抬高了：相较上一轮 `512x16` local-retune best `0.851063829787234 / 0.9313636363636364` 提升 `+0.0319148936170213 / +0.0095454545454545`，并且追平了当前 canonical proxy best `a60c3e0` 的 accuracy、同时在 AUC 上更高；但它仍低于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，accuracy 低 `0.0425531914893617`、AUC 低 `0.0231818181818182`；相较旧 ResNeXt feature-fusion retained keep `15b1ef6` 的 `0.9468085106382979 / 0.9800000000000001` 仍低 `0.0638297872340426 / 0.0390909090909092`，因此仍不能保留。）
+- **Monitor takeaways**：这轮 30-epoch budget 不是资源问题，4 个 completed trials 的 `peak_vram` 都稳定在约 `4.67 GiB`，单 trial wall time 约 `4249-4276s`。最关键的是，winner 从原先的低正则 anchor（`lr=5e-5`, `weight_decay=5e-4`, `dropout=0.3`, `clip=1.0`）切到了**更低 lr + 更高 dropout / wd / clip** 的组合；monitor 也明确给出同方向信号：`dropout`、`gradient_clip_norm`、`weight_decay` 越高越好，`lr` 越低越好。
+- **Budget diagnosis takeaway**：虽然总体 best 明显提升，但 **winner 的 best epoch 仍然是 `epoch 13`**，不是更晚的新峰值。这说明“把预算从 15 拉到 30”帮助了这条 lane 重新排序超参优先级，却没有证明模型需要更长训练才能在后半程冒出更高峰值。
+- **本轮结论**：`512x16` lane 确实对 budget 敏感，不能再把 15-epoch 结果当作这条几何的最终上限；但当前 gain 更像是“长预算改变了更强正则角点的可见性”，而不是“模型在 20-30 epoch 自己长出了新峰值”。因此本轮仍记 **discard**，但后续研究变量应从“继续加 budget”切换到“在 30-epoch 预算下围绕新角点做局部 retune”。
+- **推荐动作**：如果外层 loop 还要继续这条 isolated decision-fusion lane，下一步不要再继续加 epoch，也不要回退到 15 epochs。应保持 `512x16` 和 `30`-epoch budget 不变，把本轮 winner（`lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`）升格为新的 isolated anchor，再做 1 次更窄的 local retune。
+
+---
+
+## 2026-04-18：人类方向追加约束（decision lane geometry pivot）
+
+> **方向说明**
+> - 当前 coordinator 的人类高优先级约束已进一步明确：isolated `ResNeXt V100 + decision fusion` lane 后续必须转到 **`image_size=512` + `num_slices_per_view=16`**。
+> - 这个 pivot 不是可选探索项，而是下一轮及后续迭代都应遵守的新几何前提。
+> - 同时保持：`backbone=resnext`, `fusion_type=decision`, `share_backbone=false`, `use_attention_pooling=false`, `trim_edge_slices=2`。
+> - 如果 `512x16` 带来显存或吞吐压力，只允许做安全调整（如降低 `batch_size`、增加 timeout、必要时改走更小预算诊断 lane），**不要**回退到 `256x8`。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 local scalar retune）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`。
+> - 唯一离散研究改动：把 dedicated formal template 锚定到上一轮 `512x16` least-bad anchor（`freeze_layers=3`, `lr=5e-5`, `weight_decay=5e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`），并把 fresh adaptive main-study 的搜索空间收窄到同一局部区域，只测试更保守的 `lr / weight_decay / dropout / clip` 标量扰动。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0002_20260418_192324.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0002_20260418_192324`，运行 commit 为 `7168b10`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-LOCAL-RETUNE**：`configs/autoresearch_formal_resnext_decision_v100.yaml`（对齐上一轮 `512x16` least-bad anchor）+ fresh adaptive main-study（`GPU 0,1,2`）→ 4/4 trials completed，best completed trial 为 **trial 0**，也就是 enqueued anchor 本身（`freeze_layers=3`, `lr=5e-5`, `weight_decay=5e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）→ `val_acc=0.851063829787234`, `val_auc=0.9313636363636364`, `val_f1=0.8333333333333334`, `peak_vram≈4.67 GiB`, `total_seconds=2155.6` → **discard**（虽然这比上一轮 `512x16` fresh study best `0.8404255319148937 / 0.9354545454545454` 多了 `+0.0106382978723403` accuracy，但 AUC 还回落了 `0.0040909090909090`；同时它仍明显弱于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，也仍明显弱于旧 ResNeXt feature-fusion retained keep `15b1ef6` 的 `0.9468085106382979 / 0.9800000000000001`，因此不能保留。）
+- **Monitor takeaways**：这轮 narrower retune 没有找到比 enqueued anchor 更好的角点。把 `dropout` 提到 `0.35`、`gradient_clip_norm` 抬回 `1.5` 会把 accuracy 直接压到 `0.7978723404255319`；把正则进一步推到 `dropout=0.4`, `lr=3e-5`, `weight_decay=1e-3`, `clip=1.5` 同样只得到 `0.7978723404255319`；即便只把 `weight_decay` 从 `5e-4` 提到 `7.5e-4`，accuracy 也会回落到 `0.8297872340425532`。4 个 completed trials 的 `peak_vram` 全都稳定在约 `4.67 GiB`，说明本轮结论是优化面的负结果，不是资源噪声。
+- **本轮结论**：`512x16` lane 的当前最优角点仍停留在上一轮 already-known anchor，说明单纯继续做局部标量窄 retune 并不能把这个大几何 lane 拉回到 decision anchor 或旧 feature-fusion keep 的水平。因此本轮仍记 **discard**。
+- **推荐动作**：如果外层 loop 还要继续这条 isolated decision-fusion lane，下一步不要再在同一窄区间里重复扫 `lr / dropout / clip / wd`。应继续保持 `512x16` 不回退，但把研究变量切到 **训练预算诊断**（例如更长 epochs 或同 budget 下的 budget-sensitive check），先判断这是几何本身失配，还是当前 15-epoch 预算不足。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 geometry pivot）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 唯一研究改动是执行新的强制几何 pivot：把 dedicated decision lane 从 `image_size=256` / `num_slices_per_view=8` 切到 **`image_size=512` / `num_slices_per_view=16`**，同时保持 `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false` 不变。
+> - 为避免把资源问题误判成研究结论，本轮只做安全收紧：`batch_size=2`，并把 Optuna `main` / `proxy` timeout 分别扩到 `480/180` 与 `240/90` 分钟；这些不视为额外研究变量。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260418_180333.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0001_20260418_180333`，运行 commit 为 `ef62f61`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16**：`configs/autoresearch_formal_resnext_decision_v100.yaml`（几何 pivot 到 `512x16`，`batch_size=2`）+ fresh adaptive main-study（`GPU 0,1,2`）→ 4/4 trials completed，best completed trial 为 **trial 1**（`freeze_layers=3`, `lr=5e-5`, `weight_decay=5e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）→ `val_acc=0.8404255319148937`, `val_auc=0.9354545454545454`, `val_f1=0.8235294117647058`, `peak_vram≈4.67 GiB`, `total_seconds=2178.3` → **discard**（虽然这次几何 pivot 在执行层面是成功的，但性能明显弱于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，accuracy 低 `0.0851063829787233`、AUC 低 `0.0286363636363637`；相较旧 ResNeXt feature-fusion retained keep `15b1ef6` 的 `0.9468085106382979 / 0.9800000000000001` 更低 `0.1063829787234042 / 0.0445454545454547`，因此不能保留。）
+- **Monitor takeaways**：4 个 completed trials 全部有效，没有 OOM、timeout 或 workflow crash。`freeze_layers=3` 的三次试次显存都稳定在约 `4.67 GiB`；唯一的 `freeze_layers=2` 试次也只到约 `15.48 GiB`，说明在 V100 32GB + `batch_size=2` 下，`512x16` 不是资源阻塞问题，而是当前标量/几何组合本身表现不佳。最不差的角点从旧 anchor 的 `lr=1e-4, dropout=0.25, clip=2.0` 转到更保守的 `lr=5e-5, dropout=0.3, clip=1.0`，提示大几何下的优化面已经明显变化。
+- **本轮结论**：`512x16` pivot 已被验证为**可稳定执行**，但现阶段不是性能收益；在当前 search budget 下，它反而把 isolated decision lane 的 accuracy 明显压低，所以本轮记 **discard**。
+- **推荐动作**：如果外层 loop 还要继续这条 isolated decision-fusion lane，必须保持 `512x16` 不回退，但不要对这次 winner 直接做 formal confirmation。优先围绕 trial-1 角点做 1 次更窄的 retune，必要时用小预算诊断先判断大几何到底需要更强正则、不同学习率，还是更长训练预算。
+
+---
+
 ## 2026-04-18：人类方向改动（ResNeXt 转到 Decision Fusion）
 
 > **方向说明**
@@ -49,6 +105,50 @@
 > - 这不是对既有 `feature-fusion` 结果的否定；`15b1ef6` 及其 direct formal confirmation 仍保留为该旧 lane 的最强证据。
 > - 为避免混淆历史 ledger、输出目录和搜索记录，新的 decision-fusion 方向必须使用**隔离的配置 / study_root / output_dir**，不能覆盖 `configs/autoresearch_formal_resnext_v100.yaml` 或 `runs/optuna_main_resnext_v100`。
 > - 新 lane 的首轮动作应优先保持几何与数据预算不变：`image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=6`, `num_workers=12`, 只把 `fusion_type` 切到 `decision`，然后再做 fresh adaptive main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（decision fusion，资源阻塞）
+
+> **独立 campaign 说明**
+> - 这一轮显式承接上面的 2026-04-18 人类方向改动，只推进 `resnext`，不回到 canonical ResUNet 主线，也不再继续旧 `feature fusion` 多 seed confirmation。
+> - 保持原 ResNeXt V100 side campaign 的几何与预算不变：`image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=6`, `num_workers=12`。
+> - 唯一离散研究改动：把隔离模板从 `feature fusion` 切到 `decision fusion`，使用 `configs/autoresearch_formal_resnext_decision_v100.yaml` / `configs/optuna_main_search_resnext_decision_v100.yaml` 做 1 次 fresh adaptive main-study。
+> - 首跑使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260418_151554.yaml` 与 study_root `runs/optuna_main_autoloop/iter_0001_20260418_151554`，运行 commit 为 `036a6d7`。首跑暴露出 workflow bug：显式 `--gpu-ids 4,5,0,1` 未执行 idle 阈值检查，导致 leader 直接在 busy GPU 上起跑。
+> - 为按协议完成“code bug 最多修 1 次再重跑”，本轮随后在 commit `13696b9` 修复 `scripts/optuna_workflow.py`，使显式 GPU 列表也强制 obey `used<=1024 MiB` / `util<=20%`，并改用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260418_152350.yaml` 与新的 fresh study_root `runs/optuna_main_autoloop/iter_0001_20260418_152350` 重跑。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-ITER0001**：`configs/autoresearch_formal_resnext_decision_v100.yaml` + fresh adaptive main-study（显式卡集 `4,5,0,1`）→ **crash**（首跑里 `trial 0/1` 在约 `30.8s` 时 OOM，日志显示目标卡只剩约 `163 MiB` 可用；`trial 2/3` 还被遗留为 `running`，说明这不是有效的研究结果。修复显式 GPU idle 检查后，重跑在创建 storage 前就被干净拒绝：leader job 直接报 `Explicit --gpu-ids entries do not satisfy the configured idle thresholds`，其中 `GPU 4/5` 占用约 `78.6 / 81.6 GiB` 且 util `96% / 100%`。现场 `nvidia-smi` 还显示 `GPU 0/1` 也同样远高于阈值，因此本轮没有任何 completed trial，也没有可比较的 `val_acc / val_auc`。）
+- **本轮结论**：这次属于 **资源阻塞 / 执行层 crash**，不是对 `resnext + decision fusion` 研究假设的负面证据。当前只能说明：在本轮指定的显式卡集与 Slurm wrapper 环境下，资源当时并不满足 main-study 的 idle policy。
+- **推荐动作**：保持同一 isolated decision-fusion lane，不要更换模板、不必回退到 proxy。下一次只需在 `4,5,0,1` 真正空闲时重开同一 fresh adaptive main-study；若资源长期不满足，再由外层 loop 或人类层面调整 GPU policy。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（decision fusion + dropout0.3 template）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接上面的 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持原 ResNeXt V100 side campaign 的几何与预算不变：`image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=6`, `num_workers=12`。
+> - 唯一离散研究改动：把 dedicated formal decision template `configs/autoresearch_formal_resnext_decision_v100.yaml` 的 `dropout` 从 `0.25` 上调到 `0.3`，然后用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260418_170826.yaml` 在空闲 `GPU 0,1,2` 上做 1 次 fresh adaptive main-study。
+> - 本轮 fresh study 为 `runs/optuna_main_autoloop/iter_0001_20260418_170826`，运行 commit 为 `570f082`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-DROPOUT030**：`configs/autoresearch_formal_resnext_decision_v100.yaml`（仅把 template `dropout` 调到 `0.3`）+ fresh adaptive main-study（`GPU 0,1,2`）→ best completed trial 为 **trial 3**（`freeze_layers=3`, `lr=1e-4`, `weight_decay=5e-4`, `dropout=0.25`, `gradient_clip_norm=2.0`）→ `val_acc=0.9148936170212766`, `val_auc=0.9763636363636363`, `val_f1=0.9111111111111111`, `peak_vram≈2.17 GiB`, `total_seconds=803.3` → **discard**（这次 fresh main-study 已经干净完成，证明上一轮 crash 只是资源问题；但本轮 winner 仍低于旧 ResNeXt feature-fusion retained keep `15b1ef6` 的 `0.9468085106382979 / 0.9800000000000001`，accuracy 低 `0.0319148936170213`、AUC 低 `0.0036363636363638`，因此还不足以支持把 side campaign 的融合语义正式切到 decision fusion。）
+- **Monitor takeaways**：4 个 completed trial 都是有效结果，没有再出现资源/流程层异常。`freeze_layers=3` 依然统治这个 lane；唯一的 `freeze_layers=2` 试次（trial 2）把 `peak_vram` 推到约 `6.27 GiB`，但 accuracy 只到 `0.9042553191489362`。本轮的 template 改动（`dropout=0.3`）本身能把 enqueued trial 0 推到 `0.9148936170212766 / 0.9731818181818181`，但搜索最终还是回到了更低 `dropout=0.25` 且更高 `gradient_clip_norm=2.0` 的组合，说明 decision-fusion lane 的最优正则形状和旧 feature-fusion 稳定家族并不完全相同。
+- **本轮结论**：`resnext + decision fusion` 已经拿到了第一批干净的 completed-trial 证据，不再是“只有 crash 没有结果”的方向；但按当前证据，它仍明显落后于既有的 ResNeXt feature-fusion retained keep，因此这轮只能记 **discard**。
+- **推荐动作**：如果外层 loop 还要继续这条 isolated decision-fusion lane，优先只做 1 次 direct formal confirmation，验证本轮 trial-3 winner 是否能在 formal 语义下进一步接近或超过旧 feature-fusion keep；在此之前不要再开新的 fresh search。
+
+---
+
+## 2026-04-18：ResNeXt V100 Direct Formal Confirmation（decision-fusion main-study winner）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接上面的 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持原 ResNeXt V100 side campaign 的几何与预算不变：`image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=6`, `num_workers=12`。
+> - 唯一离散研究改动：把 dedicated formal decision template 直接对齐到上一轮 fresh main-study winner（`freeze_layers=3`, `lr=1e-4`, `weight_decay=5e-4`, `dropout=0.25`, `gradient_clip_norm=2.0`），然后在单卡 fallback `GPU 0` 上做 1 次 direct formal confirmation。
+> - 本轮运行 commit 为 `7ae19a0`；由于这是 fixed-config confirmation 而不是 fresh study，直接运行 `CUDA_VISIBLE_DEVICES=0 timeout 10800 .venv/bin/python train.py --config configs/autoresearch_formal_resnext_decision_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-FORMAL-CONFIRM**：`configs/autoresearch_formal_resnext_decision_v100.yaml`（对齐上一轮 decision-fusion main-study winner：`freeze_layers=3`, `lr=1e-4`, `weight_decay=5e-4`, `dropout=0.25`, `gradient_clip_norm=2.0`）→ `val_acc=0.925531914893617`, `val_auc=0.9640909090909091`, `val_f1=0.9195402298850575`, `peak_vram≈2.17 GiB`, `total_seconds=797.4` → **discard**（相较上一轮 decision-fusion main-study winner `0.9148936170212766 / 0.9763636363636363`，accuracy 提升 `0.0106382978723404`，说明 search winner 能转化为更强 formal accuracy 证据；但 AUC 回落 `0.0122727272727272`，且相较旧 ResNeXt feature-fusion retained keep `15b1ef6` 的 `0.9468085106382979 / 0.9800000000000001` 仍低 `0.0212765957446809 / 0.0159090909090909`，因此仍不足以把 side campaign 的最强 retained evidence 切换到 decision fusion。）
+- **本轮结论**：这次 direct formal confirmation 证明 decision-fusion lane 已经不只是“search 里偶然跑到一个较好 trial”；它在 formal 语义下把 accuracy 进一步抬到 `0.925531914893617`。但在当前 keep/discard 口径下，这个结果仍没有超过既有的 ResNeXt feature-fusion retained keep，所以本轮依旧只能记 **discard**。
+- **推荐动作**：如果外层 loop 还要继续这条 isolated decision-fusion lane，下一步不再重复 direct formal 或 broad fresh search；优先把这次 confirmed anchor 作为新的 isolated baseline，只围绕它开 1 次更窄的 fresh adaptive main-study，测试 decision-fusion 是否还能再向 `15b1ef6` 收敛。
 
 ---
 
