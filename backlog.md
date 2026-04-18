@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-GATED-HEAD（保持 dedicated ResNeXt V100 `256x8`、feature-fusion、mean-pooling 几何，以及当前 committed template 的 `trim_edge_slices=2`、`LayerNorm(fused_dim)` prenorm、per-view feature recalibration 与 light cross-view mixer 不变；唯一新的离散改动是在 `src/model.py` 的 `MultiViewCTClassifier` 中把融合头从 plain `Linear + ReLU` 换成轻量 GLU-gated MLP，然后运行 fresh adaptive main-study `runs/optuna_main_autoloop/iter_0019_20260418_115456`；search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0019_20260418_115456.yaml`；commit `15b1ef6`） |
-| 上次结果 | keep（fresh adaptive main-study 4/4 completed，best completed trial 为 trial 3：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`，得到 `val_acc=0.9468085106382979`, `val_auc=0.9800000000000001`, `val_f1=0.9411764705882353`, `peak_vram=2.17 GiB`, `total_seconds=857.5`。它较当前 retained keep `0.925531914893617 / 0.9563636363636363` 提升 `0.0212765957446809 / 0.0236363636363638`，也较旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 提升 `0.0319148936170213 / 0.0395454545454547`，因此本轮晋升为该独立 ResNeXt V100 side campaign 的新 best keep。） |
-| 下一步 | 这次 gated fusion head 明显打破了最近连续 discard 的僵局，但同一组 template 标量在 trial 0 与 trial 3 之间仍出现 `0.0212765957446809` 的 val_acc spread，说明 run-to-run 波动还在。若外层 loop 继续这一独立 side campaign，最高优先级应是对 exact template / commit `15b1ef6` 做 1 次 direct formal confirmation，而不是立刻再开新的 fresh main-study。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-FORMAL-GATED-HEAD-CONFIRM（保持 dedicated ResNeXt V100 `256x8`、feature-fusion、mean-pooling 几何，以及当前 committed template 的 `trim_edge_slices=2`、`LayerNorm(fused_dim)` prenorm、per-view feature recalibration、light cross-view mixer 与 GLU-gated fusion head 完全不变；唯一动作是对 exact template / commit `15b1ef6` 做 1 次 direct formal confirmation，运行输出隔离到 `runs/autoresearch_formal_resnext_v100_confirm/iter_0020_20260418_123256`；训练提交为 `350cc9f`） |
+| 上次结果 | discard（direct formal confirmation 在固定 template / seed=42 下得到 `val_acc=0.9468085106382979`, `val_auc=0.9777272727272728`, `val_f1=0.9411764705882353`, `peak_vram=2.17 GiB`, `total_seconds=815.9`。它把上一轮 fresh main-study keep 的 `val_acc=0.9468085106382979` 完整复现了出来，只是 `val_auc` 比 `15b1ef6` 的 `0.9800000000000001` 低 `0.0022727272727273`，因此按严格 tie-break 不能替换当前 best keep；但这也说明 gated fusion head 的 accuracy 高点并非一次性 search 噪声，而是在 direct formal 语义下可复现的。） |
+| 下一步 | 既然 exact template 的 direct formal 已经复现了 `0.9468085106382979` accuracy，若外层 loop 继续这一独立 side campaign，最高优先级应改为对同一 gated-head template 做 1 次 alternate-seed direct formal confirmation（优先 `seed=123`），而不是立刻再开新的 fresh main-study 或继续叠加新结构。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0 |
+| 连续 discard 计数 | 1 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -379,6 +379,20 @@
 - **Monitor takeaways**：在这轮 4 个 completed trials 里，`freeze_layers=3` 家族显著占优，两个 `freeze_layers=2` / 更高正则角点都落后；更关键的是，trial 0 与 trial 3 被命中了完全相同的 template 标量，却分别得到 `0.925531914893617 / 0.9836363636363636` 与 `0.9468085106382979 / 0.9800000000000001`，说明 gated fusion head 让这条 lane 的 ceiling 显著抬高，但 run-to-run 波动依然存在，且当前最优点就是现有 template 本体而不是新的 scalar 角点。
 - **本轮结论**：这是最近连续 discard 序列后第一次明确的正结果。GLU-style fused-token gating 看起来比继续沿 `cross-view mixer / view-recalibration / trim_edge_slices / prenorm / scheduler / pooling / freeze-scalar` 轴小步扫描更有信息量，而且它在不增加显存压力的前提下把该独立 ResNeXt V100 side campaign 的 accuracy ceiling 推到了新高。
 - **推荐动作**：若外层 loop 继续，优先对 exact template / commit `15b1ef6` 做 1 次 direct formal confirmation，先判断 `0.9468085106382979` 是否可复现；在此之前不要急着再开新的 fresh main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Direct Formal Confirmation（exact gated head template）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated ResNeXt V100 lane 的当前 committed 结构与几何完全不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，并保留 `trim_edge_slices=2`、`LayerNorm(fused_dim)` prenorm、per-view feature recalibration、light cross-view mixer 与 GLU-gated fusion head。
+> - 唯一动作：不再开 fresh main-study，只对 exact template / commit `15b1ef6` 做 1 次 direct formal confirmation。为避免覆盖历史产物，本轮仅把运行标识隔离到 `experiment_name=autoresearch_formal_resnext_v100_confirm_iter_0020_20260418_123256`、`output_dir=runs/autoresearch_formal_resnext_v100_confirm/iter_0020_20260418_123256`；训练提交为 `350cc9f`，实际训练仍使用同一组模型与优化超参。
+
+- [x] **CMP-FAIR-V100-RESNEXT-FORMAL-GATED-HEAD-CONFIRM**：`configs/autoresearch_formal_resnext_v100.yaml`（exact `15b1ef6` gated-head template，无任何模型/超参改动）→ `val_acc=0.9468085106382979`, `val_auc=0.9777272727272728`, `val_f1=0.9411764705882353`, `peak_vram=2.17 GiB`, `total_seconds=815.9` → **discard**（按严格 ledger 规则，它与当前 retained keep `CMP-FAIR-V100-RESNEXT-MAIN-GATED-HEAD` 的 `val_acc=0.9468085106382979` 完全持平，但 `val_auc` 比 `0.9800000000000001` 低 `0.0022727272727273`，因此不能替换当前 best keep；不过它也较旧的 direct-formal keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 提升 `0.0212765957446809 / 0.0213636363636365`，说明 gated fusion head 的高点并非只存在于 fresh main-study 的单次高波动里，而是在 direct formal 语义下也能复现。）
+- **Monitor takeaways**：这次 direct formal 的 `val_acc` 与上一轮 fresh main-study winner 完全一致，`val_f1` 也一致，只是 `val_auc` 轻微回落 `0.0022727272727273`。结合本轮日志尾部可见，训练在 epoch 9 时已经打到 `val_acc=0.9255 / val_auc=0.9782`，最终 best 进一步上探到 `0.9468 / 0.9777`，说明 gated head 带来的 ceiling 提升不是单纯来自 Optuna 搜索或 lucky duplicate trial，而是可以在 direct formal 语义下重现。
+- **本轮结论**：按“是否替换当前 best keep”的 strict rule，本轮记 **discard**；但从研究判断上，它是一次偏正面的 confirmation。当前更可靠的结论是：`gated fusion head` 已经把这条 dedicated ResNeXt V100 `256x8` mean-pooling lane 的 ceiling 稳定抬到 `0.9468085106382979` 档位，只是仍需用 alternate seed 判断其多 seed 稳定性。
+- **推荐动作**：若外层 loop 继续，优先对同一 exact gated-head template 做 1 次 alternate-seed direct formal confirmation（优先 `seed=123`，次选 `seed=456`）；在此之前不要急着重开 fresh adaptive main-study，也不要回到非 `resnext` backbone 或更换 pooling 几何。
 
 ---
 
