@@ -22,16 +22,16 @@ python_candidates:
 search_space:
   model.freeze_layers:
     type: categorical
-    choices: [2, 3]
+    choices: [3]
   train.lr:
     type: categorical
-    choices: [5.0e-5, 7.5e-5, 1.0e-4, 1.25e-4]
+    choices: [3.0e-5, 5.0e-5, 7.5e-5]
   train.weight_decay:
     type: categorical
-    choices: [1.0e-4, 5.0e-4]
+    choices: [5.0e-4, 7.5e-4, 1.0e-3]
   model.dropout:
     type: categorical
-    choices: [0.25, 0.3, 0.35]
+    choices: [0.3, 0.35, 0.4]
   train.gradient_clip_norm:
     type: categorical
-    choices: [1.0, 2.0]
+    choices: [0.5, 1.0, 1.5]
