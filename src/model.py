@@ -639,6 +639,18 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.view_recalibrators = nn.ModuleList(
             [ViewFeatureRecalibration(self.feature_dim) for _ in range(3)]
         )
+        # 只在 pooled view token 之间加入极轻量的 cross-view context 交换，
+        # 保持 256x8 mean-pooling 几何不变，检验“缺少显式视角交互”是否仍是瓶颈。
+        from .cross_view_attention import CrossViewAttention
+
+        self.cross_view_mixer = CrossViewAttention(
+            feature_dim=self.feature_dim,
+            attention_dim=256,
+            num_heads=4,
+            num_layers=1,
+            dropout=0.1,
+            residual_scale=0.125,
+        )
 
         # 分类器：一个两层的全连接网络（MLP）
         self.classifier = nn.Sequential(
@@ -661,15 +673,14 @@ class MultiViewCTClassifier(MultiViewEncoder):
                     分数越高表示模型越倾向于认为是该类别
         """
         # 第 1 步：提取 3 个视角的特征，并在拼接前做轻量 per-view 重标定
-        # encode_views 返回 3 个 (B, 512) -> cat 后变成 (B, 1536)
+        # encode_views 返回 3 个 (B, 512)，之后再做一次轻量 cross-view mixing。
         view_features = self.encode_views(images)
-        image_feature = torch.cat(
-            [
-                recalibrator(feature)
-                for recalibrator, feature in zip(self.view_recalibrators, view_features)
-            ],
-            dim=1,
-        )
+        recalibrated_features = [
+            recalibrator(feature)
+            for recalibrator, feature in zip(self.view_recalibrators, view_features)
+        ]
+        mixed_features = self.cross_view_mixer(torch.stack(recalibrated_features, dim=1))
+        image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
         # 第 2 步：送进分类器，得到分类结果
         return self.classifier(image_feature)
 
