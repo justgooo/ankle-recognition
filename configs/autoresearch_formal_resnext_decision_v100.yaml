@@ -1,6 +1,6 @@
 # Dedicated formal config for the ResNeXt-only V100 decision-fusion campaign.
-# Pivots the isolated lane to the required 512x16 geometry while keeping the
-# ResNeXt + decision-fusion semantics fixed. Batch size is reduced for safety.
+# Keeps the required 512x16 geometry fixed while extending the training budget
+# to diagnose whether this isolated lane is still under-trained at 15 epochs.
 experiment_name: autoresearch_formal_resnext_decision_v100
 output_dir: runs/autoresearch_formal_resnext_decision_v100
 seed: 42
@@ -28,7 +28,7 @@ model:
   use_attention_pooling: false
 
 train:
-  epochs: 15
+  epochs: 30
   lr: 5.0e-5
   weight_decay: 5.0e-4
   class_weight: true
