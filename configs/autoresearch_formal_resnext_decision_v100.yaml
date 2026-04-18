@@ -1,6 +1,6 @@
 # Dedicated formal config for the ResNeXt-only V100 decision-fusion campaign.
-# Keeps the 256x8 V100 geometry from the existing ResNeXt lane while pivoting
-# the fusion semantics from feature fusion to VRG-style decision fusion.
+# Pivots the isolated lane to the required 512x16 geometry while keeping the
+# ResNeXt + decision-fusion semantics fixed. Batch size is reduced for safety.
 experiment_name: autoresearch_formal_resnext_decision_v100
 output_dir: runs/autoresearch_formal_resnext_decision_v100
 seed: 42
@@ -8,10 +8,10 @@ seed: 42
 data:
   csv_path: data/realdata/metadata.csv
   base_dir: .
-  image_size: 256
-  num_slices_per_view: 8
+  image_size: 512
+  num_slices_per_view: 16
   trim_edge_slices: 2
-  batch_size: 6
+  batch_size: 2
   num_workers: 12
   val_ratio: 0.25
   hu_min: -1000

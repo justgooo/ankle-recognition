@@ -5,8 +5,8 @@ study:
   study_root: runs/optuna_main_resnext_decision_v100
   direction: maximize
   n_trials: 4
-  timeout_minutes: 240
-  trial_timeout_minutes: 60
+  timeout_minutes: 480
+  trial_timeout_minutes: 180
   failed_score: -1.0
   sampler: tpe
   sampler_seed: 42
