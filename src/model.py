@@ -652,11 +652,12 @@ class MultiViewCTClassifier(MultiViewEncoder):
             residual_scale=0.125,
         )
 
-        # 分类器：一个两层的全连接网络（MLP）
+        # 分类器：保留现有 prenorm，但把 plain ReLU MLP 换成轻量 GLU 门控头，
+        # 让 fused token 在不改 256x8 几何的前提下拥有更强的多视角交互表达力。
         self.classifier = nn.Sequential(
             nn.LayerNorm(fused_dim),                 # 稳定跨视角拼接特征的尺度
-            nn.Linear(fused_dim, fusion_hidden_dim),  # 1536 -> 256（降维）
-            nn.ReLU(inplace=True),                    # ReLU 激活函数（引入非线性）
+            nn.Linear(fused_dim, fusion_hidden_dim * 2),  # 为 GLU 同时生成 value / gate 分支
+            nn.GLU(dim=1),
             nn.Dropout(dropout),                      # 随机丢弃 30% 的神经元（防止过拟合）
             nn.Linear(fusion_hidden_dim, 2),          # 256 -> 2（输出 2 个类别的分数）
         )
