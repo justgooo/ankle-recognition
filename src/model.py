@@ -621,6 +621,7 @@ class MultiViewCTClassifier(MultiViewEncoder):
 
         # 分类器：一个两层的全连接网络（MLP）
         self.classifier = nn.Sequential(
+            nn.LayerNorm(fused_dim),                 # 稳定跨视角拼接特征的尺度
             nn.Linear(fused_dim, fusion_hidden_dim),  # 1536 -> 256（降维）
             nn.ReLU(inplace=True),                    # ReLU 激活函数（引入非线性）
             nn.Dropout(dropout),                      # 随机丢弃 30% 的神经元（防止过拟合）
