@@ -17,6 +17,8 @@
 - 使用分配给你的 GPU 执行 Python 命令（slot 0: `CUDA_VISIBLE_DEVICES=0`，slot 1: `CUDA_VISIBLE_DEVICES=1`）
 - 如果未明确分配 slot，默认使用 `CUDA_VISIBLE_DEVICES=1`（slot 1 / 默认主训练槽位）
 - 并行模式下，写 `results.tsv` 时使用 `flock -x /tmp/ankle_results.lock`
+- 跨节点 / 多 Slurm job 并行时，**必须先确认每个 job 内可见 GPU 映射**，再启动 coordinator
+- 跨节点 / 多 Slurm job 并行时，**必须从 compute node 内的 shell 启动 loop / coordinator**，不要从登录节点或文件视图不一致的控制端直接启动
 
 ## NEVER
 
@@ -28,6 +30,8 @@
 - ❌ 不要用系统 PATH 里的 python
 - ❌ 不要在并行模式下使用另一个 slot 的 output_dir
 - ❌ 不要盲目把 `num_workers` 设得太高（必须先评估 CPU 占用。如果 CPU 占用不高，可以自动调高 `num_workers` 的水平）
+- ❌ 不要假设多个 Slurm job 会自动组成“单机 4 卡”；跨节点时必须显式做 leader/follower 分发
+- ❌ 不要在 H100/V100 等异构卡混跑前跳过空闲显存检查；被分配到 job 不等于实际显存空闲
 
 ## ASK FIRST
 
@@ -58,6 +62,50 @@ LOOP:
 - 设备映射提醒：某些宿主环境里 `nvidia-smi` 与 PyTorch 的设备顺序可能不一致；长跑前先用 `.venv/bin/python -c "import torch; print(torch.cuda.device_count()); [print(i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]"` 实测当前可见 GPU
 - `num_workers`: 默认 1（注意：如果 CPU 占用不高，Agent 可以自动调整 num_workers 的水平以加速训练）
 - proxy 实验约 30 分钟，formal 实验约 90-120 分钟
+
+## 跨节点 / 多 Slurm Job 操作
+
+- 当 4 张 GPU 分散在多个 Slurm job / 多个节点上时，不要把它当成单机 `--gpu-ids 0,1,2,3` 问题；正确语义是：**多个 job 共同服务同一个 Optuna study**。
+- 当前仓库的跨节点分发入口是 `scripts/slurm_optuna_launcher.py`；它会把 `scripts/autoresearch_main.py` / `scripts/autoresearch_proxy.py` 包装成：
+  - 第一个 job = leader：fresh create study
+  - 后续 job = follower：对同一个 `study_root/study.sqlite3` 使用 `--resume`
+- 启动跨节点 coordinator 前，先在每个 job 的 shell 中确认：
+  - `hostname`
+  - `echo $CUDA_VISIBLE_DEVICES`
+  - `.venv/bin/python -c "import torch; print(torch.cuda.device_count()); [print(i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]"`
+- 如果某个 attach shell 只暴露了部分 GPU，可以临时手动覆盖 `CUDA_VISIBLE_DEVICES` 到该 job 实际持有的卡；不要直接假设 step 里的 `SLURM_GPUS_ON_NODE` 一定完整。
+- 跨节点运行时，优先在 **leader 所在 compute node** 内启动 `autoresearch_loop.py`，并显式导出：
+  - `AUTORESEARCH_SLURM_JOB_IDS`
+  - `AUTORESEARCH_SLURM_JOB_GPU_IDS`
+  - `AUTORESEARCH_SLURM_JOB_CUDA_VISIBLE_DEVICES`
+- 变量格式规则：
+  - `AUTORESEARCH_SLURM_JOB_IDS`: 逗号分隔的 job id，例如 `423677,423003`
+  - `AUTORESEARCH_SLURM_JOB_GPU_IDS`: 按 job 顺序、用分号分组的 GPU id，例如 `'4,5;0,1'`
+  - `AUTORESEARCH_SLURM_JOB_CUDA_VISIBLE_DEVICES`: 按 job 顺序、用分号分组的 CUDA 可见卡，例如 `'4,5;0,1'`
+- 典型启动方式：
+```bash
+export AUTORESEARCH_SLURM_JOB_IDS=423677,423003
+export AUTORESEARCH_SLURM_JOB_GPU_IDS='4,5;0,1'
+export AUTORESEARCH_SLURM_JOB_CUDA_VISIBLE_DEVICES='4,5;0,1'
+
+nohup .venv/bin/python autoresearch_loop.py \
+  --max-iterations 8 \
+  --default-lane main-study \
+  --gpu-id 4 \
+  --gpu-ids 4,5,0,1 \
+  --max-workers 4 \
+  --main-search-template configs/optuna_main_search_resnext_decision_v100.yaml \
+  --proxy-search-template configs/optuna_proxy_search_resnext_decision_v100.yaml \
+  --formal-config configs/autoresearch_formal_resnext_decision_v100.yaml \
+  --proxy-config configs/autoresearch_proxy_resnext_decision_v100.yaml \
+  > autoresearch_logs/cross_node_loop.log 2>&1 &
+```
+- 运行后，`optuna_main.log` / `optuna_proxy.log` 中应看到：
+  - `Dispatching Optuna study across Slurm jobs`
+  - `leader job ...`
+  - `follower job ...`
+- 如果控制端看不到 compute node 新生成的 `runs/` 或 `autoresearch_logs/` 文件，以 compute node shell 里的视图为准；这是启动点选错的信号。
+- 如果某个 job 上出现 OOM，而另一个 job 还在跑，不要把该轮结果直接当作有效 keep/discard；先记录故障类型，再决定是否降 batch 或拆分异构卡。
 
 ## 允许修改的范围
 
