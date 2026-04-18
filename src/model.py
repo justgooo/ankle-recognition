@@ -735,6 +735,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)  # 创建 3 个分类器
             ]
         )
+        self.view_recalibrators = nn.ModuleList(
+            [ViewFeatureRecalibration(self.feature_dim) for _ in range(3)]
+        )
         # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
         # per-view classifier 保持 baseline pooled-feature 路径，避免再次扰动 logits；
         # richer cross-view context 只用于 fusion weighting，测试它是否比均值 bias 更适合校准 VRG。
@@ -769,8 +772,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         返回：
             logits: (B, 2) 的张量，3 个视角动态加权投票后的分类结果
         """
-        # 第 1 步：提取 3 个视角的特征
-        view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
+        # 第 1 步：提取 3 个视角的特征，并先做轻量 per-view 通道重标定，
+        # 用最小结构改动压低单视角 pooled token 的尺度/通道噪声。
+        view_features = [
+            recalibrator(feature)
+            for recalibrator, feature in zip(self.view_recalibrators, self.encode_views(images))
+        ]  # 3 个 (B, 512) 的列表
 
         # 第 2 步：分类 logits 保持 baseline 路径；cross-view context 只送入 gating 分支。
         stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
