@@ -18,11 +18,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-PRENORM-NOSCHED（保持 dedicated ResNeXt V100 `256x8`、feature-fusion、mean-pooling 几何与上轮 `LayerNorm(fused_dim)` prenorm 不变；唯一新的离散改动是把 `configs/autoresearch_formal_resnext_v100.yaml` 的 `train.scheduler` 从 carry-over 的 `cosine` 解耦回 `none`，然后跑 fresh adaptive main-study `runs/optuna_main_autoloop/iter_0014_20260418_091749`；search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0014_20260418_091749.yaml`；commit `6a39df6`） |
-| 上次结果 | discard（fresh adaptive main-study 4/4 completed，best completed trial 为 trial 2：`freeze_layers=2`, `lr=1e-4`, `weight_decay=5e-4`, `dropout=0.35`, `gradient_clip_norm=2.0`，得到 `val_acc=0.9148936170212766`, `val_auc=0.9336363636363636`, `val_f1=0.9024390243902439`。它与上一轮 prenorm+cosine best 在 accuracy 上完全持平，但 AUC 低 `0.0154545454545455`；同时仍较当前 retained keep `0.925531914893617 / 0.9563636363636363` 低 `0.0106382978723404 / 0.0227272727272727`，因此不能晋升。） |
-| 下一步 | 该独立 ResNeXt V100 side campaign 现在已连续 11 次 discard，而且 backlog 明示的“prenorm 与 scheduler carry-over 解耦”验证也已经做完且结果偏负面。按协议，这里不应继续盲跑；若外层 loop 仍要求 continuation，必须先由人类或新 backlog 明确给出另一个真正新的离散假设，而不是继续沿当前 `freeze/scalar/pooling/scheduler/prenorm` 轴做小步扫描。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-MAIN-GATED-HEAD（保持 dedicated ResNeXt V100 `256x8`、feature-fusion、mean-pooling 几何，以及当前 committed template 的 `trim_edge_slices=2`、`LayerNorm(fused_dim)` prenorm、per-view feature recalibration 与 light cross-view mixer 不变；唯一新的离散改动是在 `src/model.py` 的 `MultiViewCTClassifier` 中把融合头从 plain `Linear + ReLU` 换成轻量 GLU-gated MLP，然后运行 fresh adaptive main-study `runs/optuna_main_autoloop/iter_0019_20260418_115456`；search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0019_20260418_115456.yaml`；commit `15b1ef6`） |
+| 上次结果 | keep（fresh adaptive main-study 4/4 completed，best completed trial 为 trial 3：`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`，得到 `val_acc=0.9468085106382979`, `val_auc=0.9800000000000001`, `val_f1=0.9411764705882353`, `peak_vram=2.17 GiB`, `total_seconds=857.5`。它较当前 retained keep `0.925531914893617 / 0.9563636363636363` 提升 `0.0212765957446809 / 0.0236363636363638`，也较旧 fair-backbone stable winner `0.9148936170212766 / 0.9404545454545454` 提升 `0.0319148936170213 / 0.0395454545454547`，因此本轮晋升为该独立 ResNeXt V100 side campaign 的新 best keep。） |
+| 下一步 | 这次 gated fusion head 明显打破了最近连续 discard 的僵局，但同一组 template 标量在 trial 0 与 trial 3 之间仍出现 `0.0212765957446809` 的 val_acc spread，说明 run-to-run 波动还在。若外层 loop 继续这一独立 side campaign，最高优先级应是对 exact template / commit `15b1ef6` 做 1 次 direct formal confirmation，而不是立刻再开新的 fresh main-study。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 11 |
+| 连续 discard 计数 | 0 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -305,6 +305,80 @@
 - **Monitor takeaways**：解耦掉 cosine 后，search winner 仍然是上一轮同一组 aggressive freeze2 标量，说明 prenorm 的确改变了这条 lane 的最优超参形态；但它没有继续提高 accuracy ceiling，而且 AUC 明显回落。作为对照，旧 freeze3 stable template（trial 0）恢复到 `0.9042553191489362 / 0.9409090909090909`，比 cosine lane 同模板的 `0.9042553191489362 / 0.9363636363636364` 略好，说明当前负面结果并不是“scheduler=none 普遍更差”，而是 **prenorm 带来的排序质量改善并没有在无 scheduler 条件下保留下来**。
 - **本轮结论**：backlog 明示的“prenorm 与 scheduler carry-over 解耦”验证已经完成，而且结果偏负面。它没有带来比 prenorm+cosine 更强的证据，也没有把 direct-formal retained keep 推翻；因此这条 ResNeXt V100 side campaign 现阶段应视为已经完成 closure。
 - **推荐动作**：按协议停止继续盲跑。若未来还要重开这条 side campaign，必须先提出另一个真正新的离散假设；在此之前，不再建议继续沿当前 `freeze/scalar/pooling/scheduler/prenorm` 组合轴做 fresh adaptive main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（trim_edge_slices=2）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated ResNeXt V100 lane 的几何与当前结构状态不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，并保留 feature-fusion 头的 `LayerNorm(fused_dim)` prenorm。
+> - 唯一新的离散改动：把 `configs/autoresearch_formal_resnext_v100.yaml` 的 `data.trim_edge_slices` 从 `1` 提到 `2`，显式检验“在当前 8-slice mean-pooling lane 里，更强的边缘切片裁剪是否能降低无信息切片噪声并抬回 accuracy ceiling”。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0015_20260418_095144`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0015_20260418_095144.yaml`，运行 commit 为 `e9e5e43`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-EDGE-TRIM2**：`configs/autoresearch_formal_resnext_v100.yaml`（仅把 `trim_edge_slices` 从 `1` 提到 `2`）+ fresh adaptive main-study → best completed trial 为 **trial 3**（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`）→ `val_acc=0.9042553191489362`, `val_auc=0.9777272727272727`, `val_f1=0.8888888888888888`, `peak_vram=2.14 GiB`, `total_seconds=852.1` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0212765957446808` accuracy，因此不能晋升；虽然 AUC 反而高 `0.0213636363636364`，但按当前规则不能用更低 accuracy 的点替换现有 keep。它也较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 低 `0.0106382978723404` accuracy。）
+- **Monitor takeaways**：在 `trim_edge_slices=2` 的 4 个 completed trial 里，最优点不再落在近期的 aggressive freeze2 lane，而是回到 `freeze_layers=3` 家族；其中 trial 3 只把 template 的 `dropout` 从 `0.3` 下调到 `0.25`，就在与 trial 0 / trial 2 同分的 `0.9042553191489362` accuracy 上，把 AUC 抬到全 study 最高的 `0.9777272727272727`。这说明更强 edge trimming 主要改善了排序质量和阈值敏感性，而不是把固定阈值 accuracy 推过当前 keep。
+- **本轮结论**：`trim_edge_slices=2` 是一个真正新的离散假设，而且结果有信息量，但它依然没能把 dedicated ResNeXt V100 side campaign 的主指标拉回冠军区间。当前更合理的判断是：edge trimming 可以作为 ranking-quality probe 保留观察，但不足以成为新的 retained recipe。
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍强制 continuation，唯一还算信息充足的动作是对 exact trial-3 配方做 1 次 direct formal closure check；否则不要继续在这条 ResNeXt `256x8` mean-pooling lane 上做新的 fresh adaptive main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Direct Formal Closure Check（trim_edge_slices=2 trial-3）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated ResNeXt V100 lane 的几何与当前结构状态不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，并保留 feature-fusion 头的 `LayerNorm(fused_dim)` prenorm 与 `trim_edge_slices=2`。
+> - 唯一新的离散改动：把 dedicated formal template `configs/autoresearch_formal_resnext_v100.yaml` 从上一轮 `trim_edge_slices=2` main-study 的 template 状态，对齐到 exact trial 3，只把 `model.dropout` 从 `0.3` 下调到 `0.25`，然后直接做 1 次 formal closure check。
+> - 本轮运行 commit 为 `72d7ab4`；由于这是 fixed-config confirmation 而不是 fresh study，直接在允许的单卡 fallback `GPU 2` 上运行 `train.py --config configs/autoresearch_formal_resnext_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-FORMAL-EDGE-TRIM2-CLOSURE**：`configs/autoresearch_formal_resnext_v100.yaml`（保留 `trim_edge_slices=2`，仅把 `dropout` 从 template 的 `0.3` 下调到上一轮 trial-3 所暗示的 `0.25`）→ `val_acc=0.8936170212765957`, `val_auc=0.95`, `val_f1=0.8780487804878049`, `peak_vram=2.14 GiB`, `total_seconds=807.1` → **discard**（较上一轮 fresh main-study `CMP-FAIR-V100-RESNEXT-MAIN-EDGE-TRIM2` 的 trial-3 高点 `0.9042553191489362 / 0.9777272727272727` 低 `0.0106382978723405 / 0.0277272727272727`，说明 `trim_edge_slices=2` lane 的 search-time 最优点没有在 direct formal 语义下复现；它也较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0319148936170213 / 0.0063636363636363`，并较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 低 `0.0212765957446809` accuracy，因此不能晋升。）
+- **本轮结论**：backlog 明示的 exact closure check 已完成，而且结果偏负面。更强 edge trimming 依然更像 ranking-quality probe，而不是能稳定抬升 fixed-threshold accuracy 的 retained recipe。
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要求 continuation，必须先提出一个超出当前 `trim_edge_slices / prenorm / scheduler / pooling / freeze-scalar` 组合轴的新离散假设；否则不再建议继续围绕这条 ResNeXt `256x8` mean-pooling lane 盲跑 fresh main-study 或 direct rerun。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（view-wise feature recalibration）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated ResNeXt V100 lane 的几何与当前 committed template 状态不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，并保留 `trim_edge_slices=2` 与 feature-fusion 头的 `LayerNorm(fused_dim)` prenorm。
+> - 唯一新的离散改动：在 `src/model.py` 的 `MultiViewCTClassifier` 中加入 identity-initialized 的 per-view feature recalibration gate，让每个 pooled 视角特征先做轻量 channel-wise 重标定再拼接，显式检验“feature-fusion 缺少显式视角可靠度建模”是否是当前 ResNeXt lane 的瓶颈。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0017_20260418_104356`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0017_20260418_104356.yaml`，运行 commit 为 `f3e9701`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-VIEW-RECAL**：`src/model.py`（feature-fusion 头新增 per-view feature recalibration gate）+ fresh adaptive main-study → best completed trial 为 **trial 1**（`freeze_layers=3`, `lr=5e-5`, `weight_decay=5e-4`, `dropout=0.3`, `gradient_clip_norm=1.0`）→ `val_acc=0.9042553191489362`, `val_auc=0.9681818181818183`, `val_f1=0.9032258064516129`, `peak_vram=2.15 GiB`, `total_seconds=850.0` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0212765957446808` accuracy，因此不能晋升；虽然 AUC 反而高 `0.011818181818182`，但按当前规则不能用更低 accuracy 的点替换现有 keep。它也只较上一轮 `trim_edge_slices=2` closure discard 的 `0.8936170212765957 / 0.95` 小幅回升，说明这次结构改动更多是在提升排序质量，而不是恢复固定阈值 accuracy ceiling。）
+- **Monitor takeaways**：在这轮 4 个 completed trials 里，最优点回到 `freeze_layers=3` 家族，而且落在更低学习率、更高 weight decay 的保守角点（trial 1）。值得注意的是，trial 1 与 trial 3 被命中了同一组参数，但分别得到 `0.9042553191489362 / 0.9681818181818183` 与 `0.8936170212765957 / 0.9572727272727273`，说明新的 recalibration gate 并没有消除当前 side campaign 的 run-to-run 波动。唯一的 `freeze_layers=2` 试次（trial 2）仍只得到 `0.8829787234042553 / 0.9472727272727274`，同时显存升到约 `6.24 GiB`，说明更深解冻依旧不是这条 lane 的出路。
+- **本轮结论**：`view-wise feature recalibration` 是一个真正新的结构假设，而且把 best-trial AUC 再推高了一档，但它仍未把 dedicated ResNeXt V100 side campaign 的主指标拉回冠军区间，因此本轮继续记 **discard**。
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要求 continuation，必须先给出另一个真正新的离散假设；不再建议继续沿当前 `view-recalibration / trim_edge_slices / prenorm / scheduler / pooling / freeze-scalar` 组合轴做 fresh adaptive main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（light cross-view token mixer）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated ResNeXt V100 lane 的几何与当前 committed template 状态不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，并保留 `trim_edge_slices=2`、feature-fusion 头的 `LayerNorm(fused_dim)` prenorm，以及拼接前的 per-view feature recalibration。
+> - 唯一新的离散改动：在 `src/model.py` 的 `MultiViewCTClassifier` 中，于 3 个 pooled view features 拼接前加入一个轻量 residual `CrossViewAttention` mixer（`attention_dim=256`, `num_heads=4`, `num_layers=1`, `dropout=0.1`, `residual_scale=0.125`），显式检验“当前 ResNeXt lane 的瓶颈是否来自缺少显式跨视角 token interaction，而不是单视角重标定不足”。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0018_20260418_112019`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0018_20260418_112019.yaml`，运行 commit 为 `139a5b6`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-XVIEW-MIXER**：`src/model.py`（feature-fusion 头在拼接前新增轻量 cross-view token mixer）+ fresh adaptive main-study → best completed trial 为 **trial 0**（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`）→ `val_acc=0.9148936170212766`, `val_auc=0.9481818181818182`, `val_f1=0.9069767441860465`, `peak_vram=2.16 GiB`, `total_seconds=855.9` → **discard**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 低 `0.0106382978723404 / 0.0081818181818181`，因此不能晋升；虽然 accuracy 追平旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766`，并把 AUC 抬高到 `0.9481818181818182`，但按当前规则仍不足以替换现有 best keep。）
+- **Monitor takeaways**：在这轮 4 个 completed trials 里，最优点回到 `freeze_layers=3` 家族，而且直接落在 enqueued template 本体（trial 0）；其 duplicate template trial 3 只有 `0.9042553191489362 / 0.9536363636363637`，说明引入 cross-view mixer 后 AUC 还能继续波动上行，但 fixed-threshold accuracy 并没有同步稳定抬升。唯一的 `freeze_layers=2` 试次（trial 2）仍只得到 `0.9042553191489362 / 0.9240909090909091`，同时显存升到约 `6.26 GiB`，说明更深解冻依旧不是这条 lane 的出路。
+- **本轮结论**：`light cross-view token mixing` 是又一个真正新的结构假设，而且把 `freeze_layers=3` 家族的 best-trial AUC 推到旧 stable winner 之上；但它依然没有把 dedicated ResNeXt V100 side campaign 的主指标拉回当前冠军区间，因此本轮继续记 **discard**。
+- **推荐动作**：默认正式收束该独立 side campaign。若外层 loop 仍要求 continuation，必须先给出另一个真正新的离散假设；不再建议继续沿当前 `cross-view mixer / view-recalibration / trim_edge_slices / prenorm / scheduler / pooling / freeze-scalar` 组合轴做 fresh adaptive main-study。
+
+---
+
+## 2026-04-18：ResNeXt V100 Dedicated Main-Study（gated fusion head）
+
+> **独立 campaign 说明**
+> - 这一轮是外层 loop 显式要求 continuation 下的单轮 coordinator 迭代，继续承接 `fair_backbone_compare` stable-winner side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线。
+> - 保持 dedicated ResNeXt V100 lane 的几何与当前 committed template 状态不变：`image_size=256`, `num_slices_per_view=8`, `feature fusion`, `share_backbone=false`, `use_attention_pooling=false`（mean pooling），`fusion_hidden_dim=256`，并保留 `trim_edge_slices=2`、feature-fusion 头的 `LayerNorm(fused_dim)` prenorm、拼接前的 per-view feature recalibration 与 light cross-view mixer。
+> - 唯一新的离散改动：在 `src/model.py` 的 `MultiViewCTClassifier` 中，把融合头从 plain `Linear + ReLU` MLP 改成轻量 GLU-gated MLP，显式检验“当前 ResNeXt lane 的瓶颈是否在 fused token 级别缺少乘性门控表达，而不是继续往 view-side 叠新模块”。
+> - fresh study 为 `runs/optuna_main_autoloop/iter_0019_20260418_115456`，search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0019_20260418_115456.yaml`，运行 commit 为 `15b1ef6`，4/4 trials completed。
+
+- [x] **CMP-FAIR-V100-RESNEXT-MAIN-GATED-HEAD**：`src/model.py`（feature-fusion 头把 plain `Linear + ReLU` 改为轻量 GLU gating）+ fresh adaptive main-study → best completed trial 为 **trial 3**（`freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`）→ `val_acc=0.9468085106382979`, `val_auc=0.9800000000000001`, `val_f1=0.9411764705882353`, `peak_vram=2.17 GiB`, `total_seconds=857.5` → **keep**（较当前 retained keep `CMP-FAIR-V100-RESNEXT-FORMAL-CONFIRM` 的 `0.925531914893617 / 0.9563636363636363` 提升 `0.0212765957446809 / 0.0236363636363638`，也较旧 fair-backbone stable winner `CMP-FAIR-V100-FORMAL-RESNEXT` 的 `0.9148936170212766 / 0.9404545454545454` 提升 `0.0319148936170213 / 0.0395454545454547`；按本轮规则，这是该独立 side campaign 目前最强的新 retained evidence。）
+- **Monitor takeaways**：在这轮 4 个 completed trials 里，`freeze_layers=3` 家族显著占优，两个 `freeze_layers=2` / 更高正则角点都落后；更关键的是，trial 0 与 trial 3 被命中了完全相同的 template 标量，却分别得到 `0.925531914893617 / 0.9836363636363636` 与 `0.9468085106382979 / 0.9800000000000001`，说明 gated fusion head 让这条 lane 的 ceiling 显著抬高，但 run-to-run 波动依然存在，且当前最优点就是现有 template 本体而不是新的 scalar 角点。
+- **本轮结论**：这是最近连续 discard 序列后第一次明确的正结果。GLU-style fused-token gating 看起来比继续沿 `cross-view mixer / view-recalibration / trim_edge_slices / prenorm / scheduler / pooling / freeze-scalar` 轴小步扫描更有信息量，而且它在不增加显存压力的前提下把该独立 ResNeXt V100 side campaign 的 accuracy ceiling 推到了新高。
+- **推荐动作**：若外层 loop 继续，优先对 exact template / commit `15b1ef6` 做 1 次 direct formal confirmation，先判断 `0.9468085106382979` 是否可复现；在此之前不要急着再开新的 fresh main-study。
 
 ---
 
