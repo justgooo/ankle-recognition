@@ -24,7 +24,7 @@ model:
   freeze_layers: 3
   fusion_hidden_dim: 256
   dropout: 0.3
-  use_attention_pooling: true
+  use_attention_pooling: false
 
 train:
   epochs: 15
@@ -33,6 +33,6 @@ train:
   class_weight: true
   device: auto
   augmentation: true
-  scheduler: none
+  scheduler: cosine
   label_smoothing: 0.0
   gradient_clip_norm: 1.0
