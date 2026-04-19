@@ -1,8 +1,8 @@
 # Minimal ResNeXt decision-fusion comparison.
 # Match the feature compare recipe and avoid extra fusion modules so the
 # comparison isolates decision vs feature fusion semantics.
-experiment_name: cmp_resnext_decision_minimal_512_b16_e15
-output_dir: runs/cmp_resnext_decision_minimal_512_b16_e15
+experiment_name: cmp_resnext_decision_minimal_512_b8_e15
+output_dir: runs/cmp_resnext_decision_minimal_512_b8_e15
 seed: 42
 
 data:
@@ -11,7 +11,7 @@ data:
   image_size: 512
   num_slices_per_view: 16
   trim_edge_slices: 2
-  batch_size: 16
+  batch_size: 8
   num_workers: 12
   val_ratio: 0.25
   hu_min: -1000
