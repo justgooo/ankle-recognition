@@ -18,9 +18,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-AFFINE-RELIABILITY-CALIBRATOR（继续 isolated `ResNeXt V100 + decision fusion` campaign，并保持人类高优先级约束的 `image_size=512`、`num_slices_per_view=16`、`backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`trim_edge_slices=2` 与 `30`-epoch budget 不变。本轮唯一改动是在 `MultiViewDecisionFusionClassifier` 的 reliability path 上，把上一轮 full-rank GLU residual confidence adapter 改成 identity-init、bounded 的 dynamic affine reliability calibrator，保持 plain per-view classifier 与轻量 cross-view mixer 不变。训练提交为 `26cdbeb`，随后使用 fresh search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0010_20260419_114322.yaml` 在 `GPU 0,1,2` 上运行 adaptive main-study。） |
-| 上次结果 | discard（这次 fresh adaptive main-study 正常完成 study 级流程，并拿到了 `4` 个 valid completed trials；best completed trial 为 **trial 3**，结果 `val_acc=0.8829787234042553`, `val_auc=0.9118181818181819`, `val_f1=0.8641975308641975`, `peak_vram≈4.67 GiB`, `total_seconds=4272.3`，对应参数 `freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.35`, `gradient_clip_norm=1.5`。它在 accuracy 上追平了 `513b94f` 与 `c551967` 的 `0.8829787234042553` ceiling，但 AUC 分别低了 `0.0236363636363636` 与 `0.0290909090909090`，因此按 tie-break 仍不能保留；相较当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091` 仍低 `0.0425531914893617 / 0.0522727272727272`。另外，wave-aligned tail-fill 的 `trial 4/5` 都在日志里以 `EXIT_CODE=-15` 提前终止，没有 OOM、timeout、Traceback 或数据错误信号；由于 study 仍然完成了所需 `4` 个 valid trials，因此这两个 fill-worker SIGTERM 只记作 workflow 噪声，不改变本轮研究判定。） |
-| 下一步 | 若外层 loop 继续保持 **`resnext + decision fusion`** 为最高优先级，后续仍必须坚持 `512x16` pivot 和 `30`-epoch budget，不要回退到 `256x8`，也不要重复这次 affine calibrator replay 或为它补 direct formal。由于这次结果说明“更简单的 reliability 建模”可以保住 accuracy ceiling、但明显损伤 AUC，下一步应继续把唯一结构变量留在 reliability path 上，并进一步把 affine calibrator 收紧成 **temperature-like / scale-only reliability calibrator**：去掉 additive bias，只保留 identity-init 的乘性温度修正，同时保持 plain per-view classifier、现有 cross-view mixer 与融合语义不变，判断本轮 AUC 回落是否主要来自 bias 项破坏 ranking。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-SCALE-ONLY-RELIABILITY-CALIBRATOR（继续 isolated `ResNeXt V100 + decision fusion` campaign，并保持人类高优先级约束的 `image_size=512`、`num_slices_per_view=16`、`backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`trim_edge_slices=2` 与 `30`-epoch budget 不变。本轮唯一改动是在 `MultiViewDecisionFusionClassifier` 的 reliability path 上，把上一轮 bounded affine reliability calibrator 进一步收紧成 identity-init 的 **scale-only / temperature-like calibrator**，移除 additive bias，同时保持 plain per-view classifier 与轻量 cross-view mixer 不变。训练提交为 `800c0ec`，随后使用 fresh search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0011_20260419_142314.yaml` 在 `GPU 0,1,2` 上发起 adaptive main-study。） |
+| 上次结果 | crash（这次 fresh adaptive main-study 在创建 study 前即被 idle policy 拒绝，没有产生 completed trial 或 `summary.json`。`optuna_main.log` 尾部显示显式 `--gpu-ids 0,1,2` 不满足阈值 `used<=1024 MiB` / `util<=20%`：`GPU 0` 占用 `18240 MiB`、`util=100%`，`GPU 1` 占用 `17864 MiB`、`util=0%`，只有 `GPU 2` 空闲。进一步检查发现 `GPU 0/1` 上分别有同一用户的 `.venv/bin/python train.py --config configs/cmp_resnext_feature_minimal_512_b8_e15.yaml` 与 `configs/cmp_resnext_decision_minimal_512_b8_e15.yaml` compare 任务在运行，因此这轮属于**执行层资源阻塞**，不是 OOM、代码 bug 或数据问题。） |
+| 下一步 | 若外层 loop 继续保持 **`resnext + decision fusion`** 为最高优先级，下一轮应保持这次 **scale-only reliability calibrator** 结构以及 `512x16 / 30`-epoch 几何不变，不要回退到 affine bias、也不要切回 proxy；只需在 `GPU 0,1,2` 真正满足 idle 阈值后，用新的 fresh `study_root` 重开同一 adaptive main-study。若 compare 任务仍长期占用 `0/1`，优先等待资源空出，而不是改动研究变量。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 13 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
@@ -50,6 +50,21 @@
 | **tie-break** | **0.9318181818181819** | `a60c3e0` | fresh proxy study trial 0 | 与上述 winner 同一 trial 的 `best_val.auc`；当 `val_acc` 持平时仍按此决胜 |
 | canonical formal 参考 | 0.8617021276595744 | `c30fcae` | `configs/autoresearch_formal.yaml`（trial 0 模板超参） | 当前主线首个 formal confirmation；`val_auc=0.9372727272727273`，准确率低于 proxy winner 但 AUC 更高 |
 | legacy no_miss 参考 | 0.915 | `d63b49a` (formal) | 旧 Decision Fusion / 旧实验语义 | **legacy reference only**，不可与当前主线直接比较 |
+
+---
+
+## 2026-04-19：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 scale-only reliability calibrator，资源阻塞）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 唯一离散研究改动：把上一轮 bounded affine reliability calibrator 继续收紧成 **identity-init、scale-only 的 temperature-like reliability calibrator**，只保留对 raw reliability logit 的乘性温度修正，显式去掉 additive bias；plain per-view classifier、轻量 cross-view mixer 与其余融合语义保持不变。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0011_20260419_142314.yaml`，目标 fresh study_root 为 `runs/optuna_main_autoloop/iter_0011_20260419_142314`，运行 commit 为 `800c0ec`，并按 coordinator 硬约束尝试在 `GPU 0,1,2` 上启动 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-SCALE-ONLY-RELIABILITY-CALIBRATOR**：`src/model.py`（仅在 `decision fusion` 分支把 bounded affine reliability calibrator 改成 scale-only / temperature-like 版本）+ fresh adaptive main-study 启动尝试（`GPU 0,1,2`）→ **crash**（入口在创建 study 前即退出；`optuna_main.log` 尾部只显示 idle-threshold 拒绝，没有 completed trial、没有 `summary.json`，因此本轮 `val_acc / val_auc / val_f1` 记为 `0`。）
+- **Crash takeaways**：当前 `scripts/autoresearch_main.py --gpu-ids 0,1,2 --max-workers 3 --max-used-memory-mb 1024 --max-utilization 20` 会对显式卡集做严格 idle 检查，不会自动只拿 `GPU 2`。本轮启动时 `GPU 0` 占用 `18240 MiB` 且 `util=100%`，`GPU 1` 占用 `17864 MiB`；进一步检查可见两张卡上分别运行着 `.venv/bin/python train.py --config configs/cmp_resnext_feature_minimal_512_b8_e15.yaml` 与 `configs/cmp_resnext_decision_minimal_512_b8_e15.yaml`，所以这是标准的**资源阻塞**，不是模型、数据或 workflow 逻辑崩坏。
+- **本轮结论**：这轮不能对 `scale-only reliability calibrator` 做 keep/discard 研究判断。唯一能够确认的是：当前结构改动已经提交并准备完毕，但执行层资源不满足 coordinator 的显式 GPU policy，因此本轮按 **crash** 记录。
+- **推荐动作**：如果外层 loop 继续推进这条 isolated decision-fusion lane，下一步应保持本轮结构与 `512x16 / 30`-epoch 几何不变，等 `GPU 0,1,2` 真正通过 idle 阈值后，用新的 fresh `study_root` 原样重开同一 adaptive main-study；不要因为这次 crash 回退到 affine bias、也不要改走 proxy。
 
 ---
 
