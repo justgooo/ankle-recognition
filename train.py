@@ -255,6 +255,7 @@ def build_model(config: dict):
         "use_attention_pooling": model_cfg.get("use_attention_pooling", False),  # 注意力池化
         "backbone": model_cfg.get("backbone", "resnet18"),   # backbone 类型
         "minimal_fusion_baseline": model_cfg.get("minimal_fusion_baseline", False),
+        "equal_weight_fusion": model_cfg.get("equal_weight_fusion", False),
     }
     fusion_type = model_cfg.get("fusion_type", "feature")
 

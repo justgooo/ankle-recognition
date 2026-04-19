@@ -737,6 +737,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         - 原版：3 个视角共用一组固定的全局权重（nn.Parameter(zeros(3))）
         - 本版：每个视角有一个 confidence head，根据当前样本的特征动态计算权重
           → 不同病人的融合权重不同，能适应"某个视角拍得不清楚"等个体差异
+        - 控制变量模式：也支持固定等比例权重（每个视角 1/3），只改变 fusion weight 机制，
+          其余 encoder / per-view classifier 保持不变，用来直接测 learned weighting 的净收益
 
     工作流程：
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
@@ -757,6 +759,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
         backbone: str = "resnet18",      # backbone 类型
         minimal_fusion_baseline: bool = False,
+        equal_weight_fusion: bool = False,
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
@@ -766,6 +769,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             backbone=backbone,
         )
         self.minimal_fusion_baseline = minimal_fusion_baseline
+        self.equal_weight_fusion = equal_weight_fusion
+        if self.minimal_fusion_baseline and self.equal_weight_fusion:
+            raise ValueError(
+                "minimal_fusion_baseline and equal_weight_fusion are mutually exclusive."
+            )
         if minimal_fusion_baseline:
             # 纯融合对比模式：每个视角只保留最基础分类器和 raw-logit reliability head。
             self.view_classifiers = nn.ModuleList(
@@ -797,36 +805,37 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     for _ in range(3)  # 创建 3 个分类器
                 ]
             )
-            # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
-            # per-view classifier 保持 baseline pooled-feature 路径；
-            # richer cross-view context 只用于 fusion weighting，测试瓶颈是否主要在 reliability head。
-            from .cross_view_attention import CrossViewAttention
+            if not self.equal_weight_fusion:
+                # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
+                # per-view classifier 保持 baseline pooled-feature 路径；
+                # richer cross-view context 只用于 fusion weighting，测试瓶颈是否主要在 reliability head。
+                from .cross_view_attention import CrossViewAttention
 
-            self.cross_view_mixer = CrossViewAttention(
-                feature_dim=self.feature_dim,
-                num_heads=4,
-                num_layers=1,
-                dropout=0.1,
-                residual_scale=0.125,
-            )
-            # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
-            # 再叠加共享的低秩 residual calibrator，在保留 identity init 的同时
-            # 允许温和的 scale+bias 校准，以测试“更有表达力但低方差”的 reliability path。
-            self.confidence_heads = nn.ModuleList(
-                [
-                    nn.Sequential(
-                        nn.LayerNorm(self.feature_dim),
-                        nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
-                    )
-                    for _ in range(3)
-                ]
-            )
-            self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
-                feature_dim=self.feature_dim,
-                bottleneck_dim=32,
-                scale_limit=0.25,
-                bias_limit=0.15,
-            )
+                self.cross_view_mixer = CrossViewAttention(
+                    feature_dim=self.feature_dim,
+                    num_heads=4,
+                    num_layers=1,
+                    dropout=0.1,
+                    residual_scale=0.125,
+                )
+                # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
+                # 再叠加共享的低秩 residual calibrator，在保留 identity init 的同时
+                # 允许温和的 scale+bias 校准，以测试“更有表达力但低方差”的 reliability path。
+                self.confidence_heads = nn.ModuleList(
+                    [
+                        nn.Sequential(
+                            nn.LayerNorm(self.feature_dim),
+                            nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
+                        )
+                        for _ in range(3)
+                    ]
+                )
+                self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
+                    feature_dim=self.feature_dim,
+                    bottleneck_dim=32,
+                    scale_limit=0.25,
+                    bias_limit=0.15,
+                )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -849,6 +858,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             ],
             dim=1,
         )  # (B, 3, 2)
+
+        if self.equal_weight_fusion:
+            # 固定等比例权重控制组：仅关闭 learned weighting。
+            return view_logits.mean(dim=1)
 
         if self.minimal_fusion_baseline:
             confidences = torch.stack(
