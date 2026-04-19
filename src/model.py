@@ -476,25 +476,33 @@ class ViewFeatureRecalibration(nn.Module):
         return view_feature * gate
 
 
-class ReliabilityTemperatureCalibrator(nn.Module):
-    """Identity-initialized scale-only calibrator for per-view reliability logits."""
+class SharedLowRankReliabilityCalibrator(nn.Module):
+    """Shared low-rank residual calibrator for per-view reliability logits."""
 
     def __init__(
         self,
         feature_dim: int = 512,
+        bottleneck_dim: int = 32,
         scale_limit: float = 0.25,
+        bias_limit: float = 0.15,
     ) -> None:
         super().__init__()
         self.norm = nn.LayerNorm(feature_dim)
-        self.proj = nn.Linear(feature_dim, 1)
+        self.adapter = nn.Sequential(
+            nn.Linear(feature_dim, bottleneck_dim * 2),
+            nn.GLU(dim=1),
+            nn.Linear(bottleneck_dim, 2),
+        )
         self.scale_limit = float(scale_limit)
-        nn.init.zeros_(self.proj.weight)
-        nn.init.zeros_(self.proj.bias)
+        self.bias_limit = float(bias_limit)
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
 
     def forward(self, view_feature: torch.Tensor, raw_logit: torch.Tensor) -> torch.Tensor:
-        scale_delta = self.proj(self.norm(view_feature))
+        scale_delta, bias_delta = self.adapter(self.norm(view_feature)).chunk(2, dim=1)
         scale = 1.0 + self.scale_limit * torch.tanh(scale_delta)
-        return raw_logit * scale
+        bias = self.bias_limit * torch.tanh(bias_delta)
+        return raw_logit * scale + bias
 
 
 class MultiViewEncoder(nn.Module):
@@ -734,7 +742,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
         2. 每个视角先经过 baseline plain classifier，避免继续扰动 classifier path
         3. reliability estimation 分支保留轻量 residual cross-view attention，
-           再用 identity-init 的 scale-only calibrator 对 raw reliability logit 做小幅温度修正
+           再用共享、低秩、identity-init 的 residual calibrator 对 raw reliability logit 做小幅校准
         4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
     """
@@ -802,7 +810,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 residual_scale=0.125,
             )
             # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
-            # 再叠加 identity-init 的动态 scale-only calibrator，限制对融合权重的扰动幅度。
+            # 再叠加共享的低秩 residual calibrator，在保留 identity init 的同时
+            # 允许温和的 scale+bias 校准，以测试“更有表达力但低方差”的 reliability path。
             self.confidence_heads = nn.ModuleList(
                 [
                     nn.Sequential(
@@ -812,14 +821,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     for _ in range(3)
                 ]
             )
-            self.confidence_calibrators = nn.ModuleList(
-                [
-                    ReliabilityTemperatureCalibrator(
-                        feature_dim=self.feature_dim,
-                        scale_limit=0.25,
-                    )
-                    for _ in range(3)
-                ]
+            self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
+                feature_dim=self.feature_dim,
+                bottleneck_dim=32,
+                scale_limit=0.25,
+                bias_limit=0.15,
             )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
@@ -853,16 +859,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 dim=1,
             )  # (B, 3, 1)
         else:
-            # 第 4 步：baseline raw-logit VRG 头上叠加有界 scale-only calibration，
-            # 只允许 reliability 分支对融合权重做小幅乘性温度修正。
+            # 第 4 步：baseline raw-logit VRG 头上叠加共享的低秩 residual calibration，
+            # 让 reliability 分支获得温和的 scale+bias 表达力，同时避免每个视角各自扩参。
             stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
             gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
             confidences = torch.stack(
                 [
-                    calibrator(feature, head(feature))
-                    for head, calibrator, feature in zip(
-                        self.confidence_heads, self.confidence_calibrators, gating_features
-                    )
+                    self.confidence_calibrator(feature, head(feature))
+                    for head, feature in zip(self.confidence_heads, gating_features)
                 ],
                 dim=1,
             )  # (B, 3, 1)
