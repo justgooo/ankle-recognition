@@ -649,6 +649,7 @@ class MultiViewCTClassifier(MultiViewEncoder):
         use_attention_pooling: bool = False,  # 是否使用注意力池化
         freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
         backbone: str = "resnet18",      # backbone 类型
+        minimal_fusion_baseline: bool = False,
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
@@ -659,32 +660,42 @@ class MultiViewCTClassifier(MultiViewEncoder):
         )
         # 3 个视角拼接后的总维度：512 * 3 = 1536
         fused_dim = self.feature_dim * 3
+        self.minimal_fusion_baseline = minimal_fusion_baseline
 
-        self.view_recalibrators = nn.ModuleList(
-            [ViewFeatureRecalibration(self.feature_dim) for _ in range(3)]
-        )
-        # 只在 pooled view token 之间加入极轻量的 cross-view context 交换，
-        # 保持 256x8 mean-pooling 几何不变，检验“缺少显式视角交互”是否仍是瓶颈。
-        from .cross_view_attention import CrossViewAttention
+        if minimal_fusion_baseline:
+            # 纯融合对比模式：不引入额外视角交互或门控模块，只保留最小 MLP 头。
+            self.classifier = nn.Sequential(
+                nn.Linear(fused_dim, fusion_hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout),
+                nn.Linear(fusion_hidden_dim, 2),
+            )
+        else:
+            self.view_recalibrators = nn.ModuleList(
+                [ViewFeatureRecalibration(self.feature_dim) for _ in range(3)]
+            )
+            # 只在 pooled view token 之间加入极轻量的 cross-view context 交换，
+            # 保持 256x8 mean-pooling 几何不变，检验“缺少显式视角交互”是否仍是瓶颈。
+            from .cross_view_attention import CrossViewAttention
 
-        self.cross_view_mixer = CrossViewAttention(
-            feature_dim=self.feature_dim,
-            attention_dim=256,
-            num_heads=4,
-            num_layers=1,
-            dropout=0.1,
-            residual_scale=0.125,
-        )
+            self.cross_view_mixer = CrossViewAttention(
+                feature_dim=self.feature_dim,
+                attention_dim=256,
+                num_heads=4,
+                num_layers=1,
+                dropout=0.1,
+                residual_scale=0.125,
+            )
 
-        # 分类器：保留现有 prenorm，但把 plain ReLU MLP 换成轻量 GLU 门控头，
-        # 让 fused token 在不改 256x8 几何的前提下拥有更强的多视角交互表达力。
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(fused_dim),                 # 稳定跨视角拼接特征的尺度
-            nn.Linear(fused_dim, fusion_hidden_dim * 2),  # 为 GLU 同时生成 value / gate 分支
-            nn.GLU(dim=1),
-            nn.Dropout(dropout),                      # 随机丢弃 30% 的神经元（防止过拟合）
-            nn.Linear(fusion_hidden_dim, 2),          # 256 -> 2（输出 2 个类别的分数）
-        )
+            # 分类器：保留现有 prenorm，但把 plain ReLU MLP 换成轻量 GLU 门控头，
+            # 让 fused token 在不改 256x8 几何的前提下拥有更强的多视角交互表达力。
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(fused_dim),                 # 稳定跨视角拼接特征的尺度
+                nn.Linear(fused_dim, fusion_hidden_dim * 2),  # 为 GLU 同时生成 value / gate 分支
+                nn.GLU(dim=1),
+                nn.Dropout(dropout),                      # 随机丢弃 30% 的神经元（防止过拟合）
+                nn.Linear(fusion_hidden_dim, 2),          # 256 -> 2（输出 2 个类别的分数）
+            )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -697,15 +708,18 @@ class MultiViewCTClassifier(MultiViewEncoder):
             logits: (B, 2) 的张量，每个样本有 2 个分数（正常/异常）
                     分数越高表示模型越倾向于认为是该类别
         """
-        # 第 1 步：提取 3 个视角的特征，并在拼接前做轻量 per-view 重标定
-        # encode_views 返回 3 个 (B, 512)，之后再做一次轻量 cross-view mixing。
         view_features = self.encode_views(images)
-        recalibrated_features = [
-            recalibrator(feature)
-            for recalibrator, feature in zip(self.view_recalibrators, view_features)
-        ]
-        mixed_features = self.cross_view_mixer(torch.stack(recalibrated_features, dim=1))
-        image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
+        if self.minimal_fusion_baseline:
+            image_feature = torch.cat(view_features, dim=1)
+        else:
+            # 第 1 步：提取 3 个视角的特征，并在拼接前做轻量 per-view 重标定
+            # encode_views 返回 3 个 (B, 512)，之后再做一次轻量 cross-view mixing。
+            recalibrated_features = [
+                recalibrator(feature)
+                for recalibrator, feature in zip(self.view_recalibrators, view_features)
+            ]
+            mixed_features = self.cross_view_mixer(torch.stack(recalibrated_features, dim=1))
+            image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
         # 第 2 步：送进分类器，得到分类结果
         return self.classifier(image_feature)
 
@@ -737,6 +751,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         use_attention_pooling: bool = False,  # 是否使用注意力池化
         freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
         backbone: str = "resnet18",      # backbone 类型
+        minimal_fusion_baseline: bool = False,
     ) -> None:
         super().__init__(
             share_backbone=share_backbone,
@@ -745,53 +760,71 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             freeze_layers=freeze_layers,
             backbone=backbone,
         )
-        # 每个视角有一个独立的分类器（共 3 个）
-        # LayerNorm 在分类器前面稳定特征分布，减少不同 seed 之间的输出尺度差异
-        self.view_classifiers = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.LayerNorm(self.feature_dim),                  # 稳定特征分布
-                    nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 -> 256
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(dropout),
-                    nn.Linear(fusion_hidden_dim, 2),  # 256 -> 2（正常/异常）
-                )
-                for _ in range(3)  # 创建 3 个分类器
-            ]
-        )
-        # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
-        # per-view classifier 保持 baseline pooled-feature 路径；
-        # richer cross-view context 只用于 fusion weighting，测试瓶颈是否主要在 reliability head。
-        from .cross_view_attention import CrossViewAttention
+        self.minimal_fusion_baseline = minimal_fusion_baseline
+        if minimal_fusion_baseline:
+            # 纯融合对比模式：每个视角只保留最基础分类器和 raw-logit reliability head。
+            self.view_classifiers = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.Linear(self.feature_dim, fusion_hidden_dim),
+                        nn.ReLU(inplace=True),
+                        nn.Dropout(dropout),
+                        nn.Linear(fusion_hidden_dim, 2),
+                    )
+                    for _ in range(3)
+                ]
+            )
+            self.confidence_heads = nn.ModuleList(
+                [nn.Linear(self.feature_dim, 1) for _ in range(3)]
+            )
+        else:
+            # 每个视角有一个独立的分类器（共 3 个）
+            # LayerNorm 在分类器前面稳定特征分布，减少不同 seed 之间的输出尺度差异
+            self.view_classifiers = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.LayerNorm(self.feature_dim),                  # 稳定特征分布
+                        nn.Linear(self.feature_dim, fusion_hidden_dim),  # 512 -> 256
+                        nn.ReLU(inplace=True),
+                        nn.Dropout(dropout),
+                        nn.Linear(fusion_hidden_dim, 2),  # 256 -> 2（正常/异常）
+                    )
+                    for _ in range(3)  # 创建 3 个分类器
+                ]
+            )
+            # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
+            # per-view classifier 保持 baseline pooled-feature 路径；
+            # richer cross-view context 只用于 fusion weighting，测试瓶颈是否主要在 reliability head。
+            from .cross_view_attention import CrossViewAttention
 
-        self.cross_view_mixer = CrossViewAttention(
-            feature_dim=self.feature_dim,
-            num_heads=4,
-            num_layers=1,
-            dropout=0.1,
-            residual_scale=0.125,
-        )
-        # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
-        # 再叠加 identity-init 的动态 affine calibrator，限制对融合权重的扰动幅度。
-        self.confidence_heads = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.LayerNorm(self.feature_dim),
-                    nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
-                )
-                for _ in range(3)
-            ]
-        )
-        self.confidence_calibrators = nn.ModuleList(
-            [
-                ReliabilityAffineCalibrator(
-                    feature_dim=self.feature_dim,
-                    scale_limit=0.25,
-                    bias_limit=0.25,
-                )
-                for _ in range(3)
-            ]
-        )
+            self.cross_view_mixer = CrossViewAttention(
+                feature_dim=self.feature_dim,
+                num_heads=4,
+                num_layers=1,
+                dropout=0.1,
+                residual_scale=0.125,
+            )
+            # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
+            # 再叠加 identity-init 的动态 affine calibrator，限制对融合权重的扰动幅度。
+            self.confidence_heads = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.LayerNorm(self.feature_dim),
+                        nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
+                    )
+                    for _ in range(3)
+                ]
+            )
+            self.confidence_calibrators = nn.ModuleList(
+                [
+                    ReliabilityAffineCalibrator(
+                        feature_dim=self.feature_dim,
+                        scale_limit=0.25,
+                        bias_limit=0.25,
+                    )
+                    for _ in range(3)
+                ]
+            )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -806,10 +839,6 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         # 第 1 步：提取 3 个视角的 pooled feature。
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 2 步：分类 logits 保持 baseline 路径；cross-view context 只送入 gating 分支。
-        stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
-        gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
-
         # 第 3 步：每个视角分别做分类
         view_logits = torch.stack(
             [
@@ -819,17 +848,28 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 4 步：baseline raw-logit VRG 头上叠加有界 affine calibration，
-        # 只允许 reliability 分支对融合权重做小幅缩放 / 平移修正。
-        confidences = torch.stack(
-            [
-                calibrator(feature, head(feature))
-                for head, calibrator, feature in zip(
-                    self.confidence_heads, self.confidence_calibrators, gating_features
-                )
-            ],
-            dim=1,
-        )  # (B, 3, 1)
+        if self.minimal_fusion_baseline:
+            confidences = torch.stack(
+                [
+                    head(feature)
+                    for head, feature in zip(self.confidence_heads, view_features)
+                ],
+                dim=1,
+            )  # (B, 3, 1)
+        else:
+            # 第 4 步：baseline raw-logit VRG 头上叠加有界 affine calibration，
+            # 只允许 reliability 分支对融合权重做小幅缩放 / 平移修正。
+            stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
+            gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
+            confidences = torch.stack(
+                [
+                    calibrator(feature, head(feature))
+                    for head, calibrator, feature in zip(
+                        self.confidence_heads, self.confidence_calibrators, gating_features
+                    )
+                ],
+                dim=1,
+            )  # (B, 3, 1)
 
         # 第 5 步：softmax 归一化，得到 3 个视角的融合权重
         fusion_weights = torch.softmax(confidences, dim=1)  # (B, 3, 1)

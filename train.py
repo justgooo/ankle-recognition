@@ -254,6 +254,7 @@ def build_model(config: dict):
         "dropout": model_cfg["dropout"],                     # Dropout 比率
         "use_attention_pooling": model_cfg.get("use_attention_pooling", False),  # 注意力池化
         "backbone": model_cfg.get("backbone", "resnet18"),   # backbone 类型
+        "minimal_fusion_baseline": model_cfg.get("minimal_fusion_baseline", False),
     }
     fusion_type = model_cfg.get("fusion_type", "feature")
 
