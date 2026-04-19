@@ -476,28 +476,25 @@ class ViewFeatureRecalibration(nn.Module):
         return view_feature * gate
 
 
-class ReliabilityAffineCalibrator(nn.Module):
-    """Identity-initialized affine calibrator for per-view reliability logits."""
+class ReliabilityTemperatureCalibrator(nn.Module):
+    """Identity-initialized scale-only calibrator for per-view reliability logits."""
 
     def __init__(
         self,
         feature_dim: int = 512,
         scale_limit: float = 0.25,
-        bias_limit: float = 0.25,
     ) -> None:
         super().__init__()
         self.norm = nn.LayerNorm(feature_dim)
-        self.proj = nn.Linear(feature_dim, 2)
+        self.proj = nn.Linear(feature_dim, 1)
         self.scale_limit = float(scale_limit)
-        self.bias_limit = float(bias_limit)
         nn.init.zeros_(self.proj.weight)
         nn.init.zeros_(self.proj.bias)
 
     def forward(self, view_feature: torch.Tensor, raw_logit: torch.Tensor) -> torch.Tensor:
-        scale_delta, bias_delta = self.proj(self.norm(view_feature)).chunk(2, dim=-1)
+        scale_delta = self.proj(self.norm(view_feature))
         scale = 1.0 + self.scale_limit * torch.tanh(scale_delta)
-        bias = self.bias_limit * torch.tanh(bias_delta)
-        return raw_logit * scale + bias
+        return raw_logit * scale
 
 
 class MultiViewEncoder(nn.Module):
@@ -737,7 +734,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
         2. 每个视角先经过 baseline plain classifier，避免继续扰动 classifier path
         3. reliability estimation 分支保留轻量 residual cross-view attention，
-           再用 identity-init 的 affine calibrator 对 raw reliability logit 做小幅校准
+           再用 identity-init 的 scale-only calibrator 对 raw reliability logit 做小幅温度修正
         4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
     """
@@ -805,7 +802,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 residual_scale=0.125,
             )
             # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
-            # 再叠加 identity-init 的动态 affine calibrator，限制对融合权重的扰动幅度。
+            # 再叠加 identity-init 的动态 scale-only calibrator，限制对融合权重的扰动幅度。
             self.confidence_heads = nn.ModuleList(
                 [
                     nn.Sequential(
@@ -817,10 +814,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             )
             self.confidence_calibrators = nn.ModuleList(
                 [
-                    ReliabilityAffineCalibrator(
+                    ReliabilityTemperatureCalibrator(
                         feature_dim=self.feature_dim,
                         scale_limit=0.25,
-                        bias_limit=0.25,
                     )
                     for _ in range(3)
                 ]
@@ -857,8 +853,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 dim=1,
             )  # (B, 3, 1)
         else:
-            # 第 4 步：baseline raw-logit VRG 头上叠加有界 affine calibration，
-            # 只允许 reliability 分支对融合权重做小幅缩放 / 平移修正。
+            # 第 4 步：baseline raw-logit VRG 头上叠加有界 scale-only calibration，
+            # 只允许 reliability 分支对融合权重做小幅乘性温度修正。
             stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
             gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
             confidences = torch.stack(
