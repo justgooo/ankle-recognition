@@ -9,7 +9,7 @@ data:
   image_size: 512
   num_slices_per_view: 16
   trim_edge_slices: 2
-  batch_size: 8
+  batch_size: 2
   num_workers: 4
   val_ratio: 0.25
   hu_min: -1000
