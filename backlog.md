@@ -18,13 +18,24 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-BUDGET30（继续 isolated `ResNeXt V100 + decision fusion` campaign，并保持人类高优先级约束的 `image_size=512`、`num_slices_per_view=16`、`backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`trim_edge_slices=2` 不变。本轮唯一改动是把 dedicated formal template 的训练预算从 `15` 扩到 `30` epochs，用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0003_20260418_204323.yaml` 和 fresh study_root `runs/optuna_main_autoloop/iter_0003_20260418_204323`，在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study；训练提交为 `c551967`。） |
-| 上次结果 | discard（这次 `512x16` long-budget main-study 4/4 trials 全部 completed，没有资源或 workflow 层 crash。最佳 completed trial 是 **trial 2**：`freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`，得到 `val_acc=0.8829787234042553`, `val_auc=0.9409090909090909`, `val_f1=0.8641975308641975`, `peak_vram≈4.67 GiB`, `total_seconds=4271.2`。这比上一轮 `512x16` local-retune best `0.851063829787234 / 0.9313636363636364` 提升了 `0.0319148936170213 / 0.0095454545454545`，并且追平了当前 canonical proxy best `a60c3e0` 的 `val_acc=0.8829787234042553`，同时 AUC 更高；但它仍明显落后于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，也仍低于旧 ResNeXt feature-fusion retained keep `15b1ef6` 的 `0.9468085106382979 / 0.9800000000000001`，因此本轮仍必须记 **discard**。） |
-| 下一步 | 若外层 loop 继续保持 **`resnext + decision fusion`** 为最高优先级，后续必须继续坚持 `512x16` pivot 和 `30`-epoch budget，不要回退到 `256x8`，也不要再把研究变量放回“更长 budget”本身。因为本轮 winner 的 best 仍出在 `epoch 13`，说明收益主要来自**更低 lr + 更高正则**而不是更晚的新峰值。下一个单一改动应优先把本轮 winner（`lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`）升格为 anchor，在同一 `30`-epoch 预算下做 1 次更窄的 local retune。 |
+| 上次实验 | CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-AFFINE-RELIABILITY-CALIBRATOR（继续 isolated `ResNeXt V100 + decision fusion` campaign，并保持人类高优先级约束的 `image_size=512`、`num_slices_per_view=16`、`backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`trim_edge_slices=2` 与 `30`-epoch budget 不变。本轮唯一改动是在 `MultiViewDecisionFusionClassifier` 的 reliability path 上，把上一轮 full-rank GLU residual confidence adapter 改成 identity-init、bounded 的 dynamic affine reliability calibrator，保持 plain per-view classifier 与轻量 cross-view mixer 不变。训练提交为 `26cdbeb`，随后使用 fresh search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0010_20260419_114322.yaml` 在 `GPU 0,1,2` 上运行 adaptive main-study。） |
+| 上次结果 | discard（这次 fresh adaptive main-study 正常完成 study 级流程，并拿到了 `4` 个 valid completed trials；best completed trial 为 **trial 3**，结果 `val_acc=0.8829787234042553`, `val_auc=0.9118181818181819`, `val_f1=0.8641975308641975`, `peak_vram≈4.67 GiB`, `total_seconds=4272.3`，对应参数 `freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.35`, `gradient_clip_norm=1.5`。它在 accuracy 上追平了 `513b94f` 与 `c551967` 的 `0.8829787234042553` ceiling，但 AUC 分别低了 `0.0236363636363636` 与 `0.0290909090909090`，因此按 tie-break 仍不能保留；相较当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091` 仍低 `0.0425531914893617 / 0.0522727272727272`。另外，wave-aligned tail-fill 的 `trial 4/5` 都在日志里以 `EXIT_CODE=-15` 提前终止，没有 OOM、timeout、Traceback 或数据错误信号；由于 study 仍然完成了所需 `4` 个 valid trials，因此这两个 fill-worker SIGTERM 只记作 workflow 噪声，不改变本轮研究判定。） |
+| 下一步 | 若外层 loop 继续保持 **`resnext + decision fusion`** 为最高优先级，后续仍必须坚持 `512x16` pivot 和 `30`-epoch budget，不要回退到 `256x8`，也不要重复这次 affine calibrator replay 或为它补 direct formal。由于这次结果说明“更简单的 reliability 建模”可以保住 accuracy ceiling、但明显损伤 AUC，下一步应继续把唯一结构变量留在 reliability path 上，并进一步把 affine calibrator 收紧成 **temperature-like / scale-only reliability calibrator**：去掉 additive bias，只保留 identity-init 的乘性温度修正，同时保持 plain per-view classifier、现有 cross-view mixer 与融合语义不变，判断本轮 AUC 回落是否主要来自 bias 项破坏 ranking。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 6 |
+| 连续 discard 计数 | 13 |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
+
+---
+
+## 2026-04-19：人类方向改动（第 6 轮起切到结构创新）
+
+> **高优先级说明**
+> - 第 5 轮结束后，**第 6 轮开始不要再把研究变量放在纯 `lr / wd / dropout / clip / epochs` 标量或预算 retune 上**；保持当前 isolated lane 为 `ResNeXt + decision fusion + 512x16 + trim_edge_slices=2 + 30 epochs`。
+> - 从第 6 轮起，研究重点切到 **网络结构层面的单点创新**，但仍然只允许每轮一个离散、可解释的结构改动。
+> - **不要切回 ResUNet 直接开新主线**；ResUNet 在这里只作为灵感来源。允许 inner agent 自主决定优先尝试哪个结构点，但必须落在当前 `ResNeXt decision` 路径上。
+> - 结构创新优先参考仓库里已经出现过、且在其他 lane 上给出过正向信号的模块化改动，例如：per-view feature recalibration、轻量 gated head、轻量 cross-view interaction 的迁移或重布线；inner agent 可自行判断本轮最值得先测的单一结构点。
+> - 几何、融合语义和研究主线不要回退：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`share_backbone=false`、`use_attention_pooling=false` 继续保持，除非出现真正的执行层 blocker。
 
 ---
 
@@ -39,6 +50,110 @@
 | **tie-break** | **0.9318181818181819** | `a60c3e0` | fresh proxy study trial 0 | 与上述 winner 同一 trial 的 `best_val.auc`；当 `val_acc` 持平时仍按此决胜 |
 | canonical formal 参考 | 0.8617021276595744 | `c30fcae` | `configs/autoresearch_formal.yaml`（trial 0 模板超参） | 当前主线首个 formal confirmation；`val_auc=0.9372727272727273`，准确率低于 proxy winner 但 AUC 更高 |
 | legacy no_miss 参考 | 0.915 | `d63b49a` (formal) | 旧 Decision Fusion / 旧实验语义 | **legacy reference only**，不可与当前主线直接比较 |
+
+---
+
+## 2026-04-19：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 affine reliability calibrator）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 唯一离散研究改动：保留 plain per-view classifier、轻量 cross-view mixer 和 baseline raw-logit VRG 头，仅把上一轮的 zero-init GLU residual confidence adapter 收紧成 **identity-init、bounded 的 affine reliability calibrator**，让 reliability path 只对 raw logit 做小幅 scale/bias 校准。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0010_20260419_114322.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0010_20260419_114322`，运行 commit 为 `26cdbeb`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-AFFINE-RELIABILITY-CALIBRATOR**：`src/model.py`（仅在 `decision fusion` 分支把 full-rank GLU confidence adapter 改成 bounded affine reliability calibrator）+ fresh adaptive main-study（`GPU 0,1,2`）→ wave-aligned 调度共 `6` 个 trial，其中 `4` 个 completed / `2` 个 crash；best completed trial 为 **trial 3**（`freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.35`, `gradient_clip_norm=1.5`）→ `val_acc=0.8829787234042553`, `val_auc=0.9118181818181819`, `val_f1=0.8641975308641975`, `peak_vram≈4.67 GiB`, `total_seconds=4272.3` → **discard**（这轮最好结果在 accuracy 上追平了 `513b94f` 与 `c551967` 的 `0.8829787234042553` ceiling，但 AUC 明显更低：相较 `513b94f` 的 `0.9354545454545455` 低 `0.0236363636363636`，相较 `c551967` 的 `0.9409090909090909` 低 `0.0290909090909090`，因此在主指标持平时按 tie-break 仍不能保留；它也仍明显低于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，accuracy / AUC 分别低 `0.0425531914893617 / 0.0522727272727272`。）
+- **Monitor takeaways**：这轮 `4` 个 valid trials 的分布说明，简化 reliability path 并没有把这条 lane 拉回更强的 ranking 质量。trial `0/1` 只到 `0.8191489361702128`，trial `2` 更低到 `0.7872340425531915`，而唯一追平 accuracy ceiling 的 trial `3` 恰好落在上一批结构实验也偏好的正则角点（`dropout=0.35`, `clip=1.5`, `lr=3e-5`, `wd=1e-3`）；这说明当前结构变化并没有改变这条 lane 的 scalar preference，只是把 top trial 的 AUC 压低了。
+- **Crash takeaways**：wave-aligned tail-fill 的 `trial 4/5` 都在约 `33` 分钟时同时结束，并在各自 `train.log` 里留下 `EXIT_CODE=-15`；日志尾部没有 `CUDA out of memory`、`TIMEOUT`、`Traceback` 或数据错误信号，因此它们更像 worker 被外层流程提前终止，而不是模型或数据 blocker。由于 study 仍然完成了请求的 `4` 个 valid trials，本轮整体仍按有效 study 记 **discard**，不记 crash。
+- **本轮结论**：`affine reliability calibrator` 说明“降低 reliability head 的表达力”并不会立刻把 accuracy 打回低点，甚至还能保住 `0.8829787234042553` 的 ceiling；但它同时显著损伤 AUC，意味着当前 affine 形式过于粗糙，尤其是 bias 修正很可能在破坏 ranking 质量。因此这轮仍是 **discard**，且没有必要补 direct formal。
+- **推荐动作**：如果外层 loop 继续推进这条 isolated decision-fusion lane，下一步仍应保持 `512x16`、`trim_edge_slices=2`、`share_backbone=false`、`use_attention_pooling=false` 和 `30`-epoch budget 不变，但把 reliability calibrator **继续收紧到 temperature-like / scale-only 版本**：去掉 affine bias，只保留 identity-init 的乘性温度修正，验证本轮 AUC 回落是否主要来自 additive bias。
+
+---
+
+## 2026-04-19：ResNeXt V100 Direct Formal Confirmation（decision fusion + 512x16 gated reliability adapter trial-1 replay）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 唯一离散研究改动：把 dedicated formal template 对齐到上一轮 gated reliability-adapter main-study best completed trial（`freeze_layers=3`, `lr=3e-5`, `weight_decay=7.5e-4`, `dropout=0.4`, `gradient_clip_norm=2.0`），用单卡 formal 语义验证这条 reliability-side 改善是否可复现。
+> - 本轮运行 commit 为 `eef01f1`；由于这是 fixed-config confirmation 而不是 fresh study，直接运行 `CUDA_VISIBLE_DEVICES=0 timeout 10800 .venv/bin/python train.py --config configs/autoresearch_formal_resnext_decision_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-FORMAL-512X16-GATED-RELIABILITY-CONFIRM**：`configs/autoresearch_formal_resnext_decision_v100.yaml`（保持 `512x16 / 30`-epoch 配方不变，仅把 dedicated formal 对齐到 `513b94f` main-study 的 best completed trial：`freeze_layers=3`, `lr=3e-5`, `weight_decay=7.5e-4`, `dropout=0.4`, `gradient_clip_norm=2.0`）→ `val_acc=0.8617021276595744`, `val_auc=0.9372727272727273`, `val_f1=0.8433734939759037`, `peak_vram≈4.68 GiB`, `total_seconds=4260.7` → **discard**（这次 replay 没有复现上一轮 main-study 的 `0.8829787234042553 / 0.9354545454545455`，accuracy 反而低了 `0.0212765957446809`；虽然 AUC 微升 `0.0018181818181818`，但主指标明显回落，因此不能保留。它也仍明显低于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，accuracy / AUC 分别低 `0.0638297872340426 / 0.0268181818181818`。）
+- **Stability takeaway**：这次 formal confirmation 的落点几乎就是一个“回到旧平台”的信号。它没有延续 `513b94f` 在 fresh main-study 里追平 `c551967` accuracy ceiling 的势头，而是直接落回了 `0.861702 / 0.937273` 这一保守平台；更强的线索是，它与当前 canonical formal 参考 `c30fcae` 的主指标完全相同。这说明当前 full-rank gated reliability adapter 也许能在 study 里帮助搜索找到更好的 trial，但还没有形成稳定的 formal 优势。
+- **本轮结论**：这次实验完成了 backlog 中建议的 fixed-config confirmation，结论是：**当前 gated residual reliability adapter 不是稳定可复现的新 anchor**。因此本轮记 **discard**，后续不应继续重复同一 fixed config replay。
+- **推荐动作**：如果外层 loop 继续推进这条 isolated decision-fusion lane，下一步仍应保持 `512x16`、`trim_edge_slices=2`、`share_backbone=false`、`use_attention_pooling=false` 和 `30`-epoch budget 不变，但把 reliability-side 结构创新**简化**而不是继续加表达力：保留 plain per-view classifier，只把 current GLU confidence adapter 改成更低方差的 temperature-like / affine reliability calibrator，再做 1 次新的 adaptive main-study。
+
+---
+
+## 2026-04-19：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 gated reliability adapter）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 唯一离散研究改动：把 `MultiViewDecisionFusionClassifier` 的 per-view classifier 恢复到 plain `Linear + ReLU` baseline，并把结构自由度集中到 VRG reliability path：保留 `LayerNorm + Linear(512→1)` raw-logit head，同时叠加零初始化的轻量 GLU gated residual adapter；搜索空间继续保持现有 low-lr / high-regularization family，不再额外引入第二个结构变量。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0008_20260419_075732.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0008_20260419_075732`，运行 commit 为 `513b94f`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-GATED-RELIABILITY-ADAPTER**：`src/model.py`（仅在 `decision fusion` 分支恢复 plain per-view classifier，并把唯一结构改动放到 zero-init gated residual confidence adapter）+ fresh adaptive main-study（`GPU 0,1,2`）→ wave-aligned 调度共 `6/6` trials completed，best completed trial 为 **trial 1**（`freeze_layers=3`, `lr=3e-5`, `weight_decay=7.5e-4`, `dropout=0.4`, `gradient_clip_norm=2.0`）→ `val_acc=0.8829787234042553`, `val_auc=0.9354545454545455`, `val_f1=0.8641975308641975`, `peak_vram≈4.68 GiB`, `total_seconds=4283.4` → **discard**（这轮结果把 isolated `512x16` lane 的 best accuracy 拉回到了 long-budget winner `c551967` 的同一高度，但 AUC 仍低 `0.0054545454545454`，因此在主指标持平时按 tie-break 仍然不能保留；同时它仍明显低于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，accuracy 低 `0.0425531914893617`、AUC 低 `0.0286363636363636`。）
+- **Monitor takeaways**：这轮 6 个 completed trials 没有 OOM、timeout 或 workflow crash，`peak_vram` 全部稳定在约 `4.68 GiB`，说明结论仍然是优化 / 结构层，而不是资源问题。更重要的是，trial 分布不再像上两轮结构创新那样整体塌到 `0.83` 左右：本轮 accuracy 覆盖了 `0.7978723404255319`、`0.8617021276595744`、`0.8723404255319149` 与 `0.8829787234042553` 四个平台，其中 top trial 精确追平了 `c551967` 的 accuracy ceiling。这个信号说明，把表达力从 classifier path 挪到 reliability weighting path，至少比 per-view recalibration 或 gated classifier head 更接近这条 lane 的真实瓶颈。
+- **本轮结论**：这次不是 clean negative，但也还不足以 keep。`gated residual reliability adapter` 给出了这轮 isolated decision lane 里最有竞争力的结构创新证据，却仍然没能在 tie-break 上超过 `c551967`，更没有接近当前 direct-formal anchor。因此本轮仍记 **discard**，但它已经把后续优先级从“继续换别的结构点盲试”推向“先验证这条 reliability-side 信号是否可复现”。
+- **推荐动作**：如果外层 loop 继续推进这条 isolated decision-fusion lane，下一步应优先做 **1 次 direct formal confirmation**，把本轮 trial 1 的 fixed config（`freeze_layers=3`, `lr=3e-5`, `weight_decay=7.5e-4`, `dropout=0.4`, `gradient_clip_norm=2.0`）在单卡 formal 语义下再跑 1 次。只有在这次 confirmation 仍然回落明显时，才值得继续设计下一个 reliability-path 结构变体。
+
+---
+
+## 2026-04-19：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 gated per-view head）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 唯一离散研究改动：把 `MultiViewDecisionFusionClassifier` 的 per-view classifier 从 plain `Linear + ReLU` MLP 改成轻量 GLU gated head，同时撤掉上轮失败的 per-view recalibration，让 VRG reliability weighting 路径尽量回到 `96fe172` 的 baseline 语义；搜索空间保持现有 low-lr / high-regularization family，不再额外引入第二个结构变量。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0007_20260419_052750.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0007_20260419_052750`，运行 commit 为 `41072da`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-GATED-PER-VIEW-HEAD**：`src/model.py`（仅在 `decision fusion` 分支把 per-view classifier 改成 GLU gated head，并移除上轮的 per-view recalibration）+ fresh adaptive main-study（`GPU 0,1,2`）→ wave-aligned 调度共 `6/6` trials completed，best completed trial 为 **trial 5**（`freeze_layers=3`, `lr=4e-5`, `weight_decay=1e-3`, `dropout=0.35`, `gradient_clip_norm=1.5`）→ `val_acc=0.8297872340425532`, `val_auc=0.915`, `val_f1=0.8048780487804879`, `peak_vram≈4.67 GiB`, `total_seconds=4257.3` → **discard**（这轮最好结果不仅低于上一轮 long-budget main-study winner `c551967` 的 `0.8829787234042553 / 0.9409090909090909`，accuracy 低 `0.0531914893617021`、AUC 低 `0.0259090909090909`；也明显低于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，accuracy 低 `0.0957446808510638`、AUC 低 `0.0490909090909091`；因此不能保留。）
+- **Monitor takeaways**：这轮 6 个 completed trials 没有 OOM、timeout 或 workflow crash，`peak_vram` 都稳定在约 `4.67 GiB`，说明本轮结论仍然是优化/结构层负结果，不是资源问题。更重要的是，6 个 trial 的 accuracy 只落在 `0.8085106382978723`、`0.8191489361702128` 或 `0.8297872340425532` 三个平台，最好 accuracy 比上轮 per-view recalibration 的 `0.8617021276595744` 还再低 `0.0319148936170212`。虽然最好 AUC 回升到 `0.915`，较上轮 `0.8954545454545454` 高 `0.0195454545454546`，但 fixed-threshold accuracy 明显塌陷，说明单纯提高 per-view classifier 的乘性表达力，并没有解决 `512x16` decision lane 的核心问题。
+- **本轮结论**：这次结构创新同样给出了干净的否定证据。`gated per-view classifier head` 在当前 `ResNeXt decision 512x16` 路径上既没有改善 validation accuracy，也没有把这条 lane 拉回先前 `30`-epoch 高点，因此本轮记 **discard**，后续不应继续重复这条改动或围绕它做纯标量 retune。
+- **推荐动作**：如果外层 loop 继续推进这条 isolated decision-fusion lane，下一步仍应保持 `512x16`、`trim_edge_slices=2`、`share_backbone=false`、`use_attention_pooling=false` 和 `30`-epoch budget 不变，但把结构创新从 classifier path 挪到 **VRG confidence / reliability head**：保留 plain per-view classifier 与当前 baseline pooled-feature path，只把每个视角的 confidence head 从 `LayerNorm + Linear(512→1)` 改成轻量 gated confidence head 或 temperature-like reliability adapter，以便更干净地判断瓶颈是否在融合权重建模，而不是 per-view 分类表达力。
+
+---
+
+## 2026-04-19：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 per-view recalibration）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 唯一离散研究改动：把仓库里已有的 `ViewFeatureRecalibration` 模块接到 `MultiViewDecisionFusionClassifier`，让每个视角的 pooled token 在进入 per-view classifier 与 VRG reliability head 前先做一次 identity-initialized 的轻量通道重标定；搜索空间保持现有 low-lr / high-regularization family，不再额外引入第二个结构变量。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0006_20260419_025853.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0006_20260419_025853`，运行 commit 为 `b47975e`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-VIEW-RECALIBRATION**：`src/model.py`（仅在 `decision fusion` 分支加入 per-view recalibration）+ fresh adaptive main-study（`GPU 0,1,2`）→ wave-aligned 调度共 `6/6` trials completed，best completed trial 为 **trial 1**（`freeze_layers=3`, `lr=3e-5`, `weight_decay=7.5e-4`, `dropout=0.4`, `gradient_clip_norm=2.0`）→ `val_acc=0.8617021276595744`, `val_auc=0.8954545454545454`, `val_f1=0.8266666666666667`, `peak_vram≈4.68 GiB`, `total_seconds=4285.1` → **discard**（这轮最好结果仍低于上一轮 long-budget main-study winner `c551967` 的 `0.8829787234042553 / 0.9409090909090909`，accuracy 低 `0.0212765957446809`、AUC 低 `0.0454545454545455`；相较当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091` 更低 `0.0638297872340426 / 0.0686363636363637`，因此不能保留。）
+- **Monitor takeaways**：这轮 6 个 completed trials 没有 OOM、timeout 或 workflow crash，`peak_vram` 都稳定在约 `4.68 GiB`，说明本轮结论仍然是优化/结构层负结果，不是资源问题。更重要的是，6 个 trial 的 accuracy 只落在两个平台：`0.851063829787234` 或 `0.8617021276595744`；没有任何一个 trial 接近 `c551967` 的 `0.8829787234042553`。同时 tie-high 的最好 AUC 只有 `0.8954545454545454`，显著弱于先前 `512x16 / 30`-epoch family 的 retained high points，说明这次 token-level recalibration 没有起到“稳定 logit”作用，反而更像是把 classifier 和 VRG weighting 两条分支一起过度收缩了。
+- **本轮结论**：这次结构创新已经给出了干净的否定证据。`per-view recalibration` 在当前 `ResNeXt decision 512x16` 路径上没有带来更稳的 validation accuracy，也没有改善 AUC，因此本轮记 **discard**，后续不应继续重复这条改动或围绕它做纯标量 retune。
+- **推荐动作**：如果外层 loop 继续推进这条 isolated decision-fusion lane，下一步仍应保持 `512x16`、`trim_edge_slices=2`、`share_backbone=false`、`use_attention_pooling=false` 和 `30`-epoch budget 不变，但把结构创新切到**轻量 gated per-view classifier head**，并尽量保持 VRG reliability 分支接近当前 baseline，以便更干净地判断瓶颈到底在 per-view 分类表达力，还是在视角权重估计。
+
+---
+
+## 2026-04-19：ResNeXt V100 Direct Formal Stability Check（decision fusion + 512x16 long-budget winner replay）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 唯一离散研究改动：停止继续做 winner-centered fresh retune，改为把上一轮 long-budget main-study winner（`freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`）直接以单卡 fixed-config formal 语义重跑 1 次，判断 `c551967` 的高点是否稳定可复现。
+> - 本轮运行 commit 为 `96fe172`；由于这是 fixed-config confirmation 而不是 fresh study，直接运行 `CUDA_VISIBLE_DEVICES=0 timeout 10800 .venv/bin/python train.py --config configs/autoresearch_formal_resnext_decision_v100.yaml`。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-FORMAL-512X16-STABILITY-CHECK**：`configs/autoresearch_formal_resnext_decision_v100.yaml`（保持 `512x16 / 30`-epoch 配方不变，仅复验上一轮 long-budget winner：`freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`）→ `val_acc=0.8404255319148937`, `val_auc=0.9354545454545455`, `val_f1=0.8351648351648352`, `peak_vram≈4.67 GiB`, `total_seconds=4247.1` → **discard**（这次 direct formal replay 不仅没有复现 `c551967` 的 `0.8829787234042553 / 0.9409090909090909`，accuracy 还低了 `0.0425531914893616`、AUC 低了 `0.0054545454545454`；相较当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091` 更低 `0.0851063829787233 / 0.0286363636363636`，因此不能保留。）
+- **Stability takeaway**：这次 direct formal 的结果几乎与最初 `512x16` geometry pivot run `ef62f61` 的 best（`0.8404255319148937 / 0.9354545454545454`）完全重合，也比上一轮 narrow retune 中的 exact winner replay（`481ef67` 的 trial 0：`0.8617021276595744 / 0.9400000000000001`）更低。两次 replay 都明显低于 `c551967` 的 study winner，已经足够说明这个角点当前不具备稳定可复现性。
+- **本轮结论**：本轮已经完成 backlog 中建议的 fixed-config stability check，结论是：`c551967` 更像一次高方差 spike，而不是可靠的新基线。后续不应继续在同一 `lr / wd / dropout / clip` 角点上重复 replay。
+- **推荐动作**：如果外层 loop 继续推进这条 isolated `512x16` decision lane，下一步应保持几何与 `30`-epoch budget 不变，并按顶部人类约束切到**单点结构创新**，不要再做纯标量 replay。最自然的首个结构方向是给当前 `ResNeXt decision` 路径加入一个轻量 gated head / per-view recalibration 模块，先尝试降低 per-view logit 的方差，再用 1 次新的 adaptive main-study 或更便宜的诊断评估它是否能把这条 lane 从当前不稳定峰值中拉出来。
+
+## 2026-04-19：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 winner-centered local retune）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 唯一离散研究改动：把 dedicated formal template 升格到上一轮 long-budget winner（`freeze_layers=3`, `lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`），然后把 fresh adaptive main-study 的搜索空间收窄到这个新 anchor 周围，只测试局部的 `lr / weight_decay / dropout / clip` 扰动。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0004_20260418_231408.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0004_20260418_231408`，运行 commit 为 `481ef67`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-WINNER-LOCAL-RETUNE**：`configs/autoresearch_formal_resnext_decision_v100.yaml`（对齐上一轮 `512x16 / 30`-epoch winner）+ fresh adaptive main-study（`GPU 0,1,2`）→ 4/4 trials completed，best completed trial 为 **trial 1**（`freeze_layers=3`, `lr=3e-5`, `weight_decay=7.5e-4`, `dropout=0.4`, `gradient_clip_norm=2.0`）→ `val_acc=0.8723404255319149`, `val_auc=0.9518181818181819`, `val_f1=0.85`, `peak_vram≈4.67 GiB`, `total_seconds=4275.1` → **discard**（这轮 local retune 没有超过上一轮 long-budget winner `c551967` 的 `0.8829787234042553 / 0.9409090909090909`：虽然 AUC 提升了 `0.0109090909090910`，但 accuracy 反而回落 `0.0106382978723404`；它也仍明显低于当前 decision-fusion direct-formal anchor `7ae19a0` 的 `0.925531914893617 / 0.9640909090909091`，以及旧 ResNeXt feature-fusion retained keep `15b1ef6` 的 `0.9468085106382979 / 0.9800000000000001`，因此不能保留。）
+- **Monitor takeaways**：这轮 4 个 completed trials 的 `peak_vram` 依旧稳定在约 `4.67 GiB`，说明结论仍然是优化面而不是资源问题。最关键的新信号不是“局部 retune 找到更强角点”，而是 **exact winner replay 本身没有复现**：trial 0 作为 enqueued anchor，参数与上一轮 best 完全一致（`lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `clip=1.5`），却只跑到 `val_acc=0.8617021276595744`, `val_auc=0.9400000000000001`。在此基础上，把 `clip` 提到 `2.0` 并把 `weight_decay` 降到 `7.5e-4` 只能把 accuracy 拉回 `0.8723404255319149`，仍没追上上一轮 best。
+- **本轮结论**：这次实验完成了原计划的“围绕新 anchor 做 1 次窄 retune”，但结果表明当前问题已经不再是“还没摸到更好的局部角点”，而是“上一轮高点是否稳定”。既然 exact replay 都明显回落，再继续在同一小网格里扫 `lr / wd / dropout / clip` 的信息增益已经很低，因此本轮仍记 **discard**。
+- **推荐动作**：如果外层 loop 还要继续这条 isolated decision-fusion lane，下一步不要再重复 fresh local retune。应保持 `512x16` 和 `30`-epoch budget 不变，先做 **1 次 fixed-config direct formal confirmation / stability check**，把上一轮 long-budget winner（`lr=3e-5`, `weight_decay=1e-3`, `dropout=0.4`, `gradient_clip_norm=1.5`）在单卡固定语义下再跑 1 次，先确认 `0.8829787234042553` 是否可复现，再决定后续是否继续投入这一角点。
 
 ---
 

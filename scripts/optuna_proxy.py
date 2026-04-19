@@ -21,6 +21,7 @@ def main() -> None:
         max_used_memory_mb=args.max_used_memory_mb,
         max_utilization=args.max_utilization,
         worker_cooldown_seconds=args.worker_cooldown_seconds,
+        tail_fill=args.tail_fill,
     )
     print(f"Study finished: {study_root}")
 

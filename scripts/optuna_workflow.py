@@ -28,6 +28,7 @@ BUNDLED_PYTHON_CANDIDATES = [
 ]
 DEFAULT_FAILED_SCORE = -1.0
 VALID_TRIAL_STATUSES = {"completed"}
+VALID_TAIL_FILL_MODES = {"auto", "always", "never"}
 FAILURE_PATTERNS = {
     "oom": (
         "out of memory",
@@ -105,9 +106,14 @@ class PreparedStudy:
     study_root: Path
     study: Any
     source_study_dir: Path | None
+    requested_target_trials: int
     target_trials: int
     existing_trials: int
+    requested_remaining_trials: int
     remaining_trials: int
+    parallel_worker_count: int
+    tail_fill_mode: str
+    tail_fill_trials: int
 
 
 def now_iso() -> str:
@@ -446,6 +452,82 @@ def parse_max_workers(raw_value: str | int | None, default: int) -> int:
     if not value or value == "auto":
         return max(1, default)
     return max(1, int(value))
+
+
+def normalize_tail_fill_mode(raw_value: str | None) -> str:
+    value = str(raw_value or "auto").strip().lower()
+    if value not in VALID_TAIL_FILL_MODES:
+        allowed = ", ".join(sorted(VALID_TAIL_FILL_MODES))
+        raise ValueError(f"Unsupported tail-fill mode {raw_value!r}. Expected one of: {allowed}.")
+    return value
+
+
+def plan_parallel_trial_budget(
+    requested_target_trials: int,
+    existing_trials: int,
+    parallel_worker_count: int,
+    tail_fill_mode: str,
+) -> tuple[int, int, int]:
+    requested_target_trials = max(0, int(requested_target_trials))
+    existing_trials = max(0, int(existing_trials))
+    parallel_worker_count = max(1, int(parallel_worker_count))
+
+    requested_remaining_trials = max(0, requested_target_trials - existing_trials)
+    effective_target_trials = max(existing_trials, requested_target_trials)
+    tail_fill_trials = 0
+
+    if requested_remaining_trials <= 0 or parallel_worker_count <= 1 or tail_fill_mode == "never":
+        return effective_target_trials, requested_remaining_trials, tail_fill_trials
+
+    remainder = requested_remaining_trials % parallel_worker_count
+    if remainder == 0:
+        return effective_target_trials, requested_remaining_trials, tail_fill_trials
+
+    fill_candidates = parallel_worker_count - remainder
+    auto_mode_allowed = (
+        requested_target_trials > parallel_worker_count
+        and fill_candidates <= requested_remaining_trials
+    )
+    if tail_fill_mode == "auto" and not auto_mode_allowed:
+        return effective_target_trials, requested_remaining_trials, tail_fill_trials
+
+    tail_fill_trials = fill_candidates
+    effective_target_trials = existing_trials + requested_remaining_trials + tail_fill_trials
+    effective_remaining_trials = requested_remaining_trials + tail_fill_trials
+    return effective_target_trials, effective_remaining_trials, tail_fill_trials
+
+
+def build_budget_metadata(
+    requested_target_trials: int,
+    effective_target_trials: int,
+    existing_trials: int,
+    effective_remaining_trials: int,
+    parallel_worker_count: int,
+    tail_fill_mode: str,
+    tail_fill_trials: int,
+) -> dict[str, Any]:
+    return {
+        "requested_target_trials": requested_target_trials,
+        "target_trials": effective_target_trials,
+        "existing_trials": existing_trials,
+        "requested_remaining_trials": max(0, requested_target_trials - existing_trials),
+        "remaining_trials": effective_remaining_trials,
+        "parallel_worker_count": parallel_worker_count,
+        "tail_fill_mode": tail_fill_mode,
+        "tail_fill_trials": tail_fill_trials,
+    }
+
+
+def study_budget_metadata(prepared: PreparedStudy) -> dict[str, Any]:
+    return build_budget_metadata(
+        requested_target_trials=prepared.requested_target_trials,
+        effective_target_trials=prepared.target_trials,
+        existing_trials=prepared.existing_trials,
+        effective_remaining_trials=prepared.remaining_trials,
+        parallel_worker_count=prepared.parallel_worker_count,
+        tail_fill_mode=prepared.tail_fill_mode,
+        tail_fill_trials=prepared.tail_fill_trials,
+    )
 
 
 def select_gpu_devices(
@@ -1141,7 +1223,13 @@ def best_record(records: list[dict[str, Any]], key: str) -> dict[str, Any] | Non
     return max(ranked, key=lambda item: item[key])
 
 
-def save_study_status(study_root: Path, search_cfg: dict[str, Any], records: list[dict[str, Any]], state: str) -> None:
+def save_study_status(
+    study_root: Path,
+    search_cfg: dict[str, Any],
+    records: list[dict[str, Any]],
+    state: str,
+    budget_metadata: dict[str, Any] | None = None,
+) -> None:
     valid_records = [record for record in records if record.get("status") in VALID_TRIAL_STATUSES]
     best = best_record(records, "val_accuracy")
     payload = {
@@ -1154,6 +1242,8 @@ def save_study_status(study_root: Path, search_cfg: dict[str, Any], records: lis
         "failure_counts": {},
         "selection_rule": "val_accuracy_then_val_auc",
     }
+    if budget_metadata:
+        payload.update(budget_metadata)
     for record in records:
         status = str(record.get("status", "unknown"))
         payload["failure_counts"][status] = payload["failure_counts"].get(status, 0) + 1
@@ -1223,6 +1313,7 @@ def run_study(
     cleanup_stale_running_trials_on_resume: bool = True,
     env_overrides: dict[str, str] | None = None,
     worker_label: str | None = None,
+    tail_fill: str | None = None,
 ) -> Path:
     prepared = prepare_study(
         search_config_path=search_config_path,
@@ -1231,6 +1322,8 @@ def run_study(
         max_trials_override=max_trials_override,
         resume=resume,
         cleanup_stale_running_trials_on_resume=cleanup_stale_running_trials_on_resume,
+        parallel_worker_count=1,
+        tail_fill=tail_fill,
     )
     if prepared.remaining_trials <= 0:
         finalize_study(prepared, state="completed")
@@ -1254,7 +1347,13 @@ def run_study(
 
     def callback(current_study, _trial) -> None:
         records = load_trial_records(prepared.study_root)
-        save_study_status(prepared.study_root, prepared.search_cfg, records, state="running")
+        save_study_status(
+            prepared.study_root,
+            prepared.search_cfg,
+            records,
+            state="running",
+            budget_metadata=study_budget_metadata(prepared),
+        )
 
     optimize_kwargs: dict[str, Any] = {
         "n_trials": prepared.remaining_trials,
@@ -1282,6 +1381,8 @@ def prepare_study(
     max_trials_override: int | None = None,
     resume: bool = False,
     cleanup_stale_running_trials_on_resume: bool = True,
+    parallel_worker_count: int = 1,
+    tail_fill: str | None = None,
 ) -> PreparedStudy:
     config_path, search_cfg = load_search_config(search_config_path)
     study_cfg = search_cfg["study"]
@@ -1316,6 +1417,31 @@ def prepare_study(
     dump_yaml(resolved_base_config, preflight_config)
     resolved_source_study = resolve_path(source_study_dir) if source_study_dir else None
 
+    study = build_study(optuna, search_cfg, study_root, resume=resume)
+    if resume and cleanup_stale_running_trials_on_resume:
+        fail_stale_running_trials(study, study_root, optuna)
+    existing_trials = len(study.trials)
+    requested_target_trials = int(max_trials_override or study_cfg.get("n_trials", 10))
+    tail_fill_mode = normalize_tail_fill_mode(tail_fill or study_cfg.get("tail_fill", "auto"))
+    target_trials, remaining_trials, tail_fill_trials = plan_parallel_trial_budget(
+        requested_target_trials=requested_target_trials,
+        existing_trials=existing_trials,
+        parallel_worker_count=parallel_worker_count,
+        tail_fill_mode=tail_fill_mode,
+    )
+    budget_metadata = build_budget_metadata(
+        requested_target_trials=requested_target_trials,
+        effective_target_trials=target_trials,
+        existing_trials=existing_trials,
+        effective_remaining_trials=remaining_trials,
+        parallel_worker_count=parallel_worker_count,
+        tail_fill_mode=tail_fill_mode,
+        tail_fill_trials=tail_fill_trials,
+    )
+    if bool(study_cfg.get("enqueue_current_template", True)) and existing_trials == 0:
+        enqueue_template_trial(study, preflight_config, search_space)
+    if resolved_source_study and top_k > 0 and existing_trials == 0:
+        enqueue_source_trials(study, resolved_source_study, top_k, search_space)
     save_json(
         study_root / "search_config.snapshot.json",
         {
@@ -1325,20 +1451,16 @@ def prepare_study(
             "resume": resume,
             "resolved_base_config": str(resolved_base_config),
             "source_study_dir": str(resolved_source_study) if resolved_source_study else None,
+            "trial_budget": budget_metadata,
         },
     )
-
-    study = build_study(optuna, search_cfg, study_root, resume=resume)
-    if resume and cleanup_stale_running_trials_on_resume:
-        fail_stale_running_trials(study, study_root, optuna)
-    existing_trials = len(study.trials)
-    target_trials = int(max_trials_override or study_cfg.get("n_trials", 10))
-    remaining_trials = max(0, target_trials - existing_trials)
-    if bool(study_cfg.get("enqueue_current_template", True)) and existing_trials == 0:
-        enqueue_template_trial(study, preflight_config, search_space)
-    if resolved_source_study and top_k > 0 and existing_trials == 0:
-        enqueue_source_trials(study, resolved_source_study, top_k, search_space)
-    save_study_status(study_root, search_cfg, load_trial_records(study_root), state="running")
+    save_study_status(
+        study_root,
+        search_cfg,
+        load_trial_records(study_root),
+        state="running",
+        budget_metadata=budget_metadata,
+    )
 
     return PreparedStudy(
         optuna_module=optuna,
@@ -1351,9 +1473,14 @@ def prepare_study(
         study_root=study_root,
         study=study,
         source_study_dir=resolved_source_study,
+        requested_target_trials=requested_target_trials,
         target_trials=target_trials,
         existing_trials=existing_trials,
+        requested_remaining_trials=max(0, requested_target_trials - existing_trials),
         remaining_trials=remaining_trials,
+        parallel_worker_count=parallel_worker_count,
+        tail_fill_mode=tail_fill_mode,
+        tail_fill_trials=tail_fill_trials,
     )
 
 
@@ -1404,7 +1531,13 @@ def record_trial_result(study, trial, outcome: TrialOutcome) -> bool:
 
 def finalize_study(prepared: PreparedStudy, state: str) -> None:
     records = load_trial_records(prepared.study_root)
-    save_study_status(prepared.study_root, prepared.search_cfg, records, state=state)
+    save_study_status(
+        prepared.study_root,
+        prepared.search_cfg,
+        records,
+        state=state,
+        budget_metadata=study_budget_metadata(prepared),
+    )
     if state != "completed":
         return
 
@@ -1417,9 +1550,14 @@ def finalize_study(prepared: PreparedStudy, state: str) -> None:
             "search_config": str(prepared.config_path),
             "source_study_dir": str(prepared.source_study_dir) if prepared.source_study_dir else None,
             "selection_rule": "val_accuracy_then_val_auc",
+            "requested_target_trials": prepared.requested_target_trials,
             "target_trials": prepared.target_trials,
             "existing_trials": prepared.existing_trials,
+            "requested_remaining_trials": prepared.requested_remaining_trials,
             "remaining_trials": prepared.remaining_trials,
+            "parallel_worker_count": prepared.parallel_worker_count,
+            "tail_fill_mode": prepared.tail_fill_mode,
+            "tail_fill_trials": prepared.tail_fill_trials,
             "summary": summary,
         },
     )
@@ -1434,7 +1572,9 @@ def run_study_parallel(
     cleanup_stale_running_trials_on_resume: bool = True,
     gpu_ids: list[int] | None = None,
     worker_cooldown_seconds: float = 0.0,
+    tail_fill: str | None = None,
 ) -> Path:
+    selected_gpu_ids = [int(gpu_id) for gpu_id in (gpu_ids or [])]
     prepared = prepare_study(
         search_config_path=search_config_path,
         source_study_dir=source_study_dir,
@@ -1442,13 +1582,23 @@ def run_study_parallel(
         max_trials_override=max_trials_override,
         resume=resume,
         cleanup_stale_running_trials_on_resume=cleanup_stale_running_trials_on_resume,
+        parallel_worker_count=max(1, len(selected_gpu_ids)),
+        tail_fill=tail_fill,
     )
     if prepared.remaining_trials <= 0:
         finalize_study(prepared, state="completed")
         return prepared.study_root
 
-    selected_gpu_ids = [int(gpu_id) for gpu_id in (gpu_ids or [])]
     print("Launching Optuna worker(s) on GPUs: " + ", ".join(str(gpu_id) for gpu_id in selected_gpu_ids))
+    if prepared.tail_fill_trials > 0:
+        print(
+            "Wave-aligned trial budget enabled: "
+            f"requested {prepared.requested_target_trials} total / {prepared.requested_remaining_trials} remaining, "
+            f"workers={prepared.parallel_worker_count} -> "
+            f"scheduling {prepared.target_trials} total / {prepared.remaining_trials} remaining "
+            f"(+{prepared.tail_fill_trials} fill trial(s)).",
+            flush=True,
+        )
 
     study_lock = threading.Lock()
     print_lock = threading.Lock()
@@ -1497,7 +1647,13 @@ def run_study_parallel(
                     )
                     prepared.study.tell(trial, failed_score, skip_if_finished=True)
                     records = load_trial_records(prepared.study_root)
-                    save_study_status(prepared.study_root, prepared.search_cfg, records, state="running")
+                    save_study_status(
+                        prepared.study_root,
+                        prepared.search_cfg,
+                        records,
+                        state="running",
+                        budget_metadata=study_budget_metadata(prepared),
+                    )
                 worker_errors.append(exc)
                 stop_event.set()
                 if not attrs_written:
@@ -1510,7 +1666,13 @@ def run_study_parallel(
             with study_lock:
                 attrs_written = record_trial_result(prepared.study, trial, outcome)
                 records = load_trial_records(prepared.study_root)
-                save_study_status(prepared.study_root, prepared.search_cfg, records, state="running")
+                save_study_status(
+                    prepared.study_root,
+                    prepared.search_cfg,
+                    records,
+                    state="running",
+                    budget_metadata=study_budget_metadata(prepared),
+                )
             if not attrs_written:
                 log_line(
                     f"[{worker_label}] trial {trial_number} finished before Optuna attrs were written; "
@@ -1567,6 +1729,7 @@ def run_study_adaptive(
     max_used_memory_mb: int = 1024,
     max_utilization: int = 20,
     worker_cooldown_seconds: float = 0.0,
+    tail_fill: str | None = None,
 ) -> Path:
     explicit_ids = parse_gpu_id_spec(gpu_ids)
     discovered_devices = discover_gpu_devices()
@@ -1637,6 +1800,7 @@ def run_study_adaptive(
             cleanup_stale_running_trials_on_resume=cleanup_stale_running_trials_on_resume,
             env_overrides=env_overrides,
             worker_label=worker_label,
+            tail_fill=tail_fill,
         )
 
     return run_study_parallel(
@@ -1648,6 +1812,7 @@ def run_study_adaptive(
         cleanup_stale_running_trials_on_resume=cleanup_stale_running_trials_on_resume,
         gpu_ids=selected_gpu_ids,
         worker_cooldown_seconds=worker_cooldown_seconds,
+        tail_fill=tail_fill,
     )
 
 
@@ -1717,5 +1882,16 @@ def build_cli(default_config: str, description: str) -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Optional cooldown inserted after each worker finishes a trial.",
+    )
+    parser.add_argument(
+        "--tail-fill",
+        choices=sorted(VALID_TAIL_FILL_MODES),
+        default=None,
+        help=(
+            "How to handle a final partial worker wave in parallel studies. "
+            "'auto' fills it only when the original budget already spans multiple waves; "
+            "'always' always rounds remaining trials up to the worker count; "
+            "'never' preserves the exact requested budget."
+        ),
     )
     return parser.parse_args()

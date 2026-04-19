@@ -316,6 +316,19 @@ def build_report(study_dir: Path) -> tuple[str, dict[str, Any]]:
     parts = []
     parts.append(f"Study: {study_dir}")
     parts.append(f"State: {report['study_state']}")
+    target_trials = status_data.get("target_trials")
+    requested_target_trials = status_data.get("requested_target_trials")
+    tail_fill_trials = status_data.get("tail_fill_trials")
+    parallel_worker_count = status_data.get("parallel_worker_count")
+    if target_trials is not None:
+        budget_text = f"Budget: target={target_trials}"
+        if requested_target_trials is not None and requested_target_trials != target_trials:
+            budget_text = f"Budget: requested={requested_target_trials}, scheduled={target_trials}"
+        if parallel_worker_count:
+            budget_text += f", workers={parallel_worker_count}"
+        if tail_fill_trials:
+            budget_text += f", tail_fill=+{tail_fill_trials}"
+        parts.append(budget_text)
     parts.append(f"Trials: {report['trial_count']} total, {report['valid_count']} valid")
     parts.append("")
     parts.append("Trial summary")
