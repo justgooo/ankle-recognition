@@ -1,0 +1,14 @@
+inherit_from: base_proxy.yaml
+experiment_name: d1_mil_25d
+output_dir: runs/paper_repro/d1_mil_25d
+paper:
+  id: D1
+  title: D1 2.5D MIL
+  source_doc: docs/D_papers_architecture_comparison_ankle_CT.md
+  reproduction_level: task_adapted
+model:
+  family: d1_mil_25d
+  encoder_name: resnet18
+  hidden_dim: 256
+  dropout: 0.3
+

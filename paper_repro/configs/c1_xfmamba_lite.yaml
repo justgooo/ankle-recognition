@@ -1,0 +1,15 @@
+inherit_from: base_proxy.yaml
+experiment_name: c1_xfmamba_lite
+output_dir: runs/paper_repro/c1_xfmamba_lite
+paper:
+  id: C1
+  title: XFMamba-lite
+  source_doc: docs/C_papers_ankle_ct_architecture_comparison.md
+  reproduction_level: task_adapted
+model:
+  family: c1_xfmamba_lite
+  encoder_name: resnet18
+  slice_pool: attention
+  hidden_dim: 256
+  dropout: 0.3
+

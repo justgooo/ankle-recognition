@@ -1,0 +1,17 @@
+inherit_from: base_proxy.yaml
+experiment_name: r1_fracnet_weak
+output_dir: runs/paper_repro/r1_fracnet_weak
+paper:
+  id: R1
+  title: R1 FracNet weak dense aggregation
+  source_doc: docs/R_papers_ankle_ct_binary_comparison.md
+  reproduction_level: task_adapted
+data:
+  batch_size: 2
+  image_size: 192
+  num_slices_per_view: 16
+model:
+  family: r1_fracnet_weak
+train:
+  loss: ce_focal
+

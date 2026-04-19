@@ -1,0 +1,14 @@
+inherit_from: base_proxy.yaml
+experiment_name: d2_triplane_hybrid
+output_dir: runs/paper_repro/d2_triplane_hybrid
+paper:
+  id: D2
+  title: D2 tri-plane hybrid
+  source_doc: docs/D_papers_architecture_comparison_ankle_CT.md
+  reproduction_level: task_adapted
+model:
+  family: d2_triplane_hybrid
+  encoder_name: resnet50
+  hidden_dim: 256
+  dropout: 0.3
+

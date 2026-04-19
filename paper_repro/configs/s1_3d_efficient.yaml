@@ -1,0 +1,18 @@
+inherit_from: base_proxy.yaml
+experiment_name: s1_3d_efficient
+output_dir: runs/paper_repro/s1_3d_efficient
+paper:
+  id: S1
+  title: S1 3D EfficientNet
+  source_doc: docs/s_papers_architecture_review.md
+  reproduction_level: task_adapted
+data:
+  batch_size: 2
+  image_size: 192
+  num_slices_per_view: 16
+model:
+  family: s1_3d_efficient
+  encoder_3d: efficient3d
+  hidden_dim: 256
+  dropout: 0.3
+

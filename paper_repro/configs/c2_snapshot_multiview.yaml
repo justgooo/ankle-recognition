@@ -1,0 +1,15 @@
+inherit_from: base_proxy.yaml
+experiment_name: c2_snapshot_multiview
+output_dir: runs/paper_repro/c2_snapshot_multiview
+paper:
+  id: C2
+  title: C2 snapshot multiview
+  source_doc: docs/C_papers_ankle_ct_architecture_comparison.md
+  reproduction_level: task_adapted
+model:
+  family: c2_snapshot_multiview
+  encoder_name: resnet18
+  hidden_dim: 256
+  dropout: 0.3
+  view_dropout: 0.15
+

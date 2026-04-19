@@ -1,0 +1,14 @@
+inherit_from: base_proxy.yaml
+experiment_name: s3_anatomy_prototype
+output_dir: runs/paper_repro/s3_anatomy_prototype
+paper:
+  id: S3
+  title: S3 anatomy prototype
+  source_doc: docs/s_papers_architecture_review.md
+  reproduction_level: task_adapted
+model:
+  family: s3_anatomy_prototype
+  encoder_name: resnet18
+  hidden_dim: 256
+  dropout: 0.3
+

@@ -1,0 +1,128 @@
+rounds:
+  round1:
+    - C2
+    - C3
+    - D2
+  round2:
+    - S2
+    - D1
+    - S4
+  round3:
+    - R1
+    - R4
+    - D4
+  round4:
+    - C1
+    - S1
+    - S3
+
+papers:
+  C1:
+    title: XFMamba multi-view classification
+    round: round4
+    config: paper_repro/configs/c1_xfmamba_lite.yaml
+    output_dir: runs/paper_repro/c1_xfmamba_lite
+    source_doc: docs/C_papers_ankle_ct_architecture_comparison.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "C1 XFMamba-lite cross-view fusion baseline"
+  C2:
+    title: MedpSeg + snapshot ResNet18
+    round: round1
+    config: paper_repro/configs/c2_snapshot_multiview.yaml
+    output_dir: runs/paper_repro/c2_snapshot_multiview
+    source_doc: docs/C_papers_ankle_ct_architecture_comparison.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "C2 ROI snapshots + ResNet18"
+  C3:
+    title: MMIDFNet decision fusion
+    round: round1
+    config: paper_repro/configs/c3_decision_fusion.yaml
+    output_dir: runs/paper_repro/c3_decision_fusion
+    source_doc: docs/C_papers_ankle_ct_architecture_comparison.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "C3 expert branches + decision fusion"
+  D1:
+    title: 2.5D MIL
+    round: round2
+    config: paper_repro/configs/d1_mil_25d.yaml
+    output_dir: runs/paper_repro/d1_mil_25d
+    source_doc: docs/D_papers_architecture_comparison_ankle_CT.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "D1 2.5D bag-level attention MIL"
+  D2:
+    title: tri-plane hybrid
+    round: round1
+    config: paper_repro/configs/d2_triplane_hybrid.yaml
+    output_dir: runs/paper_repro/d2_triplane_hybrid
+    source_doc: docs/D_papers_architecture_comparison_ankle_CT.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "D2 tri-plane CNN + handcrafted features"
+  D4:
+    title: 2.5D plus 3D ensemble
+    round: round3
+    config: paper_repro/configs/d4_hybrid_25d_3d.yaml
+    output_dir: runs/paper_repro/d4_hybrid_25d_3d
+    source_doc: docs/D_papers_architecture_comparison_ankle_CT.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "D4 2.5D and 3D ensemble"
+  R1:
+    title: FracNet-style dense anomaly aggregation
+    round: round3
+    config: paper_repro/configs/r1_fracnet_weak.yaml
+    output_dir: runs/paper_repro/r1_fracnet_weak
+    source_doc: docs/R_papers_ankle_ct_binary_comparison.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "R1 3D U-Net top-k dense anomaly aggregation"
+  R4:
+    title: nnU-Net-style dense vote
+    round: round3
+    config: paper_repro/configs/r4_dense_vote.yaml
+    output_dir: runs/paper_repro/r4_dense_vote
+    source_doc: docs/R_papers_ankle_ct_binary_comparison.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "R4 3D dense vote / majority aggregation"
+  S1:
+    title: 3D EfficientNet-like classifier
+    round: round4
+    config: paper_repro/configs/s1_3d_efficient.yaml
+    output_dir: runs/paper_repro/s1_3d_efficient
+    source_doc: docs/s_papers_architecture_review.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "S1 3D EfficientNet-like tri-view classifier"
+  S2:
+    title: SE-ResNet50 classifier
+    round: round2
+    config: paper_repro/configs/s2_se_resnet50.yaml
+    output_dir: runs/paper_repro/s2_se_resnet50
+    source_doc: docs/s_papers_architecture_review.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "S2 SE-ResNet50 trip-view classifier"
+  S3:
+    title: anatomy-aware prototype classifier
+    round: round4
+    config: paper_repro/configs/s3_anatomy_prototype.yaml
+    output_dir: runs/paper_repro/s3_anatomy_prototype
+    source_doc: docs/s_papers_architecture_review.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "S3 anatomy-aware prototype head"
+  S4:
+    title: CNN-LSTM sequence classifier
+    round: round2
+    config: paper_repro/configs/s4_cnn_lstm.yaml
+    output_dir: runs/paper_repro/s4_cnn_lstm
+    source_doc: docs/s_papers_architecture_review.md
+    reproduction_level: task_adapted
+    budget: proxy
+    description: "S4 sequence CNN-LSTM"
+

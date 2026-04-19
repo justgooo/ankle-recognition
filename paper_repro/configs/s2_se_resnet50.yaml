@@ -1,0 +1,15 @@
+inherit_from: base_proxy.yaml
+experiment_name: s2_se_resnet50
+output_dir: runs/paper_repro/s2_se_resnet50
+paper:
+  id: S2
+  title: S2 SE-ResNet50
+  source_doc: docs/s_papers_architecture_review.md
+  reproduction_level: task_adapted
+model:
+  family: s2_se_resnet50
+  encoder_name: seresnet50
+  slice_pool: attention
+  hidden_dim: 256
+  dropout: 0.3
+

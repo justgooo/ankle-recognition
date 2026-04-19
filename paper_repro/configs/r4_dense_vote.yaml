@@ -1,0 +1,17 @@
+inherit_from: base_proxy.yaml
+experiment_name: r4_dense_vote
+output_dir: runs/paper_repro/r4_dense_vote
+paper:
+  id: R4
+  title: R4 dense vote
+  source_doc: docs/R_papers_ankle_ct_binary_comparison.md
+  reproduction_level: task_adapted
+data:
+  batch_size: 2
+  image_size: 192
+  num_slices_per_view: 16
+model:
+  family: r4_dense_vote
+train:
+  loss: ce_focal
+

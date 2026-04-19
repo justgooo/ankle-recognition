@@ -1,0 +1,44 @@
+experiment_name: paper_repro_base
+output_dir: runs/paper_repro/base
+seed: 42
+
+paper:
+  id: BASE
+  title: base
+  source_doc: docs
+  reproduction_level: task_adapted
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  use_existing_split: true
+  image_size: 224
+  num_slices_per_view: 12
+  trim_edge_slices: 1
+  batch_size: 4
+  num_workers: 4
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  family: c2_snapshot_multiview
+  encoder_name: resnet18
+  hidden_dim: 256
+  dropout: 0.3
+  view_dropout: 0.1
+
+train:
+  device: auto
+  epochs: 4
+  amp: true
+  lr: 0.0001
+  weight_decay: 0.0001
+  loss: ce
+  scheduler: plateau
+  lr_patience: 1
+  gradient_clip_norm: 2.0
+  early_stopping_patience: 2
+
+notes:
+  - "All paper_repro configs are task-adapted reproductions under the current ankle CT binary dataset."
+
