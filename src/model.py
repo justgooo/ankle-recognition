@@ -476,6 +476,30 @@ class ViewFeatureRecalibration(nn.Module):
         return view_feature * gate
 
 
+class ReliabilityAffineCalibrator(nn.Module):
+    """Identity-initialized affine calibrator for per-view reliability logits."""
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        scale_limit: float = 0.25,
+        bias_limit: float = 0.25,
+    ) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(feature_dim)
+        self.proj = nn.Linear(feature_dim, 2)
+        self.scale_limit = float(scale_limit)
+        self.bias_limit = float(bias_limit)
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+
+    def forward(self, view_feature: torch.Tensor, raw_logit: torch.Tensor) -> torch.Tensor:
+        scale_delta, bias_delta = self.proj(self.norm(view_feature)).chunk(2, dim=-1)
+        scale = 1.0 + self.scale_limit * torch.tanh(scale_delta)
+        bias = self.bias_limit * torch.tanh(bias_delta)
+        return raw_logit * scale + bias
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -699,7 +723,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
         2. 每个视角先经过 baseline plain classifier，避免继续扰动 classifier path
         3. reliability estimation 分支保留轻量 residual cross-view attention，
-           并在 raw reliability logit 上叠加一个 gated residual adapter
+           再用 identity-init 的 affine calibrator 对 raw reliability logit 做小幅校准
         4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
     """
@@ -748,7 +772,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             residual_scale=0.125,
         )
         # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
-        # 再叠加零初始化的 gated residual adapter，尽量把初始语义保持在 baseline 附近。
+        # 再叠加 identity-init 的动态 affine calibrator，限制对融合权重的扰动幅度。
         self.confidence_heads = nn.ModuleList(
             [
                 nn.Sequential(
@@ -758,21 +782,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 for _ in range(3)
             ]
         )
-        self.confidence_adapters = nn.ModuleList(
+        self.confidence_calibrators = nn.ModuleList(
             [
-                nn.Sequential(
-                    nn.LayerNorm(self.feature_dim),
-                    nn.Linear(self.feature_dim, fusion_hidden_dim * 2),
-                    nn.GLU(dim=-1),
-                    nn.Dropout(dropout),
-                    nn.Linear(fusion_hidden_dim, 1),
+                ReliabilityAffineCalibrator(
+                    feature_dim=self.feature_dim,
+                    scale_limit=0.25,
+                    bias_limit=0.25,
                 )
                 for _ in range(3)
             ]
         )
-        for adapter in self.confidence_adapters:
-            nn.init.zeros_(adapter[-1].weight)
-            nn.init.zeros_(adapter[-1].bias)
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -800,13 +819,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dim=1,
         )  # (B, 3, 2)
 
-        # 第 4 步：baseline raw-logit VRG 头上叠加 gated residual adapter，
-        # 只给融合权重估计增加受控的乘性表达力。
+        # 第 4 步：baseline raw-logit VRG 头上叠加有界 affine calibration，
+        # 只允许 reliability 分支对融合权重做小幅缩放 / 平移修正。
         confidences = torch.stack(
             [
-                head(feature) + adapter(feature)
-                for head, adapter, feature in zip(
-                    self.confidence_heads, self.confidence_adapters, gating_features
+                calibrator(feature, head(feature))
+                for head, calibrator, feature in zip(
+                    self.confidence_heads, self.confidence_calibrators, gating_features
                 )
             ],
             dim=1,
