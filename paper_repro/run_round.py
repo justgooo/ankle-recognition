@@ -34,19 +34,39 @@ def main() -> None:
     gpu_ids = [gpu.strip() for gpu in args.gpu_ids.split(",") if gpu.strip()]
     if not gpu_ids:
         raise SystemExit("No GPU ids provided.")
+    visible_devices = [
+        item.strip()
+        for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
+        if item.strip()
+    ]
+
+    def resolve_gpu_id(requested_gpu_id: str) -> str:
+        if requested_gpu_id in visible_devices:
+            return requested_gpu_id
+        if requested_gpu_id.isdigit():
+            index = int(requested_gpu_id)
+            if 0 <= index < len(visible_devices):
+                return visible_devices[index]
+        return requested_gpu_id
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    print(f"Round={round_name} papers={paper_ids} gpu_ids={gpu_ids}")
+    resolved_gpu_ids = [resolve_gpu_id(gpu_id) for gpu_id in gpu_ids]
+    print(
+        f"Round={round_name} papers={paper_ids} requested_gpu_ids={gpu_ids} "
+        f"resolved_gpu_ids={resolved_gpu_ids} visible_devices={visible_devices}"
+    )
 
     active: list[tuple[str, str, subprocess.Popen[bytes], Path]] = []
     completed_configs: list[str] = []
 
-    def launch(paper_id: str, gpu_id: str) -> tuple[str, str, subprocess.Popen[bytes], Path]:
+    def launch(paper_id: str, requested_gpu_id: str) -> tuple[str, str, subprocess.Popen[bytes], Path]:
         config_path = REPO_ROOT / manifest["papers"][paper_id]["config"]
         log_path = LOG_DIR / f"{round_name}_{paper_id}_{timestamp}.log"
         env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = gpu_id
+        resolved_gpu_id = resolve_gpu_id(requested_gpu_id)
+        env["CUDA_VISIBLE_DEVICES"] = resolved_gpu_id
+        env["PYTHONUNBUFFERED"] = "1"
         command = [
             "timeout",
             str(args.timeout),
@@ -65,7 +85,10 @@ def main() -> None:
             stderr=subprocess.STDOUT,
         )
         process.log_handle = handle  # type: ignore[attr-defined]
-        print(f"launch {paper_id} on cuda:{gpu_id} -> {log_path}")
+        print(
+            f"launch {paper_id} requested_cuda={requested_gpu_id} "
+            f"resolved_cuda={resolved_gpu_id} -> {log_path}"
+        )
         return paper_id, str(config_path), process, log_path
 
     queue = paper_ids[:]
@@ -111,4 +134,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
