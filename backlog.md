@@ -18,13 +18,31 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | PAPER-REPRO-ROUND2-S2-D1-S4（在 compute node `node03` 的 Slurm job `426869` 上继续 paper reproduction side campaign；运行提交为 `ab80ea4`，沿用 `19e7c02` 的 GPU 映射修正，并把 `paper_repro/configs/base_proxy.yaml` 的 `num_workers=2` 正式作为 round2 起的默认设置。） |
-| 上次结果 | keep（round2 三并行全部 `exit=0`：`D1` `val_acc=0.7553191489361702`, `val_auc=0.8322727272727273`；`S2` `val_acc=0.7340425531914894`, `val_auc=0.8243181818181818`；`S4` `val_acc=0.7127659574468085`, `val_auc=0.7979545454545455`。本轮排序为 **`D1 > S2 > S4`**；其中 `D1` 是 round2 winner，但整个 paper reproduction side campaign 的 accuracy 最高点仍是 round1 的 `C3` `val_acc=0.7659574468085106`。） |
-| 下一步 | 主线仍固定在 **`resnext-decision`**，不再横向切 backbone；paper reproduction side campaign 则继续 **round3 = `R1` / `R4` / `D4`**。如果想提前收敛 paper lane 的 top contenders，当前应优先围绕 **`C3` vs `D1`** 这一对做解释和后续对照。 |
+| 上次实验 | PAPER-REPRO-ROUND3-R1-R4-D4（继续在 compute node `node03` 的 Slurm job `426869` 上运行；初始 round3 driver 使用提交 `a6af0d5` 启动，期间发现 `R4` 的 hard majority vote 实现不可导，于是补提交 `c1ded40` 把该分支改成 soft majority proxy，并在同一 job 内补跑 `R4`，最终完成 round3 全部三项复现。） |
+| 上次结果 | keep（round3 最终结果为：`D4` `val_acc=0.7659574468085106`, `val_auc=0.7868181818181819`；`R1` `val_acc=0.7340425531914894`, `val_auc=0.8709090909090910`；`R4` `val_acc=0.6702127659574468`, `val_auc=0.7386363636363636`。本轮排序为 **`D4 > R1 > R4`**，其中 `D4` 是 round3 winner；但放到整个 paper reproduction side campaign 里，`C3` 仍以同样的 `val_acc=0.7659574468085106`、更高的 `val_auc=0.8313636363636364` 保持总榜第一。） |
+| 下一步 | 主线仍固定在 **`resnext-decision`**，不再横向切 backbone；paper reproduction side campaign 继续 **round4 = `C1` / `S1` / `S3`**。如果 round4 没有明显超过 `C3`，则 paper lane 的阶段性结论会收敛到“多分支决策融合 `C3` 仍是总榜第一，`D4` 是 accuracy 并列第一但 AUC 较弱的替代路线”。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 14（按全局主线 `val_acc` 改善口径继续累计；这轮 backbone 终局赛完成了 canonical backbone 收束，但不直接刷新该历史计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
+
+---
+
+## 2026-04-20：Paper Reproduction Side Campaign（round3 / 4）
+
+> **独立 side campaign 说明**
+> - 这是 paper reproduction 的第三轮三并行论文结构复现，对象为 `R1`, `R4`, `D4`。
+> - round3 继续在 compute node `node03` 的 Slurm job `426869` 内运行；driver 初始仍正确解析：
+>   - `requested_gpu_ids=['0','1','2']`
+>   - `resolved_gpu_ids=['5','6','7']`
+> - 其中 `R4` 的第一次启动在训练入口很早期就 crash：`DenseVoteUNetClassifier(aggregation='majority')` 使用 `(positive_map > 0.5).float()` 作为 majority vote，导致计算图在分类分数处断掉，`loss.backward()` 报 `element 0 of tensors does not require grad`。该问题已用提交 `c1ded40` 修正为可导的 soft-majority proxy，并在同一 Slurm job 内补跑 `R4`，最终 round3 三项都拿到有效 `summary.json`。
+
+- [x] **PAPER-REPRO-R3-R1-FRACNET-WEAK**：`paper_repro/configs/r1_fracnet_weak.yaml` → `val_acc=0.7340425531914894`, `val_auc=0.8709090909090910`, `val_f1=0.6031746031746031`, `peak_vram≈1.6 GiB`, `total_seconds≈512.5` → **discard（本轮内部对照）**。top-k dense anomaly aggregation 的 ranking 质量很好，AUC 是本轮最高，但 fixed-threshold accuracy 仍低于 `D4`。
+- [x] **PAPER-REPRO-R3-R4-DENSE-VOTE**：`paper_repro/configs/r4_dense_vote.yaml` → 首次运行 crash（不可导的 hard majority vote）；修复后补跑得到 `val_acc=0.6702127659574468`, `val_auc=0.7386363636363636`, `val_f1=0.5974025974025974`, `peak_vram≈1.6 GiB`, `total_seconds≈661.9` → **discard（本轮内部对照）**。纯 dense vote / majority aggregation 在当前任务上过于粗糙，既没有拿到高 accuracy，也没有保住 R1 的 AUC 优势。
+- [x] **PAPER-REPRO-R3-D4-HYBRID-25D-3D**：`paper_repro/configs/d4_hybrid_25d_3d.yaml` → `val_acc=0.7659574468085106`, `val_auc=0.7868181818181819`, `val_f1=0.6666666666666666`, `peak_vram≈2.6 GiB`, `total_seconds≈490.7` → **keep（本轮 side-campaign winner）**。2.5D + 3D ensemble 直接把 accuracy 拉到与 `C3` 并列的全 campaign 最高点，说明混合尺度聚合路线有真实价值。
+- **本轮结论**：round3 排序明确为 `D4 > R1 > R4`。`D4` 在 accuracy 上追平了 round1 winner `C3`，但 AUC 低 `0.0445454545454545`；`R1` 则给出了比 `D4` 更高的 AUC，却没能把 threshold accuracy 拉上去。因此当前 paper reproduction 的 top tier 变成 **`C3` 与 `D4`**，而 `R1` 更像一个“排序强、阈值弱”的 dense baseline。
+- **工程结论**：这轮首次暴露出“论文语义正确但训练图不可导”的复现问题。对 segmentation-style vote aggregation 来说，训练态不能直接用硬阈值 majority；后续凡是类似 branch，都应优先用 soft proxy，再把 hard vote 仅保留给推理或解释阶段。
+- **推荐动作**：继续执行 **round4 = `C1`, `S1`, `S3`**。如果 round4 也没有超过 `C3` 的 AUC tie-break，则 paper lane 可以收束为：`C3` 是当前最稳的总冠军，`D4` 是 accuracy 并列冠军但 ranking 质量偏弱，`D1/R1` 作为各自子范式下的次优参考。
 
 ---
 
