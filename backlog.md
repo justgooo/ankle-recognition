@@ -18,9 +18,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | PAPER-REPRO-ROUND3-R1-R4-D4（继续在 compute node `node03` 的 Slurm job `426869` 上运行；初始 round3 driver 使用提交 `a6af0d5` 启动，期间发现 `R4` 的 hard majority vote 实现不可导，于是补提交 `c1ded40` 把该分支改成 soft majority proxy，并在同一 job 内补跑 `R4`，最终完成 round3 全部三项复现。） |
-| 上次结果 | keep（round3 最终结果为：`D4` `val_acc=0.7659574468085106`, `val_auc=0.7868181818181819`；`R1` `val_acc=0.7340425531914894`, `val_auc=0.8709090909090910`；`R4` `val_acc=0.6702127659574468`, `val_auc=0.7386363636363636`。本轮排序为 **`D4 > R1 > R4`**，其中 `D4` 是 round3 winner；但放到整个 paper reproduction side campaign 里，`C3` 仍以同样的 `val_acc=0.7659574468085106`、更高的 `val_auc=0.8313636363636364` 保持总榜第一。） |
-| 下一步 | 主线仍固定在 **`resnext-decision`**，不再横向切 backbone；paper reproduction side campaign 继续 **round4 = `C1` / `S1` / `S3`**。如果 round4 没有明显超过 `C3`，则 paper lane 的阶段性结论会收敛到“多分支决策融合 `C3` 仍是总榜第一，`D4` 是 accuracy 并列第一但 AUC 较弱的替代路线”。 |
+| 上次实验 | PAPER-REPRO-ROUND4-C1-S1-S3（继续在 compute node `node03` 的 Slurm job `426869` 上运行，使用提交 `4f0e473` 启动 `round4 = C1 / S1 / S3`；三并行全部 `exit=0`，并完成 paper reproduction 的第 `4/4` 轮收官。） |
+| 上次结果 | keep（round4 结果为：`S1` `val_acc=0.8085106382978723`, `val_auc=0.9059090909090910`；`C1` `val_acc=0.7021276595744681`, `val_auc=0.8454545454545455`；`S3` `val_acc=0.6808510638297872`, `val_auc=0.7793181818181818`。本轮排序为 **`S1 > C1 > S3`**；更重要的是，`S1` 直接成为整个 paper reproduction side campaign 的新总冠军，明显超过此前的 `C3` / `D4`。） |
+| 下一步 | paper reproduction 的 **`12/12` 个论文复现已全部完成**。如果继续这个 side campaign，下一步不再是“补未完成模型”，而是做固定配方 confirmation / 对照汇总：优先 **`S1` vs `C3` vs `D4`**。主线则仍固定在 **`resnext-decision`**，不再横向切 backbone。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 14（按全局主线 `val_acc` 改善口径继续累计；这轮 backbone 终局赛完成了 canonical backbone 收束，但不直接刷新该历史计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
@@ -43,6 +43,29 @@
 - **本轮结论**：round3 排序明确为 `D4 > R1 > R4`。`D4` 在 accuracy 上追平了 round1 winner `C3`，但 AUC 低 `0.0445454545454545`；`R1` 则给出了比 `D4` 更高的 AUC，却没能把 threshold accuracy 拉上去。因此当前 paper reproduction 的 top tier 变成 **`C3` 与 `D4`**，而 `R1` 更像一个“排序强、阈值弱”的 dense baseline。
 - **工程结论**：这轮首次暴露出“论文语义正确但训练图不可导”的复现问题。对 segmentation-style vote aggregation 来说，训练态不能直接用硬阈值 majority；后续凡是类似 branch，都应优先用 soft proxy，再把 hard vote 仅保留给推理或解释阶段。
 - **推荐动作**：继续执行 **round4 = `C1`, `S1`, `S3`**。如果 round4 也没有超过 `C3` 的 AUC tie-break，则 paper lane 可以收束为：`C3` 是当前最稳的总冠军，`D4` 是 accuracy 并列冠军但 ranking 质量偏弱，`D1/R1` 作为各自子范式下的次优参考。
+
+---
+
+## 2026-04-20：Paper Reproduction Side Campaign（round4 / 4）
+
+> **独立 side campaign 说明**
+> - 这是 paper reproduction 的最后一轮三并行论文结构复现，对象为 `C1`, `S1`, `S3`。
+> - round4 继续在 compute node `node03` 的 Slurm job `426869` 内运行；driver 日志再次确认：
+>   - `requested_gpu_ids=['0','1','2']`
+>   - `resolved_gpu_ids=['5','6','7']`
+>   - 三个 config 全部 `exit=0`
+> - 这一轮没有再出现 round3 那样的训练态 bug，三条都一次完成。
+
+- [x] **PAPER-REPRO-R4-C1-XFMAMBA-LITE**：`paper_repro/configs/c1_xfmamba_lite.yaml` → `val_acc=0.7021276595744681`, `val_auc=0.8454545454545455`, `val_f1=0.5483870967741935`, `peak_vram≈1.9 GiB` → **discard（本轮内部对照）**。轻量 cross-view fusion baseline 有一定表达力，但没有追上当前第一梯队。
+- [x] **PAPER-REPRO-R4-S1-3D-EFFICIENT**：`paper_repro/configs/s1_3d_efficient.yaml` → `val_acc=0.8085106382978723`, `val_auc=0.9059090909090910`, `val_f1=0.7631578947368421`, `peak_vram≈2.2 GiB` → **keep（本轮 winner，同时是全 paper campaign 总冠军）**。这条 3D EfficientNet-like tri-view classifier 不只是赢了 round4，而是把整个 paper reproduction lane 的 accuracy 和 AUC 都抬到了新高。
+- [x] **PAPER-REPRO-R4-S3-ANATOMY-PROTOTYPE**：`paper_repro/configs/s3_anatomy_prototype.yaml` → `val_acc=0.6808510638297872`, `val_auc=0.7793181818181818`, `val_f1=0.6808510638297872`, `peak_vram≈0.4 GiB` → **discard（本轮内部对照）**。prototype head 很轻，但当前二分类任务上判别力不够。
+- **本轮结论**：round4 排序明确为 `S1 > C1 > S3`。`S1` 的 `val_acc` 比此前总榜第一 `C3` 高 `0.0425531914893617`，`val_auc` 也高 `0.0745454545454546`，因此不存在 tie-break 歧义，直接成为新的总冠军。
+- **全 campaign 收官结论**：paper reproduction side campaign 的 `12/12` 个论文结构复现现已全部完成。最终第一梯队为：
+  - **`S1`**：总冠军，`val_acc=0.8085106382978723`, `val_auc=0.9059090909090910`
+  - **`C3`**：次优，`val_acc=0.7659574468085106`, `val_auc=0.8313636363636364`
+  - **`D4`**：与 `C3` 并列 accuracy 第二，但 `val_auc=0.7868181818181819`，因此排在其后
+- **范式层解释**：在这套统一数据和统一 proxy budget 下，最强的不是 snapshot、prototype 或 dense vote，而是 **真正的 3D tri-view classifier（`S1`）**。其次才是多分支决策融合（`C3`）和混合 2.5D+3D ensemble（`D4`）。这说明当前任务最受益的，是能直接利用跨切片 3D 空间结构的模型，而不是更复杂的后融合启发式。
+- **推荐动作**：如果继续 paper lane，下一步不再补“未完成论文”，而应做 **`S1 / C3 / D4` 的 fixed-config confirmation**，并导出最终横向对照表，为后续写作或主线借鉴提供稳定证据。
 
 ---
 
@@ -123,6 +146,7 @@
 |------|---:|-------------|------|------|
 | **主线 canonical mean val_acc** | **0.8581560283687942** | `5b286a7` | `configs/cmp_backbone_decision_resnext_512x16_e20_{s42,s123,s456}.yaml` | matched 3-seed backbone final winner；相对 `cspnet-decision` mean `val_acc` 高 `0.0106382978723404` |
 | **主线 canonical mean val_auc** | **0.9119696969696971** | `5b286a7` | 同上 | 与上行同一 matched final；相对 `cspnet-decision` mean `val_auc` 高 `0.0189393939393940` |
+| **paper reproduction best val_acc** | **0.8085106382978723** | `4f0e473` | `paper_repro/configs/s1_3d_efficient.yaml` | paper reproduction `12/12` 收官总冠军；同时也是该 side campaign 的最高 `val_auc=0.9059090909090910` |
 | fusion 控制变量参考 | 0.851063829787234 | `5b286a7` | `configs/cmp_decision_equal_cspnet_equal_512x16_e20_s42.yaml` | fixed equal-weight 在 matched cspnet 对照里与 learned weighting 持平 accuracy，并以 `val_auc=0.9163636363636364` 胜出 |
 | 全局单次 val_acc 峰值 | 0.893617021276596 | `1695ece` | `configs/cmp_fair_v100_decision_formal_cspnet.yaml` | 历史公平对比单次峰值（`256x8 / 15 epochs`），不是当前 canonical backbone |
 | 历史 proxy winner | 0.8829787234042553 | `a60c3e0` | `configs/autoresearch_proxy.yaml` + fresh proxy study trial 0 | 旧 canonical proxy 参考；不再覆盖当前 backbone 锁定 |

@@ -253,3 +253,6 @@ paperrepro-D1-corr	0.755319148936170	0.832272727272727	0.676056338028169	2.0	kee
 paperrepro-R1	0.734042553191489	0.870909090909091	0.603174603174603	1.6	discard	proxy	R1 3D U-Net top-k dense anomaly aggregation
 paperrepro-D4	0.765957446808511	0.786818181818182	0.666666666666667	2.6	keep	proxy	D4 2.5D and 3D ensemble
 paperrepro-R4	0.670212765957447	0.738636363636364	0.597402597402597	1.6	discard	proxy	R4 3D dense vote / majority aggregation (retry after soft-majority gradient fix)
+paperrepro-C1	0.702127659574468	0.845454545454545	0.548387096774194	1.9	discard	proxy	C1 XFMamba-lite cross-view fusion baseline
+paperrepro-S1	0.808510638297872	0.905909090909091	0.763157894736842	2.2	keep	proxy	S1 3D EfficientNet-like tri-view classifier
+paperrepro-S3	0.680851063829787	0.779318181818182	0.680851063829787	0.4	discard	proxy	S3 anatomy-aware prototype head
