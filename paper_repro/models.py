@@ -622,6 +622,7 @@ class DenseVoteUNetClassifier(nn.Module):
         super().__init__()
         self.unet = SimpleUNet3D()
         self.aggregation = aggregation
+        self.majority_temperature = 12.0
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         view_logits = []
@@ -634,7 +635,8 @@ class DenseVoteUNetClassifier(nn.Module):
                 topk = max(1, flat.shape[1] // 20)
                 score = flat.topk(topk, dim=1).values.mean(dim=1)
             elif self.aggregation == "majority":
-                score = (positive_map > 0.5).float().mean(dim=(1, 2, 3))
+                # Use a differentiable proxy for majority voting so the dense head keeps gradient flow.
+                score = torch.sigmoid((positive_map - 0.5) * self.majority_temperature).mean(dim=(1, 2, 3))
             else:
                 score = positive_map.mean(dim=(1, 2, 3))
             view_logits.append(torch.stack([1.0 - score, score], dim=1))
