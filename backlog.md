@@ -12,24 +12,73 @@
 
 ---
 
+## 2026-04-21：7ae19a0 原配方 Equal-Weight 3-seed 对照（V100q node20）
+
+> **独立 campaign 说明**
+> - 这是按人类最新要求补做的 **1 次 matched equal-weight 3-seed control**：以上一轮 `7ae19a0` 的 `ResNeXt + learned decision fusion` 稳定性校验为基线，只替换融合权重机制为固定等加权（每个视角 `1/3`），继续跑 `seed=42/123/456`。
+> - 为保持 `7ae19a0` 代码路径尽量原样，执行层仍使用 detached worktree；这次 worktree HEAD 为 `1b84e85`，它是从 `7ae19a0` 出发打的最小补丁：仅给 `MultiViewDecisionFusionClassifier` 和 `train.py` 增加 `equal_weight_fusion=true` 开关。`equal_weight_fusion=false` 时行为与上一轮 learned rerun 一致。
+> - 配方保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`image_size=256`、`num_slices_per_view=8`、`trim_edge_slices=2`、`batch_size=6`、`num_workers=12`、`epochs=15`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=5e-4`、`dropout=0.25`、`gradient_clip_norm=2.0`；唯一实验变量是 `model.equal_weight_fusion=true`。
+> - Slurm batch 为 `428936`：`V100q` 的 `node20`，`1 node / 3 GPU / 36 CPU / 120G / 3h`；job 内 `CUDA_VISIBLE_DEVICES=0,1,2`，PyTorch 实测可见 `3` 张 `Tesla V100-PCIE-32GB`；三个 `srun` step `428936.0/.1/.2` 全部 `COMPLETED`。
+
+- [x] **CMP-7AE19A0-RESNEXT-EQUAL-256X8-S42**：在 detached `1b84e85` worktree 中对原 formal 配方仅替换 `equal_weight_fusion=true`、`seed=42` / 独立 `output_dir` 运行 → `val_acc=0.9361702127659575`, `val_auc=0.9459090909090909`, `val_f1=0.9302325581395349`, `peak_vram≈2.14 GiB`, `total_seconds≈907.1` → **keep**（相较上一轮 learned-weighting 同 seed `0.9148936170212766 / 0.9522727272727273`，accuracy 提升 `0.0212765957446809`，AUC 小回落 `0.0063636363636364`；主指标仍明显占优。）
+- [x] **CMP-7AE19A0-RESNEXT-EQUAL-256X8-S123**：在 detached `1b84e85` worktree 中对原 formal 配方仅替换 `equal_weight_fusion=true`、`seed=123` / 独立 `output_dir` 运行 → `val_acc=0.9468085106382979`, `val_auc=0.9759090909090908`, `val_f1=0.9397590361445783`, `peak_vram≈2.14 GiB`, `total_seconds≈899.6` → **keep**（相较 learned-weighting 同 seed `0.8617021276595744 / 0.9004545454545455`，accuracy / AUC 分别提升 `0.0851063829787235 / 0.0754545454545453`；直接把上一轮最大低点翻成了全组最高点。）
+- [x] **CMP-7AE19A0-RESNEXT-EQUAL-256X8-S456**：在 detached `1b84e85` worktree 中对原 formal 配方仅替换 `equal_weight_fusion=true`、`seed=456` / 独立 `output_dir` 运行 → `val_acc=0.9255319148936170`, `val_auc=0.9750000000000001`, `val_f1=0.9230769230769231`, `peak_vram≈2.14 GiB`, `total_seconds≈901.1` → **keep**（与 learned-weighting 同 seed 的 accuracy `0.9255319148936170` 打平，但 AUC 再升 `0.0090909090909092`。）
+- **3-seed mean 对比**：equal-weight 的 mean `val_acc=0.9361702127659575`、mean `val_auc=0.9656060606060606`、mean `val_f1=0.9310228391203455`；learned weighting 的 mean 分别是 `0.9007092198581560 / 0.9395454545454547 / 0.8912655971479500`。equal-weight 相对 learned 的 mean 增益是 `+0.0354609929078015 val_acc`、`+0.0260606060606059 val_auc`、`+0.0397572419723954 val_f1`。
+- **稳定性对比**：equal-weight 的 `val_acc` population std 只有 `0.0086861338396570`，明显低于 learned weighting 的 `0.0279220137376310`；equal-weight 三个 seed 的范围是 `0.9255319148936170 -> 0.9468085106382979`，再也没有 learned 版那种 `0.8617` 级别的低点。
+- **legacy reference 结论**：对 `7ae19a0` 这条 `256x8` ResNeXt 线，问题看起来不在 backbone / geometry，而更像是 **learned view weighting 本身引入了额外方差并伤害了主指标**。固定 equal-weight 后，不仅 3-seed mean 明显优于上一轮 learned rerun，连 mean `val_acc=0.9361702127659575` / mean `val_auc=0.9656060606060606` 也已经超过了原始单次 anchor `0.9255319148936170 / 0.9640909090909091`。
+- **推荐动作**：如果后续还要把 `7ae19a0` 当 legacy 对照，默认应引用这次 **equal-weight 3-seed mean `0.936170 / 0.965606`**，而不是上一轮 learned-weighting 的 `0.900709 / 0.939545`，更不是单次 anchor `0.925532 / 0.964091`。如果要继续把这条 recipe 往 `512x16` 放大，也应优先从 equal-weight 版本出发，再判断 learned weighting 是否值得加回去。
+
+## 2026-04-21：7ae19a0 原配方 3-seed 稳定性校验（V100q node20）
+
+> **独立 campaign 说明**
+> - 这是按人类明确要求补做的 **1 次 3-seed stability check**：申请 `3` 张 GPU，对 commit `7ae19a0` 的原始 `ResNeXt + decision fusion` formal 配方做 `seed=42/123/456` 并行复验。
+> - 原始 recipe 保持不变：`backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`image_size=256`、`num_slices_per_view=8`、`trim_edge_slices=2`、`batch_size=6`、`num_workers=12`、`epochs=15`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=5e-4`、`dropout=0.25`、`gradient_clip_norm=2.0`。
+> - 执行层走 detached worktree `7ae19a0` + Slurm batch `428934`：`V100q` 的 `node20`，`1 node / 3 GPU / 36 CPU / 120G / 3h`；job 内 `CUDA_VISIBLE_DEVICES=0,1,2`，PyTorch 实测可见 `3` 张 `Tesla V100-PCIE-32GB`。
+> - 首次 batch `428932` 在 epoch 1 因 detached worktree 不含 untracked NIfTI 数据树而触发 `FileNotFoundError`；rerun `428934` 仅把临时 seed config 的 `csv_path/base_dir` 指回 canonical data root，模型与训练超参未变，因此有效结论只取 `428934`。
+
+- [x] **CMP-7AE19A0-RESNEXT-DECISION-256X8-S42**：在 detached `7ae19a0` worktree 中对原 formal 配方仅替换 `seed=42` / 独立 `output_dir` 运行 → `val_acc=0.9148936170212766`, `val_auc=0.9522727272727272`, `val_f1=0.9090909090909091`, `peak_vram≈2.17 GiB`, `total_seconds≈891.4` → **discard**（相较原 anchor `0.925531914893617 / 0.9640909090909091`，accuracy / AUC 分别回落 `0.0106382978723404 / 0.0118181818181819`。）
+- [x] **CMP-7AE19A0-RESNEXT-DECISION-256X8-S123**：在 detached `7ae19a0` worktree 中对原 formal 配方仅替换 `seed=123` / 独立 `output_dir` 运行 → `val_acc=0.8617021276595744`, `val_auc=0.9004545454545455`, `val_f1=0.8470588235294118`, `peak_vram≈2.17 GiB`, `total_seconds≈902.4` → **discard**（相较原 anchor `0.925531914893617 / 0.9640909090909091`，accuracy / AUC 分别回落 `0.0638297872340426 / 0.0636363636363636`。）
+- [x] **CMP-7AE19A0-RESNEXT-DECISION-256X8-S456**：在 detached `7ae19a0` worktree 中对原 formal 配方仅替换 `seed=456` / 独立 `output_dir` 运行 → `val_acc=0.9255319148936170`, `val_auc=0.9659090909090909`, `val_f1=0.9176470588235294`, `peak_vram≈2.17 GiB`, `total_seconds≈903.1` → **discard**（accuracy 与原 anchor 持平，AUC 反而微升 `0.0018181818181818`，说明高点不是完全不可复现。）
+- **3-seed mean**：`mean val_acc=0.9007092198581560`, `mean val_auc=0.9395454545454547`, `mean val_f1=0.8912655971479500`；`val_acc` 的 population std 为 `0.0279220137376310`，范围为 `0.8617021276595744 -> 0.9255319148936170`。
+- **稳定性结论**：`7ae19a0` 这条 `256x8` legacy decision-fusion 配方并非完全不可复现，因为 `seed=42/456` 都能达到 `0.9149+`，其中 `seed=456` 甚至把 AUC 微幅抬到 `0.9659`。但它也明显**不是稳定的 `0.9255` 档位**：`seed=123` 会跌到 `0.8617 / 0.9005`，导致 3-seed mean 相较原单次 anchor 仍低 `0.0248226950354610 / 0.0245454545454544`。更准确的解读是：这是一个 **high-ceiling but high-variance** 的 legacy 点，而不是可以直接当 deterministic baseline 的稳定 recipe。
+- **推荐动作**：如果后续还要引用 `7ae19a0` 作为 legacy reference，优先使用这次 3-seed mean `0.900709 / 0.939545`，不要再把单次 `0.925532 / 0.964091` 直接当作“稳定基准”；若继续 `512x16` 线，也仍不应直接 transplant 这套旧标量。
+
+---
+
+## 2026-04-21：ResNeXt Decision Direct Geometry Scale-Up（7ae19a0 anchor → 512x16，RTXA6Kq node11）
+
+> **独立 campaign 说明**
+> - 这是按人类明确要求补做的 **1 次 direct formal confirmation**：把 `7ae19a0` 的单次峰值 recipe 从 `256x8` 直接放大到 `512x16`，除几何外不改其它标量。
+> - 保持 `backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`batch_size=6`、`num_workers=12`、`epochs=15`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=5e-4`、`dropout=0.25`、`gradient_clip_norm=2.0` 不变。
+> - 唯一几何改动是：`image_size 256 -> 512`、`num_slices_per_view 8 -> 16`，并保留 `trim_edge_slices=2`。
+> - 执行层走 Slurm 单卡 formal：`RTXA6Kq` 作业 `428923`，`node11`，`1 node / 1 GPU / 12 CPU / 64G / 4h`；job 内 `CUDA_VISIBLE_DEVICES=2`，PyTorch 实测可见 `1` 张 `NVIDIA RTX A6000`。
+
+- [x] **CMP-RESNEXT-DECISION-CONFIRM-7AE19A0-512X16-B6-NW12**：`configs/cmp_resnext_decision_confirm_7ae19a0_512x16_b6_nw12.yaml` → `val_acc=0.8404255319148937`, `val_auc=0.9136363636363636`, `val_f1=0.8148148148148148`, `peak_vram≈12.67 GiB`, `total_seconds≈1609.9` → **discard**（这次 direct geometry transplant 虽然在 `batch_size=6` 下稳定跑通，但相较 `7ae19a0` 的 `256x8` anchor `0.925531914893617 / 0.9640909090909091`，accuracy / AUC 分别回落 `0.0851063829787233 / 0.0504545454545455`，说明原 256x8 峰值标量不能直接原样放大到 `512x16`。）
+- **本轮结论**：`resnext + decision fusion` 这套 `7ae19a0` 标量配方在 `512x16` 下没有复现原本的强度；即使显存足够、吞吐正常，最终 best 也只到 `0.8404 / 0.9136`。这更像是一个**几何迁移失败**信号，而不是执行层问题。
+- **推荐动作**：如果后续还要继续这条 `512x16 + full decision-fusion` 线，不要再直接沿用 `256x8` 的固定标量；至少要围绕当前 `batch_size=6` 可运行前提重新搜 `lr / wd / dropout / clip`，或者只把它当成与 `minimal learned` / `attention pooling` 方案做 matched 对照的 reference baseline。
+
+---
+
 ## 2026-04-20：ResNeXt AttentionPooling Equal-vs-Learned Control（seeds=42/123/456，node20 V100q）
 
 > **独立 campaign 说明**
 > - 这是按人类最新要求补做的 `resnext + attention pooling` 下的 matched 3-seed fusion control：
 >   直接比较 learned decision fusion 与 fixed equal-weight。
 > - 所有配置保持 `backbone=resnext`、`fusion_type=decision`、`use_attention_pooling=true`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=3`、`freeze_layers=3`、`dropout=0.3`、`epochs=20`、`lr=1e-4`、`weight_decay=1e-4` 不变。
-> - 执行层复用了 `V100q` 的 `node20` allocation `427995`：`1 node / 3 GPU / 15 CPU / 96G / 24h`，节点上无其他用户作业。
+> - 执行层复用了 `V100q` 的 `node20` allocation `428450`：`1 node / 3 GPU / 15 CPU / 96G / 24h`，节点上无其他用户作业。
 
-- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S42**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s42.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
-- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S42**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s42.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
-- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S123**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s123.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
-- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S123**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s123.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
-- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S456**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s456.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
-- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S456**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s456.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
-- **3-seed mean 对比**：learned 的 mean `val_acc=0.0000000000000000`，equal-weight 的 mean `val_acc=0.0000000000000000`；learned 的 mean `val_auc=0.0000000000000000`，equal-weight 的 mean `val_auc=0.0000000000000000`。
-- **控制变量结论**：在 `resnext + attention pooling` 的 3-seed matched 对照里，learned 与 equal-weight 的 mean `val_acc` 完全打平，均为 `0.0000000000000000`；tie-break 看 mean `val_auc`，learned=`0.0000000000000000`，equal=`0.0000000000000000`。 两者的 mean `val_auc` 也打平在 `0.0000000000000000`。
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S42**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s42.yaml` → `val_acc=0.8723404255319149`, `val_auc=0.8586363636363638`, `val_f1=0.8571428571428571`, `peak_vram≈4.67 GiB`, `total_seconds≈3523.4` → **keep**（在 matched 对照里胜出。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S42**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s42.yaml` → `val_acc=0.8085106382978723`, `val_auc=0.9027272727272728`, `val_f1=0.7631578947368421`, `peak_vram≈4.65 GiB`, `total_seconds≈3523.6` → **discard**（在 matched 对照里落后于另一种 weighting。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S123**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s123.yaml` → `val_acc=0.8510638297872340`, `val_auc=0.8950000000000001`, `val_f1=0.8157894736842105`, `peak_vram≈4.67 GiB`, `total_seconds≈3546.0` → **discard**（在 matched 对照里落后于另一种 weighting。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S123**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s123.yaml` → `val_acc=0.9042553191489362`, `val_auc=0.9204545454545454`, `val_f1=0.8965517241379310`, `peak_vram≈4.65 GiB`, `total_seconds≈3526.5` → **keep**（在 matched 对照里胜出。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S456**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s456.yaml` → `val_acc=0.8404255319148937`, `val_auc=0.9090909090909091`, `val_f1=0.8275862068965517`, `peak_vram≈4.67 GiB`, `total_seconds≈3532.1` → **keep**（在 matched 对照里胜出。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S456**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s456.yaml` → `val_acc=0.8297872340425532`, `val_auc=0.8677272727272728`, `val_f1=0.8048780487804879`, `peak_vram≈4.65 GiB`, `total_seconds≈3526.7` → **discard**（在 matched 对照里落后于另一种 weighting。）
+- **3-seed mean 对比**：learned 的 mean `val_acc=0.8546099290780141`，equal-weight 的 mean `val_acc=0.8475177304964538`；learned 的 mean `val_auc=0.8875757575757577`，equal-weight 的 mean `val_auc=0.8969696969696970`。
+- **控制变量结论**：在 `resnext + attention pooling` 的 3-seed matched 对照里，**learned weighting** 的 mean `val_acc=0.8546099290780141`，高于 equal-weight 的 `0.8475177304964538`，净提升 `0.0070921985815603`。 同时 learned 的 mean `val_auc=0.8875757575757577`，低于 equal-weight 的 `0.8969696969696970`。
 
 ---
+
+
 
 ## 2026-04-20：人类方向改动（主线改成探索 ResNeXt 融合策略）
 
@@ -68,11 +117,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | PAPER-REPRO-C3-OFFLINE-FUSION-RERUN（V100q `node20` 的独占作业 `427995`；`1 node / 3 GPU / 15 CPU / 96G / 24h`，实际使用 `CUDA_VISIBLE_DEVICES=0` 单卡完成 `paper_repro/configs/c3_decision_fusion.yaml` 的 closer-to-paper 离线三专家补跑，并在结束后重导 `round1` 与 `all` 总表。） |
-| 上次结果 | keep（`C3` 新版离线融合结果为 `val_acc=0.7553191489361702`, `val_auc=0.8490909090909090`, `val_f1=0.6849315068493150`, `peak_vram≈0.5 GiB`；仍是 corrected round1 winner。相对旧 joint-like proxy 版，`val_acc` 下降 `0.0106382978723404`，但 `val_auc` 提升 `0.0177272727272726`。纠偏后的 paper 总榜前三现为 `D4 > S1 > C3`。） |
-| 下一步 | paper reproduction 的 corrected leaderboard 已收口，后续若继续 paper lane，不再补跑未完成项；如回主线，则恢复到 `resnext` 融合策略主线，优先处理 attention-pooling / learned reliability path 的不稳定来源。 |
+| 上次实验 | CMP-7AE19A0-RESNEXT-EQUAL-256X8-3SEED-CONTROL（V100q node20 job 428936；1 node / 3 GPU / 36 CPU / 120G / 3h；在 detached worktree `1b84e85` 中以 `7ae19a0` 为底座，仅新增 `equal_weight_fusion=true` 控制开关，对原始 `256x8` ResNeXt formal 配方做 `seed=42/123/456` 并行复验。） |
+| 上次结果 | keep（equal-weight 的 `mean val_acc=0.936170`, `mean val_auc=0.965606`, `mean val_f1=0.931023`；相对上一轮 learned-weighting 的 `0.900709 / 0.939545 / 0.891266` 提升 `0.035461 / 0.026061 / 0.039757`，且 `val_acc` std 从 `0.027922` 降到 `0.008686`。） |
+| 下一步 | canonical 主线改为先做 matched **模块贡献分析**：优先拆清当前 decision-fusion / weighting 路径里 `equal-weight`、`minimal learned`、`current learned` 以及 reliability-path richer module 的净贡献；只有模块级证据明确后，才进入“自动优化 weighting 比例”阶段。legacy `7ae19a0` 若再被引用，仍默认使用 equal-weight 3-seed mean `0.936170 / 0.965606`。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 14（按全局主线 `val_acc` 改善口径继续累计；这轮 backbone 终局赛完成了 canonical backbone 收束，但不直接刷新该历史计数。） |
+| 连续 discard 计数 | 16（按 canonical `512x16 / 当前主线` 口径保持不变；这轮 equal-weight legacy control 虽然明确胜出，但属于用户指定的 `7ae19a0` side campaign，不作为主线 discard 计数清零条件。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -928,15 +977,26 @@
 > - `val_acc` 持平：比较 `val_auc`
 > - 二者仍持平：优先更简单的配置 / 代码路径
 >
+> **2026-04-21 主线追加约束**
+> - canonical 主线下一阶段不再先做更激进的 weighting-ratio / gating 优化
+> - 必须先完成一轮 matched **模块贡献分析**，回答“当前 decision-fusion 路径里到底是哪一层在提供净收益，哪一层在引入方差”
+> - 模块分析至少优先覆盖：`equal-weight` 控制、`minimal learned` 路径、`current learned` 路径；必要时再继续拆 richer reliability path
+> - 只有当模块分析显示 learned weighting 某一子路径确有正贡献时，才允许继续做训练中自动优化 weighting 比例
+>
 > **执行顺序**
-> 1. 跑 1 次 `configs/autoresearch_proxy.yaml`，重新确立当前主线 `val_acc` 基线
-> 2. 如 baseline 正常，再启动 fresh proxy Optuna study（不得混入旧 trial）
+> 1. 先围绕 canonical `decision fusion` 做 matched 模块贡献分析，优先比较 `equal-weight / minimal learned / current learned`
+> 2. 对模块分析中有净收益的路径，再启动 fresh Optuna study 做超参搜索或轻量结构细化
 > 3. 由 `monitor_optuna.py` 汇总 best trial、warning、degraded trial 与建议
-> 4. proxy winner 明显更优后，再做 main/formal 确认
+> 4. candidate winner 明显更优后，再做 main/formal 确认
 >
 > **说明**
 > - 历史 `VR-01 ~ VR-16`、`no_miss_*`、`192x16` 记录保留供回顾，但不再作为当前主线的直接 comparator
 > - 若需要复盘旧阶段，请显式标注为 legacy campaign
+
+### 2026-04-21：Canonical Mainline 研究顺序重排（模块贡献优先）
+
+- [ ] **MAIN-MODULE-CONTRIB-01**：对当前 canonical `ResUNet + AttentionPooling + decision fusion` 主线做 matched 模块贡献分析，先回答 `equal-weight`、`minimal learned`、`current learned` 三档的净贡献与方差差异，再决定是否继续拆 richer reliability module。
+- [ ] **MAIN-WEIGHT-OPT-01**：仅在 `MAIN-MODULE-CONTRIB-01` 给出明确正信号后，才进入训练中自动优化 weighting 比例；若模块分析未显示净收益，则维持更简单的 weighting baseline，不把“更复杂 gating”当默认方向。
 
 ### 2026-04-13：一轮基线校准 + capped fresh proxy Optuna + formal confirmation
 
