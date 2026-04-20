@@ -205,7 +205,7 @@ def ensure_visible_gpus(
             "import sys, torch; "
             "count=torch.cuda.device_count(); "
             "print(f'visible_gpus={count}'); "
-            f"assert count >= {max_parallel}, f'Need at least {max_parallel} visible GPUs, got {count}'; "
+            f"assert count >= {max_parallel}, f'Need at least {max_parallel} visible GPUs, got {{count}}'; "
             "free_gb=[]; "
             "[free_gb.append(torch.cuda.mem_get_info(i)[0]/1024**3) or "
             "print(f'gpu{i}_free_gb={free_gb[-1]:.2f}') for i in range(count)]; "
