@@ -40,6 +40,7 @@ from .attention_pooling import AttentionPooling  # 可学习注意力池化模�
 # 设为 0 表示不冻结（原始行为），设为 3 表示只训练 layer4 + 分类头。
 # autoresearch Agent 通过修改此常量来实验不同冻结策略。
 DEFAULT_FREEZE_LAYERS = 3  # Stage 10C VR-MS：冻结 conv1+layer1+layer2+layer3，只训练 layer4+head
+LEARNED_EQUAL_PRIOR_INTERPOLATION = 0.25
 
 
 def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:
@@ -770,6 +771,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         )
         self.minimal_fusion_baseline = minimal_fusion_baseline
         self.equal_weight_fusion = equal_weight_fusion
+        self.equal_prior_interpolation = 0.0
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
                 "minimal_fusion_baseline and equal_weight_fusion are mutually exclusive."
@@ -836,6 +838,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     scale_limit=0.25,
                     bias_limit=0.15,
                 )
+                # Scalar-only ratio probe: pull learned weights slightly toward the
+                # equal-weight control without adding any new gating-path capacity.
+                self.equal_prior_interpolation = LEARNED_EQUAL_PRIOR_INTERPOLATION
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -886,6 +891,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
         # 第 5 步：softmax 归一化，得到 3 个视角的融合权重
         fusion_weights = torch.softmax(confidences, dim=1)  # (B, 3, 1)
+        if self.equal_prior_interpolation > 0.0:
+            uniform_prior = torch.full_like(fusion_weights, 1.0 / fusion_weights.size(1))
+            fusion_weights = (
+                (1.0 - self.equal_prior_interpolation) * fusion_weights
+                + self.equal_prior_interpolation * uniform_prior
+            )
 
         # 第 6 步：动态加权求和
         # (B, 3, 2) × (B, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
