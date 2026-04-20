@@ -8,6 +8,7 @@ paper:
   reproduction_level: task_adapted
 data:
   batch_size: 2
+  num_slices_per_view: 8
 model:
   family: d4_hybrid_25d_3d
   encoder_25d: vit_small_patch16_224
@@ -15,4 +16,15 @@ model:
   hidden_dim: 256
   dropout: 0.3
   alpha: 0.5
-
+  pretrained_25d: true
+  pool_25d: attention
+train:
+  mixup_alpha: 0.2
+  stages:
+    - until_epoch: 1
+      mode: head_only
+    - until_epoch: 2
+      mode: partial_25d
+      unfreeze_last_blocks: 4
+    - until_epoch: 4
+      mode: full

@@ -40,6 +40,27 @@
 
 ---
 
+## 2026-04-20：Paper Reproduction Workflow Correction（closer-to-paper retool）
+
+> **工程纠偏说明**
+> - 这不是新的正式对照轮次，也没有向 `results.tsv` 追加“胜负记录”；这次工作的目标是把 `paper_repro/` 从“粗 proxy benchmark”往**更接近原文方法学假设**的方向修正。
+> - 触发原因是人工审查后确认：上一版 `paper_repro` 里，`C3 / R1 / R4 / D4` 至少有一条关键原文假设没有保住，因此原先排行榜更适合解读成 paper-inspired proxy ranking，而不适合直接叫“论文复现强弱表”。
+
+- [x] **PAPER-REPRO-C3-OFFLINE-FUSION-RETOOL**：`paper_repro/train.py` + `paper_repro/models.py` + `paper_repro/configs/c3_decision_fusion.yaml` 现已改成 **单专家独立训练 + 验证集启发式离线融合**。不再使用上一版那种“3 个专家分支一起端到端 joint train、再手写固定权重”的实现，方向上更接近 `MMIDFNet` 原文的“先专家、后决策融合”。
+- [x] **PAPER-REPRO-R1R4-WEAK-DENSE-PATCH-RETOOL**：`paper_repro/models.py` + `paper_repro/configs/r1_fracnet_weak.yaml` + `paper_repro/configs/r4_dense_vote.yaml` 现已改成 **骨区候选 patch -> patch 内 dense anomaly map -> 病例级 top-k / majority 聚合**。这仍然不是有 voxel label 的真分割复现，但比上一版“整卷直接病例级 CE”更接近 `FracNet / nnU-Net dense prediction -> global label` 的原始建模逻辑。
+- [x] **PAPER-REPRO-D4-STAGED-25D3D-RETOOL**：`paper_repro/models.py` + `paper_repro/train.py` + `paper_repro/configs/d4_hybrid_25d_3d.yaml` 现已改成 **multi-slice 2.5D ViT + 3D branch + staged fine-tuning**，并补上 `mixup` 和 `head_only -> partial_25d -> full` 的阶段式训练控制。由于仓库当前没有 domain 标签，所以 `VREx` 仍无法逐字复现，但 2.5D 分支至少不再退化成“只看单张中心切片”。
+- [x] **PAPER-REPRO-SMOKE-VALIDATION**：在临时 6 例子集（`train/val/test` 各 `label=0/1` 各 1 例）上做了 smoke：
+  - `C3` 的离线三专家 workflow 跑通，三个 branch 和 root fusion `summary.json` 都能正常落盘。
+  - `D4` 的 staged 训练链路跑通，且额外检查了 `head_only / partial_25d / full` 三种 stage 的参数解冻切换。
+  - `R1 / R4` 的 weak dense patch aggregation 都能完成前向、反向和 `summary.json` 导出。
+- **当前状态**：`paper_repro` 的实现语义已经明显比上一版更接近原文，但**全量 12 篇的排行榜已过期**，因为至少 `C3 / R1 / R4 / D4` 的定义发生了实质变化。若后续还要引用 paper lane 的排名，必须整套重跑，不能继续沿用 `paper_repro_all_20260420_111457.tsv`。
+- **建议动作**：如果继续 paper lane，下一步应是按新 workflow 重新执行受影响的轮次，最少要补跑：
+  - `round1` 的 `C3`
+  - `round3` 的 `R1 / R4 / D4`
+  - 如果要维持统一比较口径，最好把 `12/12` 全部重新导出一版新的总表，并把旧导出明确标成 legacy proxy ranking。
+
+---
+
 ## 2026-04-20：Paper Reproduction Side Campaign（round3 / 4）
 
 > **独立 side campaign 说明**

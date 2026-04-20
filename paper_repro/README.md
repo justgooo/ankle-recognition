@@ -4,6 +4,12 @@
 
 目标不是逐字逐代码重建原论文的全部数据、标注和 workflow，而是在**当前足踝 CT 二分类数据条件下**，把每篇论文的核心网络结构或决策范式做成 **task-adapted reproduction**，用于并行对照试验。
 
+当前版本相较初版 proxy，又把几条偏离原文最明显的路线往前推了一步：
+
+- `C3` 现在采用 **单分支专家独立训练 + 离线决策融合**，不再把多专家塞进一个端到端 joint model。
+- `R1 / R4` 现在采用 **weak dense patch aggregation**：先在骨区候选 patch 上做 dense anomaly map，再聚合到病例级，而不是整卷直接病例级 CE。
+- `D4` 现在采用 **更接近原文的 2.5D + 3D 双分支**：2.5D 分支使用预训练 ViT、多切片聚合和 staged fine-tuning；3D 分支保留独立 volume encoder。
+
 ## 设计原则
 
 - 与主线 `train.py` 隔离，避免污染当前 autoresearch 主干。
@@ -43,15 +49,15 @@ srun --jobid=<JOB_ID> --overlap bash -lc '
 
 ## 12 个论文配置
 
-- `R1`: FracNet 风格 `3D U-Net + top-k dense anomaly aggregation`
-- `R4`: nnU-Net / dense-vote 风格 `3D U-Net + majority voxel voting`
+- `R1`: FracNet 风格 `weak dense patch U-Net + top-k anomaly aggregation`
+- `R4`: nnU-Net / dense-vote 风格 `weak dense patch U-Net + majority aggregation`
 - `S1`: `3D EfficientNet-like` 三视图体积分类
 - `S2`: `SE-ResNet50` 三视图切片聚合
 - `S3`: anatomy-aware `ROI crop + prototype head`
 - `S4`: `CNN + LSTM` 切片序列建模
 - `D1`: `2.5D + MIL`
 - `D2`: `tri-plane deep features + handcrafted features`
-- `D4`: `2.5D + 3D logit ensemble`
+- `D4`: `2.5D multi-slice ViT + 3D logit ensemble`
 - `C1`: `XFMamba-lite` 两级跨视图融合
 - `C2`: `ROI snapshots + ResNet18` 多视角快照分类
 - `C3`: `expert branches + decision fusion`
@@ -60,5 +66,6 @@ srun --jobid=<JOB_ID> --overlap bash -lc '
 
 - `S3`, `R1`, `R4`, `C2` 这类原论文依赖额外分割或 dense label 的方法，在这里使用骨区/ROI 启发式与弱 dense aggregation 做 task-adapted reproduction。
 - `C1` 使用 `XFMamba-lite`，保留“两级跨视图融合 + state-space 风格 token mixer”的结构语义，不依赖额外的 Mamba 第三方包。
-- `D4` 的 2.5D 分支采用强预训练 2D encoder，3D 分支采用独立体积分支，最终在 logit 层集成。
-
+- `C3` 的融合权重来自各单专家在验证集上的启发式表现，而不是 joint end-to-end gating。
+- `D4` 的 2.5D 分支采用强预训练 2D encoder、多切片聚合和 staged fine-tuning；3D 分支采用独立体积分支，最终在 logit 层集成。
+- 由于仓库当前没有 dense voxel label、分割 GT、域标签和无标签池，`R1 / R4 / S3 / D4` 仍然不是逐字复现，只是更接近原论文建模假设的 adapted version。

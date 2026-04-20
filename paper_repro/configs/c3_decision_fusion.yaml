@@ -8,7 +8,7 @@ paper:
   reproduction_level: task_adapted
 model:
   family: c3_decision_fusion
+  workflow: offline_decision_fusion
   encoder_name: densenet121
   dropout: 0.35
-  decision_weights: [1.2, 1.0, 0.8]
-
+  fusion_weight_metric: auc

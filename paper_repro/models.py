@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import timm
 import torch
@@ -36,6 +36,97 @@ def stack_triplets(view: torch.Tensor) -> torch.Tensor:
     prev_slice = view[:, prev_idx]
     next_slice = view[:, next_idx]
     return torch.stack([prev_slice, view, next_slice], dim=2)
+
+
+def sliding_window_positions(length: int, patch: int, stride: int) -> list[int]:
+    if length <= patch:
+        return [0]
+    positions = list(range(0, length - patch + 1, stride))
+    last = length - patch
+    if positions[-1] != last:
+        positions.append(last)
+    return positions
+
+
+def compute_3d_bbox(mask: torch.Tensor, margin: Sequence[int]) -> tuple[int, int, int, int, int, int]:
+    coords = torch.nonzero(mask, as_tuple=False)
+    depth, height, width = mask.shape
+    if coords.numel() == 0:
+        return 0, depth, 0, height, 0, width
+    z0 = max(0, int(coords[:, 0].min().item()) - int(margin[0]))
+    z1 = min(depth, int(coords[:, 0].max().item()) + 1 + int(margin[0]))
+    y0 = max(0, int(coords[:, 1].min().item()) - int(margin[1]))
+    y1 = min(height, int(coords[:, 1].max().item()) + 1 + int(margin[1]))
+    x0 = max(0, int(coords[:, 2].min().item()) - int(margin[2]))
+    x1 = min(width, int(coords[:, 2].max().item()) + 1 + int(margin[2]))
+    return z0, z1, y0, y1, x0, x1
+
+
+def extract_candidate_volume_patches(
+    images: torch.Tensor,
+    *,
+    patch_size: Sequence[int],
+    patch_stride: Sequence[int],
+    roi_threshold: float,
+    roi_margin: Sequence[int],
+    max_patches_per_view: int,
+) -> tuple[torch.Tensor, list[int]]:
+    patch_depth, patch_height, patch_width = [int(item) for item in patch_size]
+    stride_depth, stride_height, stride_width = [int(item) for item in patch_stride]
+    patches: list[torch.Tensor] = []
+    sample_patch_counts: list[int] = []
+
+    for sample_index in range(images.shape[0]):
+        sample_count = 0
+        for view_index in range(images.shape[1]):
+            volume = images[sample_index, view_index]
+            mask = volume > roi_threshold
+            z0, z1, y0, y1, x0, x1 = compute_3d_bbox(mask, margin=roi_margin)
+            cropped = volume[z0:z1, y0:y1, x0:x1]
+            depth, height, width = cropped.shape
+            if depth < patch_depth or height < patch_height or width < patch_width:
+                padded = torch.zeros(
+                    max(depth, patch_depth),
+                    max(height, patch_height),
+                    max(width, patch_width),
+                    device=images.device,
+                    dtype=images.dtype,
+                )
+                padded[:depth, :height, :width] = cropped
+                cropped = padded
+                depth, height, width = cropped.shape
+
+            candidates: list[tuple[float, torch.Tensor]] = []
+            depth_positions = sliding_window_positions(depth, patch_depth, stride_depth)
+            height_positions = sliding_window_positions(height, patch_height, stride_height)
+            width_positions = sliding_window_positions(width, patch_width, stride_width)
+            for start_d in depth_positions:
+                for start_h in height_positions:
+                    for start_w in width_positions:
+                        patch = cropped[
+                            start_d : start_d + patch_depth,
+                            start_h : start_h + patch_height,
+                            start_w : start_w + patch_width,
+                        ]
+                        heuristic = float(
+                            patch.std().item()
+                            + 0.5 * (patch > roi_threshold).float().mean().item()
+                            + 0.25 * patch.mean().item()
+                        )
+                        candidates.append((heuristic, patch))
+
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            selected = candidates[: max(1, int(max_patches_per_view))]
+            for _, patch in selected:
+                patches.append(patch)
+                sample_count += 1
+        sample_patch_counts.append(sample_count)
+
+    if not patches:
+        fallback = images[:, 0]
+        return fallback, [1 for _ in range(images.shape[0])]
+    patch_batch = torch.stack(patches, dim=0)
+    return patch_batch, sample_patch_counts
 
 
 def crop_batch_2d(images: torch.Tensor, threshold: float = 0.55, scale: float = 1.2) -> torch.Tensor:
@@ -431,6 +522,31 @@ class XFMambaLiteClassifier(nn.Module):
         return self.head(tokens.reshape(tokens.shape[0], -1))
 
 
+class DecisionFusionSingleExpertClassifier(nn.Module):
+    def __init__(
+        self,
+        view_index: int,
+        encoder_name: str = "densenet121",
+        dropout: float = 0.3,
+        pretrained: bool = False,
+    ) -> None:
+        super().__init__()
+        self.view_index = view_index
+        self.encoder = Timm2DEncoder(encoder_name, in_chans=1, pretrained=pretrained)
+        feature_dim = self.encoder.feature_dim
+        self.head = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(feature_dim // 2, 2),
+        )
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        projected = mean_projection(images[:, self.view_index])
+        features = self.encoder(crop_batch_2d(projected))
+        return self.head(features)
+
+
 class DecisionFusionExpertsClassifier(nn.Module):
     def __init__(self, encoder_name: str = "densenet121", weights: Iterable[float] | None = None, dropout: float = 0.3, pretrained: bool = False) -> None:
         super().__init__()
@@ -565,12 +681,25 @@ class SequenceCnnLstmClassifier(nn.Module):
 
 
 class Hybrid25D3DEnsembleClassifier(nn.Module):
-    def __init__(self, encoder_25d: str = "vit_small_patch16_224", encoder_3d: str = "r3d18", alpha: float = 0.5, hidden_dim: int = 256, dropout: float = 0.3, pretrained_25d: bool = False) -> None:
+    def __init__(
+        self,
+        encoder_25d: str = "vit_small_patch16_224",
+        encoder_3d: str = "r3d18",
+        alpha: float = 0.5,
+        hidden_dim: int = 256,
+        dropout: float = 0.3,
+        pretrained_25d: bool = False,
+        pool_25d: str = "attention",
+    ) -> None:
         super().__init__()
         self.alpha = alpha
-        self.encoder25 = Timm2DEncoder(encoder_25d, in_chans=1, pretrained=pretrained_25d)
+        self.slice_encoder25 = SliceSetEncoder(
+            Timm2DEncoder(encoder_25d, in_chans=1, pretrained=pretrained_25d),
+            pool=pool_25d,
+        )
+        feature_dim25 = self.slice_encoder25.encoder.feature_dim
         self.head25 = nn.Sequential(
-            nn.Linear(self.encoder25.feature_dim * 3, hidden_dim),
+            nn.Linear(feature_dim25 * 3, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, 2),
@@ -584,11 +713,38 @@ class Hybrid25D3DEnsembleClassifier(nn.Module):
             nn.Linear(hidden_dim, 2),
         )
 
+    @staticmethod
+    def _set_trainable(module: nn.Module, trainable: bool) -> None:
+        for parameter in module.parameters():
+            parameter.requires_grad = trainable
+
+    def set_training_stage(self, mode: str, unfreeze_last_blocks: int = 2) -> None:
+        self._set_trainable(self.slice_encoder25, False)
+        self._set_trainable(self.encoder3, False)
+        self._set_trainable(self.head25, True)
+        self._set_trainable(self.head3, True)
+
+        if mode == "head_only":
+            return
+        if mode == "partial_25d":
+            encoder25 = self.slice_encoder25.encoder.model
+            blocks = getattr(encoder25, "blocks", None)
+            if blocks is not None and len(blocks) > 0:
+                self._set_trainable(encoder25.norm, True)
+                for block in blocks[-max(1, int(unfreeze_last_blocks)) :]:
+                    self._set_trainable(block, True)
+            else:
+                self._set_trainable(self.slice_encoder25, True)
+            return
+        if mode == "full":
+            self._set_trainable(self.slice_encoder25, True)
+            self._set_trainable(self.encoder3, True)
+            return
+        raise ValueError(f"Unsupported D4 training stage: {mode}")
+
     def forward(self, images: torch.Tensor) -> torch.Tensor:
-        projections = roi_project_views(images, center_slice)
-        batch, views, channels, height, width = projections.shape
-        feat25 = self.encoder25(projections.reshape(batch * views, channels, height, width)).reshape(batch, views, -1)
-        logits25 = self.head25(feat25.reshape(batch, -1))
+        feat25 = self.slice_encoder25(images)
+        logits25 = self.head25(feat25.reshape(feat25.shape[0], -1))
 
         features3d = []
         for view_index in range(images.shape[1]):
@@ -618,29 +774,82 @@ class AnatomyAwarePrototypeClassifier(nn.Module):
 
 
 class DenseVoteUNetClassifier(nn.Module):
-    def __init__(self, aggregation: str = "mean") -> None:
+    def __init__(
+        self,
+        *,
+        aggregation: str = "topk",
+        patch_size: Sequence[int] = (8, 64, 64),
+        patch_stride: Sequence[int] = (4, 48, 48),
+        max_patches_per_view: int = 6,
+        roi_threshold: float = 0.55,
+        roi_margin: Sequence[int] = (1, 12, 12),
+        voxel_topk_fraction: float = 0.05,
+        patch_topk_fraction: float = 0.25,
+        majority_temperature: float = 12.0,
+        base_channels: int = 8,
+    ) -> None:
         super().__init__()
-        self.unet = SimpleUNet3D()
+        self.unet = SimpleUNet3D(base=base_channels)
         self.aggregation = aggregation
-        self.majority_temperature = 12.0
+        self.patch_size = tuple(int(item) for item in patch_size)
+        self.patch_stride = tuple(int(item) for item in patch_stride)
+        self.max_patches_per_view = int(max_patches_per_view)
+        self.roi_threshold = float(roi_threshold)
+        self.roi_margin = tuple(int(item) for item in roi_margin)
+        self.voxel_topk_fraction = float(voxel_topk_fraction)
+        self.patch_topk_fraction = float(patch_topk_fraction)
+        self.majority_temperature = float(majority_temperature)
+
+    def _voxel_score(self, positive_map: torch.Tensor) -> torch.Tensor:
+        flat = positive_map.flatten(1)
+        if self.aggregation == "topk":
+            topk = max(1, int(math.ceil(flat.shape[1] * self.voxel_topk_fraction)))
+            return flat.topk(topk, dim=1).values.mean(dim=1)
+        if self.aggregation == "majority":
+            return torch.sigmoid((positive_map - 0.5) * self.majority_temperature).mean(dim=(1, 2, 3))
+        return flat.mean(dim=1)
+
+    def _bag_score(self, patch_scores: torch.Tensor) -> torch.Tensor:
+        if patch_scores.numel() == 0:
+            return patch_scores.new_tensor(0.5)
+        if self.aggregation == "topk":
+            topk = max(1, int(math.ceil(patch_scores.numel() * self.patch_topk_fraction)))
+            return patch_scores.topk(topk).values.mean()
+        if self.aggregation == "majority":
+            return torch.sigmoid((patch_scores - 0.5) * self.majority_temperature).mean()
+        return patch_scores.mean()
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
-        view_logits = []
-        for view_index in range(images.shape[1]):
-            volume = images[:, view_index].unsqueeze(1)
-            dense_logits = self.unet(volume)
-            positive_map = torch.softmax(dense_logits, dim=1)[:, 1]
-            if self.aggregation == "topk":
-                flat = positive_map.flatten(1)
-                topk = max(1, flat.shape[1] // 20)
-                score = flat.topk(topk, dim=1).values.mean(dim=1)
-            elif self.aggregation == "majority":
-                # Use a differentiable proxy for majority voting so the dense head keeps gradient flow.
-                score = torch.sigmoid((positive_map - 0.5) * self.majority_temperature).mean(dim=(1, 2, 3))
-            else:
-                score = positive_map.mean(dim=(1, 2, 3))
-            view_logits.append(torch.stack([1.0 - score, score], dim=1))
-        return torch.stack(view_logits, dim=1).mean(dim=1)
+        patch_batch, patch_counts = extract_candidate_volume_patches(
+            images,
+            patch_size=self.patch_size,
+            patch_stride=self.patch_stride,
+            roi_threshold=self.roi_threshold,
+            roi_margin=self.roi_margin,
+            max_patches_per_view=self.max_patches_per_view,
+        )
+        dense_logits = self.unet(patch_batch.unsqueeze(1))
+        positive_map = torch.softmax(dense_logits, dim=1)[:, 1]
+        patch_scores = self._voxel_score(positive_map)
+
+        sample_scores = []
+        cursor = 0
+        for patch_count in patch_counts:
+            sample_patch_scores = patch_scores[cursor : cursor + patch_count]
+            sample_scores.append(self._bag_score(sample_patch_scores))
+            cursor += patch_count
+        stacked_scores = torch.stack(sample_scores, dim=0)
+        return torch.stack([1.0 - stacked_scores, stacked_scores], dim=1)
+
+
+def build_c3_expert_model(config: dict, view_index: int) -> nn.Module:
+    model_cfg = config["model"]
+    return DecisionFusionSingleExpertClassifier(
+        view_index=view_index,
+        encoder_name=str(model_cfg.get("encoder_name", "densenet121")),
+        dropout=float(model_cfg.get("dropout", 0.3)),
+        pretrained=bool(model_cfg.get("pretrained", False)),
+    )
 
 
 def build_paper_model(config: dict) -> nn.Module:
@@ -701,6 +910,7 @@ def build_paper_model(config: dict) -> nn.Module:
             hidden_dim=hidden_dim,
             dropout=dropout,
             pretrained_25d=bool(model_cfg.get("pretrained_25d", False)),
+            pool_25d=str(model_cfg.get("pool_25d", "attention")),
         )
     if family == "c1_xfmamba_lite":
         return XFMambaLiteClassifier(
@@ -726,7 +936,29 @@ def build_paper_model(config: dict) -> nn.Module:
             pretrained=pretrained,
         )
     if family == "r1_fracnet_weak":
-        return DenseVoteUNetClassifier(aggregation="topk")
+        return DenseVoteUNetClassifier(
+            aggregation="topk",
+            patch_size=model_cfg.get("patch_size", (8, 64, 64)),
+            patch_stride=model_cfg.get("patch_stride", (4, 48, 48)),
+            max_patches_per_view=int(model_cfg.get("max_patches_per_view", 6)),
+            roi_threshold=float(model_cfg.get("roi_threshold", 0.55)),
+            roi_margin=model_cfg.get("roi_margin", (1, 12, 12)),
+            voxel_topk_fraction=float(model_cfg.get("voxel_topk_fraction", 0.05)),
+            patch_topk_fraction=float(model_cfg.get("patch_topk_fraction", 0.25)),
+            majority_temperature=float(model_cfg.get("majority_temperature", 12.0)),
+            base_channels=int(model_cfg.get("base_channels", 8)),
+        )
     if family == "r4_dense_vote":
-        return DenseVoteUNetClassifier(aggregation="majority")
+        return DenseVoteUNetClassifier(
+            aggregation="majority",
+            patch_size=model_cfg.get("patch_size", (8, 64, 64)),
+            patch_stride=model_cfg.get("patch_stride", (4, 48, 48)),
+            max_patches_per_view=int(model_cfg.get("max_patches_per_view", 6)),
+            roi_threshold=float(model_cfg.get("roi_threshold", 0.55)),
+            roi_margin=model_cfg.get("roi_margin", (1, 12, 12)),
+            voxel_topk_fraction=float(model_cfg.get("voxel_topk_fraction", 0.05)),
+            patch_topk_fraction=float(model_cfg.get("patch_topk_fraction", 0.25)),
+            majority_temperature=float(model_cfg.get("majority_temperature", 12.0)),
+            base_channels=int(model_cfg.get("base_channels", 8)),
+        )
     raise ValueError(f"Unsupported paper model family: {family}")

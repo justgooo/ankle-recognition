@@ -12,6 +12,14 @@ data:
   num_slices_per_view: 16
 model:
   family: r1_fracnet_weak
+  patch_size: [8, 64, 64]
+  patch_stride: [4, 48, 48]
+  max_patches_per_view: 6
+  roi_threshold: 0.55
+  roi_margin: [1, 12, 12]
+  voxel_topk_fraction: 0.05
+  patch_topk_fraction: 0.25
+  majority_temperature: 12.0
+  base_channels: 8
 train:
   loss: ce_focal
-
