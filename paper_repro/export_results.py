@@ -63,8 +63,30 @@ def gather_records(round_name: str | None = None) -> list[dict[str, str]]:
                 "reproduction_level": paper_meta["reproduction_level"],
                 "description": paper_meta["description"],
             }
-        )
+            )
     return records
+
+
+def assign_round_status(records: list[dict[str, str]]) -> None:
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for record in records:
+        if record.get("status") != "ok":
+            continue
+        round_name = record.get("round", "all")
+        grouped.setdefault(round_name, []).append(record)
+
+    for group_records in grouped.values():
+        for record in group_records:
+            record["status"] = "discard"
+        winner = max(
+            group_records,
+            key=lambda item: (
+                float(item.get("val_acc", 0.0)),
+                float(item.get("val_auc", 0.0)),
+                -float(item.get("peak_vram_gb", 0.0)),
+            ),
+        )
+        winner["status"] = "keep"
 
 
 def write_exports(records: list[dict[str, str]], round_name: str | None) -> tuple[Path, Path]:
@@ -120,11 +142,11 @@ def append_root_results(records: list[dict[str, str]]) -> None:
     with results_path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         for record in records:
-            if record.get("status") != "ok":
+            if record.get("status") not in {"keep", "discard"}:
                 continue
             line = (
                 f"paperrepro-{record['paper_id']}\t{record['val_acc']}\t{record['val_auc']}\t"
-                f"{record['val_f1']}\t{record['peak_vram_gb']}\tdiscard\t{record['budget']}\t"
+                f"{record['val_f1']}\t{record['peak_vram_gb']}\t{record['status']}\t{record['budget']}\t"
                 f"{record['description']}\n"
             )
             handle.write(line)
@@ -134,6 +156,7 @@ def append_root_results(records: list[dict[str, str]]) -> None:
 def main() -> None:
     args = parse_args()
     records = gather_records(args.round)
+    assign_round_status(records)
     tsv_path, md_path = write_exports(records, args.round)
     if args.append_root_results:
         append_root_results(records)

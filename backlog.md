@@ -18,13 +18,69 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-SCALE-ONLY-RELIABILITY-CALIBRATOR（继续 isolated `ResNeXt V100 + decision fusion` campaign，并保持人类高优先级约束的 `image_size=512`、`num_slices_per_view=16`、`backbone=resnext`、`fusion_type=decision`、`share_backbone=false`、`use_attention_pooling=false`、`trim_edge_slices=2` 与 `30`-epoch budget 不变。本轮唯一改动是在 `MultiViewDecisionFusionClassifier` 的 reliability path 上，把上一轮 bounded affine reliability calibrator 进一步收紧成 identity-init 的 **scale-only / temperature-like calibrator**，移除 additive bias，同时保持 plain per-view classifier 与轻量 cross-view mixer 不变。训练提交为 `800c0ec`，随后使用 fresh search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0011_20260419_142314.yaml` 在 `GPU 0,1,2` 上发起 adaptive main-study。） |
-| 上次结果 | crash（这次 fresh adaptive main-study 在创建 study 前即被 idle policy 拒绝，没有产生 completed trial 或 `summary.json`。`optuna_main.log` 尾部显示显式 `--gpu-ids 0,1,2` 不满足阈值 `used<=1024 MiB` / `util<=20%`：`GPU 0` 占用 `18240 MiB`、`util=100%`，`GPU 1` 占用 `17864 MiB`、`util=0%`，只有 `GPU 2` 空闲。进一步检查发现 `GPU 0/1` 上分别有同一用户的 `.venv/bin/python train.py --config configs/cmp_resnext_feature_minimal_512_b8_e15.yaml` 与 `configs/cmp_resnext_decision_minimal_512_b8_e15.yaml` compare 任务在运行，因此这轮属于**执行层资源阻塞**，不是 OOM、代码 bug 或数据问题。） |
-| 下一步 | 若外层 loop 继续保持 **`resnext + decision fusion`** 为最高优先级，下一轮应保持这次 **scale-only reliability calibrator** 结构以及 `512x16 / 30`-epoch 几何不变，不要回退到 affine bias、也不要切回 proxy；只需在 `GPU 0,1,2` 真正满足 idle 阈值后，用新的 fresh `study_root` 重开同一 adaptive main-study。若 compare 任务仍长期占用 `0/1`，优先等待资源空出，而不是改动研究变量。 |
+| 上次实验 | PAPER-REPRO-ROUND2-S2-D1-S4（在 compute node `node03` 的 Slurm job `426869` 上继续 paper reproduction side campaign；运行提交为 `ab80ea4`，沿用 `19e7c02` 的 GPU 映射修正，并把 `paper_repro/configs/base_proxy.yaml` 的 `num_workers=2` 正式作为 round2 起的默认设置。） |
+| 上次结果 | keep（round2 三并行全部 `exit=0`：`D1` `val_acc=0.7553191489361702`, `val_auc=0.8322727272727273`；`S2` `val_acc=0.7340425531914894`, `val_auc=0.8243181818181818`；`S4` `val_acc=0.7127659574468085`, `val_auc=0.7979545454545455`。本轮排序为 **`D1 > S2 > S4`**；其中 `D1` 是 round2 winner，但整个 paper reproduction side campaign 的 accuracy 最高点仍是 round1 的 `C3` `val_acc=0.7659574468085106`。） |
+| 下一步 | 主线仍固定在 **`resnext-decision`**，不再横向切 backbone；paper reproduction side campaign 则继续 **round3 = `R1` / `R4` / `D4`**。如果想提前收敛 paper lane 的 top contenders，当前应优先围绕 **`C3` vs `D1`** 这一对做解释和后续对照。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 13 |
+| 连续 discard 计数 | 14（按全局主线 `val_acc` 改善口径继续累计；这轮 backbone 终局赛完成了 canonical backbone 收束，但不直接刷新该历史计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
+
+---
+
+## 2026-04-20：Paper Reproduction Side Campaign（round2 / 4）
+
+> **独立 side campaign 说明**
+> - 这是在 round1 之后继续执行的第二轮三并行论文结构复现，对象为 `S2`, `D1`, `S4`。
+> - round2 继续在 compute node `node03` 的 Slurm job `426869` 内运行；driver 日志再次确认：
+>   - `requested_gpu_ids=['0','1','2']`
+>   - `resolved_gpu_ids=['5','6','7']`
+>   - 三个 config 全部 `exit=0`
+> - 运行提交为 `ab80ea4`，唯一执行层改动是把 `paper_repro/configs/base_proxy.yaml` 的默认 `num_workers` 下调到 `2`，避免 round1 暴露出的三并行 I/O 抖动。
+
+- [x] **PAPER-REPRO-R2-S2-SE-RESNET50**：`paper_repro/configs/s2_se_resnet50.yaml` → `val_acc=0.7340425531914894`, `val_auc=0.8243181818181818`, `val_f1=0.7252747252747253`, `peak_vram≈7.9 GiB`, `total_seconds≈679.2` → **discard（本轮内部对照）**。SE-ResNet50 trip-view classifier 有稳定表现，但显存开销远高于同轮其它结构，却没有换来最佳 accuracy。
+- [x] **PAPER-REPRO-R2-D1-2P5D-MIL**：`paper_repro/configs/d1_mil_25d.yaml` → `val_acc=0.7553191489361702`, `val_auc=0.8322727272727273`, `val_f1=0.676056338028169`, `peak_vram≈2.0 GiB`, `total_seconds≈679.9` → **keep（本轮 side-campaign winner）**。bag-level attention MIL 在 round2 三者中拿到最高 accuracy，同时保持较低显存，说明“切片级证据聚合”路线对当前二分类任务是成立的。
+- [x] **PAPER-REPRO-R2-S4-CNN-LSTM**：`paper_repro/configs/s4_cnn_lstm.yaml` → `val_acc=0.7127659574468085`, `val_auc=0.7979545454545455`, `val_f1=0.6746987951807228`, `peak_vram≈1.9 GiB`, `total_seconds≈678.8` → **discard（本轮内部对照）**。序列化建模能工作，但当前 CNN-LSTM 复现版没有显示出优于 MIL 或 decision fusion 的优势。
+- **本轮结论**：round2 排序明确为 `D1 > S2 > S4`。`D1` 的 `val_acc` 比 round1 winner `C3` 低 `0.0106382978723404`，但 `val_auc` 反而高 `0.0009090909090909`；因此当前 paper reproduction side campaign 的第一梯队已经收敛到 **`C3` 与 `D1`** 两条“聚合/融合范式”路线。
+- **资源层结论**：`S2` 需要约 `7.9 GiB` 显存，明显重于 `D1`/`S4` 的约 `2 GiB`，但 accuracy 并不占优；后续若还要保留它，只适合作为高成本对照，不应优先扩展。
+- **bookkeeping 备注**：本轮发现 `paper_repro/export_results.py` 的 `append_root_results()` 之前把所有 successful record 都硬编码成 `discard`。该脚本已在 round2 后修复，`results.tsv` 采用 append-only 方式补记 `D1` 的 winner 更正行，不回写历史记录。
+
+---
+
+## 2026-04-20：Paper Reproduction Side Campaign（round1 / 4）
+
+> **独立 side campaign 说明**
+> - 这是按 2026-04-20 人类新需求新增的**论文复现版 autoresearch lane**，目标不是覆盖当前 canonical 主线，而是把 `/docs` 最新 4 篇综述文档里抽取出的论文结构做成 **task-adapted reproduction**，用于统一数据、统一指标下的并行对照试验。
+> - 本轮新建了独立目录 `paper_repro/`，其中包含：
+>   - 独立训练入口 `paper_repro/train.py`
+>   - 论文模型库 `paper_repro/models.py`
+>   - 12 个 paper config
+>   - 4 个三并行 round manifest `paper_repro/papers.yaml`
+>   - 结果导出器 `paper_repro/export_results.py`
+> - round1 运行提交实际使用 `19e7c02`；初始提交 `ac70d78` 建立框架后，发现 Slurm job 内部 `CUDA_VISIBLE_DEVICES=5,6,7` 与 runner 传入 `0,1,2` 会误打到物理卡 `0,1,2`，因此补了 GPU 映射修正再重跑。
+> - round1 在 compute node `node03` 的 Slurm job `426869` 上完成，driver 日志显示：
+>   - `requested_gpu_ids=['0','1','2']`
+>   - `resolved_gpu_ids=['5','6','7']`
+>   - 三个 config 全部 `exit=0`
+
+- [x] **PAPER-REPRO-R1-C2-SNAPSHOT-MULTIVIEW**：`paper_repro/configs/c2_snapshot_multiview.yaml` → `val_acc=0.6702127659574468`, `val_auc=0.8120454545454545`, `val_f1=0.7256637168141593`, `peak_vram≈0.8 GiB`, `total_seconds≈498.3` → **discard（本轮内部对照）**。说明 `C2` 风格的 “ROI snapshots + ResNet18” 能在当前数据上学到稳定排序，但 fixed-threshold accuracy 明显落后于 `C3`。
+- [x] **PAPER-REPRO-R1-C3-DECISION-FUSION**：`paper_repro/configs/c3_decision_fusion.yaml` → `val_acc=0.7659574468085106`, `val_auc=0.8313636363636364`, `val_f1=0.7317073170731707`, `peak_vram≈1.2 GiB`, `total_seconds≈635.1` → **keep（本轮 side-campaign winner）**。当前 round1 中 accuracy 和 AUC 都最高，说明 `MMIDFNet` 式“专家分支 + 决策级融合”对现有足踝 CT 二分类最匹配。
+- [x] **PAPER-REPRO-R1-D2-TRIPLANE-HYBRID**：`paper_repro/configs/d2_triplane_hybrid.yaml` → `val_acc=0.6808510638297872`, `val_auc=0.7502272727272727`, `val_f1=0.5833333333333334`, `peak_vram≈1.0 GiB`, `total_seconds≈557.9` → **discard（本轮内部对照）**。三平面 + handcrafted hybrid 有可行性，但在当前实现下还没体现出比纯决策级融合更强的收益。
+- **本轮结论**：在首轮三个可落地、工程风险较低的论文复现结构里，`C3 > D2 > C2` 这一排序没有歧义：`C3` 在 accuracy / AUC 双指标都领先，且显存开销依旧很低；`D2` 的 tri-plane 表征方向有效，但当前 handcrafted late fusion 还偏弱；`C2` 的 snapshot 思路更像一种解释性较好的轻量基线，而不是当前最强者。
+- **执行层经验**：NIfTI 数据在三并行下会放大 worker 竞争，round1 实测 `num_workers=4` 容易把单 epoch 拉长到 8-10 分钟级，因此已把 `paper_repro/configs/base_proxy.yaml` 的默认 `num_workers` 从 `4` 下调到 `2`，供 round2 以后沿用。
+- **推荐动作**：继续按 manifest 执行 **round2 = `S2`, `D1`, `S4`**。如果 round2 仍以多分支 / MIL / 序列模型获胜，则 paper reproduction 分支后续应把资源优先投入到 `C3`, `D1`, `S4`, `D4` 这一类“聚合/融合范式”上，而不是单纯继续扩展 snapshot 或 handcrafted 支线。
+
+---
+
+## 2026-04-20：人类方向改动（主线切到 decision-fusion backbone 终局赛）
+
+> **最高优先级说明**
+> - 从现在起，主线不再继续 `ResNeXt + decision + 512x16 + 30 epochs` 的单点结构创新链路；该链路降级为历史 side campaign。
+> - 新主线先只保留两个候选：**`cspnet-decision`** 和 **`resnext-decision`**。其他 backbone 暂不再追加预算。
+> - 下一阶段的第一件事是做 **3 次高预算、完全 matched 的终局赛**；除 backbone 外，几何、训练预算、freeze、batch、workers、seed 管理和评估口径都必须保持一致。
+> - 终局赛的选择规则：先比较 **多 seed 的 mean `val_acc`**，再用 mean `val_auc` 做 tie-break；如果仍然接近，再参考显存与训练耗时。
+> - 一旦选出唯一的 **canonical decision-fusion backbone**，后续所有方法学实验、ablation、formal/test 叙事都只围绕这个 backbone 展开，不再切换 backbone。
+> - 该轮现已完成：`resnext-decision` vs `cspnet-decision` 的 `3` seed matched 终局赛已经跑完，最终 **`resnext-decision`** 以 mean `val_acc=0.8581560283687942` 对 `0.8475177304964538`、mean `val_auc=0.9119696969696971` 对 `0.8930303030303031` 胜出；后续主线固定到 `resnext-decision`，不再横向切 backbone。
 
 ---
 
@@ -41,15 +97,74 @@
 
 ## 当前最优纪录
 
-> 当前 canonical baseline 已切换为：**ResUNet encoder + 3 个 Attention Gate + AttentionPooling + VRG / decision fusion**。
-> 旧的 `no_miss_*` / `192x16` / 早期 stage-10 结果只作为 **legacy reference only**，不再直接参与当前 keep/discard 比较。
+> 当前 ledger 需要区分“主线 canonical 选择”和“历史单次峰值”：
+> - 当前主线 canonical backbone 已收束为：**`resnext + decision fusion + 512x16 + 20 epochs`**
+> - 历史单次高点、旧 proxy winner 与旧 ResUNet lane 仅保留为 reference，不再覆盖当前 backbone 锁定结论
 
 | 指标 | 值 | 来源 commit | 配置 | 备注 |
 |------|---:|-------------|------|------|
-| **val_acc** | **0.8829787234042553** | `a60c3e0` | `configs/autoresearch_proxy.yaml` + fresh proxy study trial 0 | 4 个 completed trial 中最佳；相对 canonical baseline rerun `0.8404255319148937` 提升 `+0.0425531914893616` |
-| **tie-break** | **0.9318181818181819** | `a60c3e0` | fresh proxy study trial 0 | 与上述 winner 同一 trial 的 `best_val.auc`；当 `val_acc` 持平时仍按此决胜 |
-| canonical formal 参考 | 0.8617021276595744 | `c30fcae` | `configs/autoresearch_formal.yaml`（trial 0 模板超参） | 当前主线首个 formal confirmation；`val_auc=0.9372727272727273`，准确率低于 proxy winner 但 AUC 更高 |
-| legacy no_miss 参考 | 0.915 | `d63b49a` (formal) | 旧 Decision Fusion / 旧实验语义 | **legacy reference only**，不可与当前主线直接比较 |
+| **主线 canonical mean val_acc** | **0.8581560283687942** | `5b286a7` | `configs/cmp_backbone_decision_resnext_512x16_e20_{s42,s123,s456}.yaml` | matched 3-seed backbone final winner；相对 `cspnet-decision` mean `val_acc` 高 `0.0106382978723404` |
+| **主线 canonical mean val_auc** | **0.9119696969696971** | `5b286a7` | 同上 | 与上行同一 matched final；相对 `cspnet-decision` mean `val_auc` 高 `0.0189393939393940` |
+| fusion 控制变量参考 | 0.851063829787234 | `5b286a7` | `configs/cmp_decision_equal_cspnet_equal_512x16_e20_s42.yaml` | fixed equal-weight 在 matched cspnet 对照里与 learned weighting 持平 accuracy，并以 `val_auc=0.9163636363636364` 胜出 |
+| 全局单次 val_acc 峰值 | 0.893617021276596 | `1695ece` | `configs/cmp_fair_v100_decision_formal_cspnet.yaml` | 历史公平对比单次峰值（`256x8 / 15 epochs`），不是当前 canonical backbone |
+| 历史 proxy winner | 0.8829787234042553 | `a60c3e0` | `configs/autoresearch_proxy.yaml` + fresh proxy study trial 0 | 旧 canonical proxy 参考；不再覆盖当前 backbone 锁定 |
+
+---
+
+## 2026-04-20：Decision-vs-Equal Control + Backbone Final
+
+> **独立 campaign 说明**
+> - 按人类要求，这轮使用 4 GPU 分两波完成：第一波 2 卡做控制变量对照，另外 2 卡并行启动 backbone 终局赛；等第一波结束后，第二波补齐剩余 `4` 个 backbone 实验。
+> - 有效运行最终固定在 `node08` 的 4 张 `RTX A6000` 上；由于共享节点显存噪声，matched config 的 `batch_size` 从初始设想收紧到 `2`，其余主变量保持不变：`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`epochs=20`、`freeze_layers=3`、`dropout=0.3`、`lr=1e-4`、`weight_decay=1e-4`、`num_workers=4`。
+> - 早期 `node16` 的 4-GPU batch job `426417` 因可见卡/显存自检失败，随后 `426429~426432` 又因共享繁忙卡 OOM；这些执行层噪声全部**不计入研究结论**。
+
+- [x] **CMP-DECISION-EQUAL-CSPNET-LEARNED-512X16-E20-S42**：`configs/cmp_decision_equal_cspnet_learned_512x16_e20_s42.yaml` → `val_acc=0.851063829787234`, `val_auc=0.8640909090909091`, `val_f1=0.8157894736842105`, `peak_vram≈4.04 GiB`, `total_seconds≈4877.1` → **discard**（与 fixed equal-weight 控制组在主指标 `val_acc` 上完全持平，没有任何准确率收益；而且 `val_auc` 反而低 `0.0522727272727273`。）
+- [x] **CMP-DECISION-EQUAL-CSPNET-EQUAL-512X16-E20-S42**：`configs/cmp_decision_equal_cspnet_equal_512x16_e20_s42.yaml` → `val_acc=0.851063829787234`, `val_auc=0.9163636363636364`, `val_f1=0.8333333333333334`, `peak_vram≈4.01 GiB`, `total_seconds≈5385.7` → **keep**（这是这轮控制变量对照里的 winner：准确率与 learned decision fusion 完全相同，但 AUC 更高。）
+- **控制变量结论**：在当前这组完全 matched 的 `cspnet / seed=42 / decision-fusion geometry / 20 epochs` 对照里，**当前 learned decision fusion 相比 fixed equal-weight 的准确率提升为 `0.000000`**；也就是没有带来净的 `val_acc` 提升。更强的结论反而是：equal-weight 的 `val_auc` 更高 `0.0522727272727273`，说明“learned weighting 一定更好”在这组设置下不成立。
+
+- [x] **CMP-BACKBONE-DECISION-RESNEXT-512X16-E20-S42**：`configs/cmp_backbone_decision_resnext_512x16_e20_s42.yaml` → `val_acc=0.8404255319148937`, `val_auc=0.9136363636363637`, `val_f1=0.8314606741573034`, `peak_vram≈4.67 GiB`, `total_seconds≈4311.7`
+- [x] **CMP-BACKBONE-DECISION-RESNEXT-512X16-E20-S123**：`configs/cmp_backbone_decision_resnext_512x16_e20_s123.yaml` → `val_acc=0.8829787234042553`, `val_auc=0.9181818181818182`, `val_f1=0.8705882352941177`, `peak_vram≈4.67 GiB`, `total_seconds≈2768.8`
+- [x] **CMP-BACKBONE-DECISION-RESNEXT-512X16-E20-S456**：`configs/cmp_backbone_decision_resnext_512x16_e20_s456.yaml` → `val_acc=0.851063829787234`, `val_auc=0.9040909090909092`, `val_f1=0.825`, `peak_vram≈4.67 GiB`, `total_seconds≈3478.3`
+- [x] **CMP-BACKBONE-DECISION-CSPNET-512X16-E20-S42**：`configs/cmp_backbone_decision_cspnet_512x16_e20_s42.yaml` → `val_acc=0.851063829787234`, `val_auc=0.8640909090909091`, `val_f1=0.8157894736842105`, `peak_vram≈4.04 GiB`, `total_seconds≈5567.6`
+- [x] **CMP-BACKBONE-DECISION-CSPNET-512X16-E20-S123**：`configs/cmp_backbone_decision_cspnet_512x16_e20_s123.yaml` → `val_acc=0.8297872340425532`, `val_auc=0.896818181818182`, `val_f1=0.7777777777777778`, `peak_vram≈4.04 GiB`, `total_seconds≈3545.0`
+- [x] **CMP-BACKBONE-DECISION-CSPNET-512X16-E20-S456**：`configs/cmp_backbone_decision_cspnet_512x16_e20_s456.yaml` → `val_acc=0.8617021276595744`, `val_auc=0.9181818181818182`, `val_f1=0.8395061728395061`, `peak_vram≈4.04 GiB`, `total_seconds≈2863.8`
+- **多 seed backbone 终局赛结论**：
+  - `resnext-decision` mean `val_acc = 0.8581560283687942`, mean `val_auc = 0.9119696969696971`
+  - `cspnet-decision` mean `val_acc = 0.8475177304964538`, mean `val_auc = 0.8930303030303031`
+  - 因此按这轮预先定义的规则（先 mean `val_acc`，再 mean `val_auc`），**`resnext-decision` 胜出**；mean accuracy 领先 `0.0106382978723404`，mean AUC 领先 `0.0189393939393940`。
+- **主线动作建议**：这轮 backbone 终局赛已经足够把主线收束到 **`resnext + decision fusion`**。如果后续还要继续写方法学实验，建议不要再横向切 backbone；优先在 `resnext-decision` 上继续做 fusion/weighting 机制本身的分析与改造。与此同时，这次 cspnet 控制变量对照表明“learned weighting 对比 equal-weight 没有准确率净收益”，因此下一步若继续 fusion 研究，应先把这个负面证据解释清楚，而不是默认 learned gating 一定优于均匀投票。
+
+---
+
+## 2026-04-19：Decision-Fusion Fair Backbone Compare（bs=6, nw=4）
+
+> **独立 compare campaign 说明**
+> - 这一轮不是主线 `ResNeXt 512x16` 结构创新实验，而是按人类要求对当前仓库里可用的几类 backbone 做一次**重新并行公平对比**。
+> - 为避免与旧的 `feature-fusion fair-backbone compare` 混淆，本轮使用新的隔离配置：`configs/cmp_fair_v100_decision_formal_{resunet,resnext,senet,cspnet}.yaml`。
+> - 统一 recipe 为：`fusion_type=decision`、`image_size=256`、`num_slices_per_view=8`、`trim_edge_slices=1`、`share_backbone=false`、`use_attention_pooling=false`、`freeze_layers=3`、`epochs=15`、`lr=1e-4`、`weight_decay=1e-4`，并按人类要求固定 `batch_size=6`、`num_workers=4`。
+> - 运行入口为 `scripts/run_fair_backbone_decision_formal.py`；由于 `node20` 的 attach shell 实测只暴露 `CUDA_VISIBLE_DEVICES=0,1`，所以本轮实际以**两波双卡并行**完成，而不是三卡并行。
+
+- [x] **CMP-FAIR-V100-DECISION-FORMAL-RESUNET-BS6-NW4**：`configs/cmp_fair_v100_decision_formal_resunet.yaml` → `val_acc=0.872340425531915`, `val_auc=0.889090909090909`, `val_f1=0.853658536585366`, `peak_vram≈3.00 GiB`, `total_seconds=1791.4` → **discard**（高于同轮 `senet`，但明显低于并列第一的 `resnext / cspnet`。）
+- [x] **CMP-FAIR-V100-DECISION-FORMAL-RESNEXT-BS6-NW4**：`configs/cmp_fair_v100_decision_formal_resnext.yaml` → `val_acc=0.893617021276596`, `val_auc=0.925909090909091`, `val_f1=0.883720930232558`, `peak_vram≈2.17 GiB`, `total_seconds=1809.2` → **discard**（与 `cspnet` 打平本轮最高 accuracy，但 AUC 低 `0.013636363636364`，因此按 tie-break 输给 `cspnet`。）
+- [x] **CMP-FAIR-V100-DECISION-FORMAL-SENET-BS6-NW4**：`configs/cmp_fair_v100_decision_formal_senet.yaml` → `val_acc=0.829787234042553`, `val_auc=0.926818181818182`, `val_f1=0.794871794871795`, `peak_vram≈2.19 GiB`, `total_seconds=1789.6` → **discard**（AUC 不差，但 accuracy 平台明显低于前三者，不能保留。）
+- [x] **CMP-FAIR-V100-DECISION-FORMAL-CSPNET-BS6-NW4**：`configs/cmp_fair_v100_decision_formal_cspnet.yaml` → `val_acc=0.893617021276596`, `val_auc=0.939545454545455`, `val_f1=0.875`, `peak_vram≈1.89 GiB`, `total_seconds=1813.0` → **keep**（与 `resnext` 并列本轮最高 accuracy，同时 AUC 更高、显存更低，因此是这轮独立 compare campaign 的 winner。）
+- **本轮结论**：把 fair compare 的融合语义从旧 `feature` 切到 `decision`，并固定 `bs=6 / nw=4` 后，backbone 排名发生了实质变化：`cspnet` 与 `resnext` 一起站上第一梯队，而 `cspnet` 在 tie-break 上更强。`resunet` 仍有竞争力，但没有跟上前二；`senet` 则更像“排序质量尚可但阈值准确率不够”的第三梯队。
+- **推荐动作**：如果人类还要继续这个 compare 分支，下一步不要把 4 个 backbone 全部重跑；直接对 **`cspnet` 和 `resnext`** 做 `seed=123` 的 matched confirmation，判断这次 `decision-fusion` 下的 `cspnet` 优势是否稳定复现。
+
+---
+
+## 2026-04-19：ResNeXt V100 Dedicated Main-Study（decision fusion + 512x16 scale-only reliability calibrator，fresh rerun）
+
+> **独立 campaign 说明**
+> - 这一轮继续承接 `decision fusion` side campaign，只推进 `resnext`，不回到 canonical ResUNet 主线，也不回退到旧 `feature fusion` lane。
+> - 保持强制几何 pivot 不变：`image_size=512`, `num_slices_per_view=16`, `trim_edge_slices=2`, `share_backbone=false`, `use_attention_pooling=false`, `batch_size=2`，并继续固定 `train.epochs=30`。
+> - 本轮不再引入新的模型结构变量；唯一研究问题是：在 `GPU 0,1,2` 真正空闲后，对上轮因资源阻塞而未能测量的 **identity-init、scale-only 的 temperature-like reliability calibrator** 做第一次完整 fresh adaptive main-study，判断“去掉 affine bias、只保留乘性温度修正”是否真能改善这条 lane。
+> - 本轮使用 search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0076_20260419_153814.yaml`，fresh study_root `runs/optuna_main_autoloop/iter_0076_20260419_153814`，运行 commit 为 `b818f20`，并在空闲 `GPU 0,1,2` 上完成 1 次 adaptive main-study。
+
+- [x] **CMP-FAIR-V100-RESNEXT-DECISION-MAIN-512X16-SCALE-ONLY-RELIABILITY-CALIBRATOR-RERUN**：保持 `src/model.py` 中已提交的 scale-only / temperature-like reliability calibrator 不变，仅用 fresh study 重新测量这条结构 → wave-aligned 调度共 `6/6` trials completed；best completed trial 为 **trial 1**（`freeze_layers=3`, `lr=3e-5`, `weight_decay=7.5e-4`, `dropout=0.4`, `gradient_clip_norm=2.0`）→ `val_acc=0.8297872340425532`, `val_auc=0.8972727272727272`, `val_f1=0.8`, `peak_vram≈4.67 GiB`, `total_seconds=4282.6` → **discard**（这轮最好结果不仅明显低于上一轮 `affine reliability calibrator` 的 `0.8829787234042553 / 0.9118181818181819`，accuracy / AUC 分别低 `0.0531914893617021 / 0.0145454545454547`；也明显低于 `gated reliability adapter` 的 `0.8829787234042553 / 0.9354545454545455`，accuracy / AUC 分别低 `0.0531914893617021 / 0.0381818181818183`；因此不能保留。）
+- **Monitor takeaways**：这轮 `6` 个 valid trials 没有 OOM、timeout 或 workflow crash，`peak_vram` 全部稳定在约 `4.67 GiB`，说明结论是结构层负结果，不是资源噪声。更重要的是，6 个 trial 的 accuracy 只落在 `0.8191489361702128` 或 `0.8297872340425532` 两个平台，最好 AUC 也只有 trial `4` 的 `0.8986363636363637`；这说明一旦把 reliability calibrator 收紧到“纯乘性温度缩放”，这条 lane 的 reliability weighting 几乎失去了区分力，既没保住此前的 accuracy ceiling，也没换来更好的 ranking 质量。
+- **本轮结论**：上轮 backlog 中“也许是 additive bias 在伤害 AUC，所以可以继续收紧到 scale-only”这个假设，现在已经拿到干净的否定证据。问题不在于 bias 一项是否过强，而在于 **scale-only 本身把 reliability path 压得过弱**，导致整个 `512x16` decision lane 的表现明显塌陷。因此本轮记 **discard**，且没有必要补 direct formal。
+- **推荐动作**：如果外层 loop 继续推进这条 isolated decision-fusion lane，下一步应保持 `512x16`、`trim_edge_slices=2`、`share_backbone=false`、`use_attention_pooling=false` 和 `30`-epoch budget 不变，但不要继续围绕 scale-only / 更弱 calibrator 做 retune。更合理的方向是把唯一结构改动转到**更有表达力但仍低方差的 reliability-side 适配器**，例如共享的低秩 residual gate / offset，同时继续保持 plain per-view classifier 不变。
 
 ---
 
@@ -1011,3 +1126,5 @@
    - 如果结果带来新的实验思路，添加到对应优先级
 3. **连续 3 个 discard 后**：重新审视待办清单，考虑换方向
 4. **人类编辑后**：Agent 下次启动时以文件内容为准
+
+---
