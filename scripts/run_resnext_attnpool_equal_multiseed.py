@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -89,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target Slurm allocation job id. Defaults to $SLURM_JOB_ID.",
     )
     parser.add_argument(
+        "--inside-allocation",
+        action="store_true",
+        help="Run the driver from inside an existing Slurm allocation shell and launch child steps locally.",
+    )
+    parser.add_argument(
         "--cpus-per-run",
         type=int,
         default=5,
@@ -105,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Maximum number of concurrent 1-GPU training steps.",
+    )
+    parser.add_argument(
+        "--gpu-ids",
+        default="0,1,2",
+        help="Comma-separated visible GPU ids inside the target allocation.",
     )
     parser.add_argument(
         "--min-free-gb",
@@ -130,7 +141,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def srun_prefix(jobid: str) -> list[str]:
+def srun_prefix(jobid: str, inside_allocation: bool) -> list[str]:
+    if inside_allocation:
+        return []
     return ["srun", "--jobid", jobid, "--overlap"]
 
 
@@ -139,12 +152,14 @@ def print_plan(python_executable: str, args: argparse.Namespace, log_dir: Path) 
     print("============================================================")
     print(" ResNeXt AttentionPooling Decision-Fusion Control")
     print(f" Job id:         {args.jobid}")
+    print(f" Inside alloc:   {args.inside_allocation}")
     print(f" Python:         {python_executable}")
     print(f" Log dir:        {repo_relative(log_dir)}")
     print(f" CPUs / run:     {args.cpus_per_run}")
     print(f" Max parallel:   {args.max_parallel}")
     print(f" Timeout:        {args.timeout}s")
     print(f" Min free VRAM:  {args.min_free_gb:.1f} GiB")
+    print(f" GPU ids:        {args.gpu_ids}")
     print(" Queue order:")
     for seed, variant in RUN_ORDER:
         print(f"   - seed={seed} variant={variant} -> {CONFIGS[(seed, variant)]}")
@@ -174,12 +189,13 @@ def ensure_results_file() -> None:
 def run_slurm_command(
     *,
     jobid: str,
+    inside_allocation: bool,
     env: dict[str, str],
     command: list[str],
     capture_output: bool = False,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    full_command = srun_prefix(jobid) + command
+    full_command = srun_prefix(jobid, inside_allocation) + command
     return subprocess.run(
         full_command,
         cwd=REPO_ROOT,
@@ -193,6 +209,7 @@ def run_slurm_command(
 def ensure_visible_gpus(
     *,
     jobid: str,
+    inside_allocation: bool,
     python_executable: str,
     env: dict[str, str],
     min_free_gb: float,
@@ -214,6 +231,7 @@ def ensure_visible_gpus(
     ]
     result = run_slurm_command(
         jobid=jobid,
+        inside_allocation=inside_allocation,
         env=env,
         command=command,
         capture_output=True,
@@ -229,45 +247,61 @@ def ensure_visible_gpus(
         raise SystemExit(f"Failed to verify visible GPUs inside job {jobid}.")
 
 
-def run_preflight(*, jobid: str, python_executable: str, env: dict[str, str]) -> None:
+def run_preflight(
+    *,
+    jobid: str,
+    inside_allocation: bool,
+    python_executable: str,
+    env: dict[str, str],
+) -> None:
     command = [
         python_executable,
         "scripts/backbone_preflight.py",
         "--config",
         *[CONFIGS[(seed, variant)] for seed in SEEDS for variant in VARIANTS],
     ]
-    run_slurm_command(jobid=jobid, env=env, command=command, capture_output=False, check=True)
+    run_slurm_command(
+        jobid=jobid,
+        inside_allocation=inside_allocation,
+        env=env,
+        command=command,
+        capture_output=False,
+        check=True,
+    )
 
 
 def launch_training_job(
     *,
     jobid: str,
+    inside_allocation: bool,
     python_executable: str,
     env: dict[str, str],
     spec: RunSpec,
+    gpu_id: int,
     cpus_per_run: int,
     timeout_seconds: int,
     log_dir: Path,
 ) -> tuple[subprocess.Popen[bytes], Path, Path, Any]:
     config_path = REPO_ROOT / spec.config_rel
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = log_dir / f"{config_path.stem}_{timestamp}.log"
-    command = srun_prefix(jobid) + [
-        "--exclusive",
+    log_path = log_dir / f"{config_path.stem}_g{gpu_id}_{timestamp}.log"
+    shell_command = (
+        f"export CUDA_VISIBLE_DEVICES={gpu_id}; "
+        f"timeout {timeout_seconds} {shlex.quote(python_executable)} train.py --config {shlex.quote(spec.config_rel)}"
+    )
+    command = srun_prefix(jobid, inside_allocation) + [
         "-N",
         "1",
         "-n",
         "1",
-        "--gres=gpu:1",
         "-c",
         str(cpus_per_run),
-        "timeout",
-        str(timeout_seconds),
-        python_executable,
-        "train.py",
-        "--config",
-        spec.config_rel,
+        "bash",
+        "-lc",
+        shell_command,
     ]
+    if inside_allocation:
+        command = ["srun", "--overlap"] + command
     handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         command,
@@ -641,7 +675,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    if not args.jobid:
+    if not args.inside_allocation and not args.jobid:
         raise SystemExit("A Slurm allocation job id is required via --jobid or $SLURM_JOB_ID.")
 
     python_executable = detect_python_executable([".venv/bin/python"])
@@ -656,38 +690,53 @@ def main() -> int:
 
     ensure_visible_gpus(
         jobid=args.jobid,
+        inside_allocation=args.inside_allocation,
         python_executable=python_executable,
         env=env,
         min_free_gb=args.min_free_gb,
         max_parallel=args.max_parallel,
     )
     if not args.skip_preflight:
-        run_preflight(jobid=args.jobid, python_executable=python_executable, env=env)
+        run_preflight(
+            jobid=args.jobid,
+            inside_allocation=args.inside_allocation,
+            python_executable=python_executable,
+            env=env,
+        )
 
     commit_hash = git_short_hash()
+    gpu_ids = [int(token.strip()) for token in args.gpu_ids.split(",") if token.strip()]
+    if len(gpu_ids) < args.max_parallel:
+        raise SystemExit(
+            f"--gpu-ids provided {len(gpu_ids)} ids but --max-parallel={args.max_parallel}."
+        )
+    available_gpu_ids = gpu_ids[: args.max_parallel]
     queue = [RunSpec(seed=seed, variant=variant, config_rel=CONFIGS[(seed, variant)]) for seed, variant in RUN_ORDER]
-    active: dict[tuple[int, str], tuple[subprocess.Popen[bytes], Path, Path, Any, RunSpec]] = {}
+    active: dict[tuple[int, str], tuple[subprocess.Popen[bytes], Path, Path, Any, RunSpec, int]] = {}
     aggregate: dict[int, dict[str, dict[str, Any]]] = {seed: {} for seed in SEEDS}
     pair_statuses: dict[int, dict[str, str]] = {}
     recorded_pairs: set[int] = set()
     overall_exit_code = 0
 
     while queue or active:
-        while queue and len(active) < args.max_parallel:
+        while queue and available_gpu_ids:
             spec = queue.pop(0)
-            print(f"Launching {spec.experiment_tag} -> {spec.config_rel}")
+            gpu_id = available_gpu_ids.pop(0)
+            print(f"Launching {spec.experiment_tag} on gpu={gpu_id} -> {spec.config_rel}")
             active[(spec.seed, spec.variant)] = launch_training_job(
                 jobid=args.jobid,
+                inside_allocation=args.inside_allocation,
                 python_executable=python_executable,
                 env=env,
                 spec=spec,
+                gpu_id=gpu_id,
                 cpus_per_run=args.cpus_per_run,
                 timeout_seconds=args.timeout,
                 log_dir=log_dir,
-            ) + (spec,)
+            ) + (spec, gpu_id)
 
         any_finished = False
-        for key, (process, log_path, config_path, handle, spec) in list(active.items()):
+        for key, (process, log_path, config_path, handle, spec, gpu_id) in list(active.items()):
             returncode = process.poll()
             if returncode is None:
                 continue
@@ -703,6 +752,8 @@ def main() -> int:
             if returncode != 0:
                 overall_exit_code = 1
             active.pop(key)
+            available_gpu_ids.append(gpu_id)
+            available_gpu_ids.sort()
 
             if spec.seed not in recorded_pairs and all(
                 variant in aggregate[spec.seed] for variant in VARIANTS

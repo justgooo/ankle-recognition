@@ -25,7 +25,7 @@ nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --for
 
 .venv/bin/python scripts/run_resnext_attnpool_equal_multiseed.py \
   --execute \
-  --jobid "${SLURM_JOB_ID}" \
+  --inside-allocation \
   --cpus-per-run 5 \
   --timeout 10800 \
   --max-parallel 3 \
