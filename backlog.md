@@ -18,9 +18,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | PAPER-REPRO-ROUND4-C1-S1-S3（继续在 compute node `node03` 的 Slurm job `426869` 上运行，使用提交 `4f0e473` 启动 `round4 = C1 / S1 / S3`；三并行全部 `exit=0`，并完成 paper reproduction 的第 `4/4` 轮收官。） |
-| 上次结果 | keep（round4 结果为：`S1` `val_acc=0.8085106382978723`, `val_auc=0.9059090909090910`；`C1` `val_acc=0.7021276595744681`, `val_auc=0.8454545454545455`；`S3` `val_acc=0.6808510638297872`, `val_auc=0.7793181818181818`。本轮排序为 **`S1 > C1 > S3`**；更重要的是，`S1` 直接成为整个 paper reproduction side campaign 的新总冠军，明显超过此前的 `C3` / `D4`。） |
-| 下一步 | paper reproduction 的 **`12/12` 个论文复现已全部完成**。如果继续这个 side campaign，下一步不再是“补未完成模型”，而是做固定配方 confirmation / 对照汇总：优先 **`S1` vs `C3` vs `D4`**。主线则仍固定在 **`resnext-decision`**，不再横向切 backbone。 |
+| 上次实验 | CMP-DECISION-EQUAL-RESNEXT-512X16-E20-S42（按人类要求补 canonical backbone 的 matched equal-vs-learned 对照；提交 `f1e3508` 新增 `resnext` learned/equal 两份控制变量配置与 3-GPU Slurm batch。首次提交 `427232` 落到 `node16`，3 张可见卡空闲显存仅 `2.31 / 2.31 / 0.03 GiB`，在自检阶段失败；随后改在 `V100q` 的 `node20` 上重投 `427240`，请求 `1 node / 3 GPU / 12 CPU / 96G / 5h`，并用其中 2 张卡并行跑 learned 与 equal 两个 formal。） |
+| 上次结果 | keep（`node20` 的正式对照 `427240` 两个 step 都 `COMPLETED`。在完全 matched 的 `resnext / seed=42 / decision / 512x16 / 20 epochs` 设置里，**fixed equal-weight 明显优于当前 learned weighting**：equal `val_acc=0.8829787234042553`, `val_auc=0.9363636363636364`, `val_f1=0.8674698795180723`；learned 只有 `val_acc=0.8404255319148937`, `val_auc=0.8872727272727273`, `val_f1=0.810126582278481`。也就是 learned 相比 equal 在主指标上低 `0.0425531914893616`，AUC 也低 `0.0490909090909091`。） |
+| 下一步 | 主线仍保留 **`resnext`** 为 canonical backbone，但 fusion 语义已经出现更强反证：下一步应优先补 **`resnext equal-vs-learned` 的 `seed=123/456` matched confirmation**，确认这次 equal-weight 优势是否稳定；在拿到多 seed 结果前，不建议再默认 learned weighting 是主线默认项。paper reproduction side campaign 已收官，可暂不继续。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 14（按全局主线 `val_acc` 改善口径继续累计；这轮 backbone 终局赛完成了 canonical backbone 收束，但不直接刷新该历史计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
@@ -147,9 +147,24 @@
 | **主线 canonical mean val_acc** | **0.8581560283687942** | `5b286a7` | `configs/cmp_backbone_decision_resnext_512x16_e20_{s42,s123,s456}.yaml` | matched 3-seed backbone final winner；相对 `cspnet-decision` mean `val_acc` 高 `0.0106382978723404` |
 | **主线 canonical mean val_auc** | **0.9119696969696971** | `5b286a7` | 同上 | 与上行同一 matched final；相对 `cspnet-decision` mean `val_auc` 高 `0.0189393939393940` |
 | **paper reproduction best val_acc** | **0.8085106382978723** | `4f0e473` | `paper_repro/configs/s1_3d_efficient.yaml` | paper reproduction `12/12` 收官总冠军；同时也是该 side campaign 的最高 `val_auc=0.9059090909090910` |
-| fusion 控制变量参考 | 0.851063829787234 | `5b286a7` | `configs/cmp_decision_equal_cspnet_equal_512x16_e20_s42.yaml` | fixed equal-weight 在 matched cspnet 对照里与 learned weighting 持平 accuracy，并以 `val_auc=0.9163636363636364` 胜出 |
+| **canonical fusion 控制变量参考** | **0.8829787234042553** | `f1e3508` | `configs/cmp_decision_equal_resnext_equal_512x16_e20_s42.yaml` | 在 canonical `resnext` 对照里，fixed equal-weight 相比 learned 不仅 AUC 更高，而且 `val_acc` 也高 `0.0425531914893616` |
 | 全局单次 val_acc 峰值 | 0.893617021276596 | `1695ece` | `configs/cmp_fair_v100_decision_formal_cspnet.yaml` | 历史公平对比单次峰值（`256x8 / 15 epochs`），不是当前 canonical backbone |
 | 历史 proxy winner | 0.8829787234042553 | `a60c3e0` | `configs/autoresearch_proxy.yaml` + fresh proxy study trial 0 | 旧 canonical proxy 参考；不再覆盖当前 backbone 锁定 |
+
+---
+
+## 2026-04-20：ResNeXt Equal-vs-Learned Control（seed=42，node20 V100q）
+
+> **独立 campaign 说明**
+> - 这是按人类追加要求补上的 **canonical backbone fusion control**：不再用 `cspnet` 代替当前主线，而是在 `resnext` 上直接比较当前 learned decision fusion 与 fixed equal-weight。
+> - 配方与 `resnext` backbone 终局赛 `seed=42` 完全对齐：`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`freeze_layers=3`、`dropout=0.3`、`epochs=20`、`lr=1e-4`、`weight_decay=1e-4`。
+> - 执行层上先尝试了 `RTXA6Kq` 的 batch `427232`，但 `node16` 的 3 张可见卡实际空闲显存只有 `2.31 / 2.31 / 0.03 GiB`，自检失败，不计入研究结论。
+> - 最终有效运行是 `V100q` 的 `node20` batch `427240`：申请 `1 node / 3 GPU / 12 CPU / 96G / 5h`，其中 2 张卡并行跑 learned 与 equal，第三张保留不用；两个 step 均 `COMPLETED`。
+
+- [x] **CMP-DECISION-EQUAL-RESNEXT-LEARNED-512X16-E20-S42**：`configs/cmp_decision_equal_resnext_learned_512x16_e20_s42.yaml` → `val_acc=0.8404255319148937`, `val_auc=0.8872727272727273`, `val_f1=0.810126582278481`, `peak_vram≈4.67 GiB`, `total_seconds≈2921.1` → **discard**（这轮 canonical backbone 对照里，learned weighting 明显输给 equal-weight，不仅 accuracy 低 `0.0425531914893616`，AUC 也低 `0.0490909090909091`。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-EQUAL-512X16-E20-S42**：`configs/cmp_decision_equal_resnext_equal_512x16_e20_s42.yaml` → `val_acc=0.8829787234042553`, `val_auc=0.9363636363636364`, `val_f1=0.8674698795180723`, `peak_vram≈4.64 GiB`, `total_seconds≈2909.7` → **keep**（当前 canonical `resnext` 路线上的单 seed 控制变量 winner。）
+- **控制变量结论**：这次不是“accuracy 持平、只在 AUC 上有差别”，而是 **equal-weight 在 canonical `resnext` 上同时赢了 accuracy 与 AUC**。按当前单 seed 证据，`learned weighting` 已经不能再被默认成优于均匀加权。
+- **主线动作建议**：下一步应优先补 `seed=123` 与 `seed=456` 的 matched confirmation。如果这两个 seed 也延续 equal-weight 优势，那么主线就应从“`resnext-decision`”进一步收束为“**`resnext + fixed equal-weight decision fusion`**”，而不是继续把 learned weighting 当默认前提。
 
 ---
 

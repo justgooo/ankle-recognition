@@ -256,3 +256,5 @@ paperrepro-R4	0.670212765957447	0.738636363636364	0.597402597402597	1.6	discard	
 paperrepro-C1	0.702127659574468	0.845454545454545	0.548387096774194	1.9	discard	proxy	C1 XFMamba-lite cross-view fusion baseline
 paperrepro-S1	0.808510638297872	0.905909090909091	0.763157894736842	2.2	keep	proxy	S1 3D EfficientNet-like tri-view classifier
 paperrepro-S3	0.680851063829787	0.779318181818182	0.680851063829787	0.4	discard	proxy	S3 anatomy-aware prototype head
+f1e3508	0.840426	0.887273	0.810127	4.7	discard	formal	CMP-DECISION-EQUAL-RESNEXT-LEARNED-512X16-E20-S42: learned decision fusion on canonical resnext / seed42 lost to fixed equal-weight on both val_acc and val_auc in the matched 512x16 20-epoch control
+f1e3508	0.882979	0.936364	0.867470	4.6	keep	formal	CMP-DECISION-EQUAL-RESNEXT-EQUAL-512X16-E20-S42: fixed equal-weight decision fusion on canonical resnext / seed42 beat learned weighting on both val_acc and val_auc in the matched 512x16 20-epoch control
