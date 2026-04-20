@@ -19,6 +19,8 @@
 - 并行模式下，写 `results.tsv` 时使用 `flock -x /tmp/ankle_results.lock`
 - 跨节点 / 多 Slurm job 并行时，**必须先确认每个 job 内可见 GPU 映射**，再启动 coordinator
 - 跨节点 / 多 Slurm job 并行时，**必须从 compute node 内的 shell 启动 loop / coordinator**，不要从登录节点或文件视图不一致的控制端直接启动
+- 涉及作业申请、启动、attach、监控、取消时，**默认先选 Slurm 原生命令**（如 `srun`、`sbatch`、`squeue`、`sacct`、`scancel`）；只有本地只读检查、临时环境变量整理或 Slurm 没有等价语义时才退回普通 Bash
+- 如果命令必须借助 shell 组合多步逻辑，优先写成 `srun ... bash -lc '...'` 或 `sbatch` 脚本，让 **Slurm 负责资源与生命周期**；不要先进入裸 `bash` 再手动后台管理长任务
 
 ## NEVER
 
@@ -32,6 +34,8 @@
 - ❌ 不要盲目把 `num_workers` 设得太高（必须先评估 CPU 占用。如果 CPU 占用不高，可以自动调高 `num_workers` 的水平）
 - ❌ 不要假设多个 Slurm job 会自动组成“单机 4 卡”；跨节点时必须显式做 leader/follower 分发
 - ❌ 不要在 H100/V100 等异构卡混跑前跳过空闲显存检查；被分配到 job 不等于实际显存空闲
+- ❌ 不要把长时间训练、Optuna 搜索或 coordinator 直接用裸 `bash` / `nohup` / 后台 `&` 提交；优先走 `srun` / `sbatch`
+- ❌ 不要把 `bash -lc` 当成调度器；它只能作为 `srun` / `sbatch` 内部的执行载体，不能替代 Slurm 的作业控制
 
 ## ASK FIRST
 
@@ -82,23 +86,23 @@ LOOP:
   - `AUTORESEARCH_SLURM_JOB_IDS`: 逗号分隔的 job id，例如 `423677,423003`
   - `AUTORESEARCH_SLURM_JOB_GPU_IDS`: 按 job 顺序、用分号分组的 GPU id，例如 `'4,5;0,1'`
   - `AUTORESEARCH_SLURM_JOB_CUDA_VISIBLE_DEVICES`: 按 job 顺序、用分号分组的 CUDA 可见卡，例如 `'4,5;0,1'`
-- 典型启动方式：
+- 典型启动方式：优先在 leader job 内用 `srun` 启动；如果需要新申请资源，再把同样命令封装进 `sbatch` 脚本提交，而不是直接 `nohup`
 ```bash
-export AUTORESEARCH_SLURM_JOB_IDS=423677,423003
-export AUTORESEARCH_SLURM_JOB_GPU_IDS='4,5;0,1'
-export AUTORESEARCH_SLURM_JOB_CUDA_VISIBLE_DEVICES='4,5;0,1'
-
-nohup .venv/bin/python autoresearch_loop.py \
-  --max-iterations 8 \
-  --default-lane main-study \
-  --gpu-id 4 \
-  --gpu-ids 4,5,0,1 \
-  --max-workers 4 \
-  --main-search-template configs/optuna_main_search_resnext_decision_v100.yaml \
-  --proxy-search-template configs/optuna_proxy_search_resnext_decision_v100.yaml \
-  --formal-config configs/autoresearch_formal_resnext_decision_v100.yaml \
-  --proxy-config configs/autoresearch_proxy_resnext_decision_v100.yaml \
-  > autoresearch_logs/cross_node_loop.log 2>&1 &
+AUTORESEARCH_SLURM_JOB_IDS=423677,423003 \
+AUTORESEARCH_SLURM_JOB_GPU_IDS='4,5;0,1' \
+AUTORESEARCH_SLURM_JOB_CUDA_VISIBLE_DEVICES='4,5;0,1' \
+srun --jobid=423677 --overlap \
+  --output=autoresearch_logs/cross_node_loop.log \
+  .venv/bin/python autoresearch_loop.py \
+    --max-iterations 8 \
+    --default-lane main-study \
+    --gpu-id 4 \
+    --gpu-ids 4,5,0,1 \
+    --max-workers 4 \
+    --main-search-template configs/optuna_main_search_resnext_decision_v100.yaml \
+    --proxy-search-template configs/optuna_proxy_search_resnext_decision_v100.yaml \
+    --formal-config configs/autoresearch_formal_resnext_decision_v100.yaml \
+    --proxy-config configs/autoresearch_proxy_resnext_decision_v100.yaml
 ```
 - 运行后，`optuna_main.log` / `optuna_proxy.log` 中应看到：
   - `Dispatching Optuna study across Slurm jobs`
