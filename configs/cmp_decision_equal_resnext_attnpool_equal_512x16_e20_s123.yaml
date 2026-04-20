@@ -1,0 +1,38 @@
+# Controlled resnext decision-fusion run with AttentionPooling and fixed equal view weights.
+experiment_name: cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s123
+output_dir: runs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s123
+seed: 123
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 512
+  num_slices_per_view: 16
+  trim_edge_slices: 2
+  batch_size: 2
+  num_workers: 3
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnext
+  fusion_type: decision
+  equal_weight_fusion: true
+  share_backbone: false
+  use_pretrained: true
+  freeze_layers: 3
+  fusion_hidden_dim: 256
+  dropout: 0.3
+  use_attention_pooling: true
+
+train:
+  epochs: 20
+  lr: 0.0001
+  weight_decay: 0.0001
+  class_weight: true
+  device: auto
+  augmentation: true
+  scheduler: none
+  label_smoothing: 0.0
+  gradient_clip_norm: 1.0
