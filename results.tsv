@@ -262,3 +262,8 @@ f1e3508	0.882979	0.936364	0.867470	4.6	keep	formal	CMP-DECISION-EQUAL-RESNEXT-EQ
 3b826ad	0.840426	0.866364	0.810127	4.6	discard	formal	CMP-DECISION-EQUAL-RESNEXT-EQUAL-512X16-E20-S123: fixed equal-weight lost to learned decision fusion on canonical resnext / seed123 in the matched 512x16 20-epoch control
 3b826ad	0.851064	0.920909	0.825000	4.7	keep	formal	CMP-DECISION-EQUAL-RESNEXT-LEARNED-512X16-E20-S456: learned decision fusion beat fixed equal-weight on canonical resnext / seed456 in the matched 512x16 20-epoch control
 3b826ad	0.840426	0.889091	0.805195	4.6	discard	formal	CMP-DECISION-EQUAL-RESNEXT-EQUAL-512X16-E20-S456: fixed equal-weight lost to learned decision fusion on canonical resnext / seed456 in the matched 512x16 20-epoch control
+paperrepro-R1	0.563829787234043	0.795000000000000	0.666666666666667	0.3	discard	proxy	R1 3D U-Net top-k dense anomaly aggregation
+paperrepro-R4	0.744680851063830	0.823181818181818	0.657142857142857	0.3	discard	proxy	R4 3D dense vote / majority aggregation
+paperrepro-D4	0.851063829787234	0.930909090909091	0.815789473684211	3.4	keep	proxy	D4 2.5D and 3D ensemble
+aaa417a	0.840426	0.886364	0.823529	4.7	discard	formal	CMP-FUSION-PATH-RESNEXT-LEARNED-512X16-E20-S42: current learned VRG path tied minimal baseline on val_acc but lost on val_auc in the matched resnext fusion-path ablation
+aaa417a	0.840426	0.921818	0.819277	4.6	keep	formal	CMP-FUSION-PATH-RESNEXT-MINIMAL-512X16-E20-S42: minimal learned decision baseline matched current learned VRG path on val_acc and beat it on val_auc in the matched resnext fusion-path ablation

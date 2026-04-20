@@ -24,15 +24,34 @@
 
 ---
 
+## 2026-04-20：ResNeXt Fusion-Path Ablation（current learned vs minimal learned，seed=42，node20 V100q）
+
+> **独立 campaign 说明**
+> - 这是在人类明确要求“主线改成探索 `resnext` 融合策略、不要把均分方法当最终结果”之后启动的第一轮主线 formal。
+> - 研究问题不是再比 `equal-weight`，而是拆当前 `resnext + decision fusion` 内部的 fusion path：**current learned VRG path** 相比 **minimal learned decision baseline** 到底有没有净收益。
+> - 两个配置都保持 `backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`freeze_layers=3`、`dropout=0.3`、`epochs=20`、`lr=1e-4`、`weight_decay=1e-4` 不变。
+> - 唯一变量是 fusion path：
+>   - `current learned`: 现有 `cross-view mixer + shared low-rank reliability calibrator`
+>   - `minimal learned`: 去掉上述 richer path，只保留 plain per-view classifier + raw reliability heads
+> - 正式运行是 `V100q` 的 `node20` batch `427812`；申请 `1 node / 3 GPU / 12 CPU / 96G / 5h`，其中 2 张卡并行跑 learned 与 minimal。`427812.0/.1` 为两条训练 step，均 `COMPLETED`；`427812.3` 的 shell step 在 batch 收尾阶段 `CANCELLED 0:15`，不影响实验有效性。
+
+- [x] **CMP-FUSION-PATH-RESNEXT-LEARNED-512X16-E20-S42**：`configs/cmp_fusion_path_resnext_learned_512x16_e20_s42.yaml` → `val_acc=0.8404255319148937`, `val_auc=0.8863636363636364`, `val_f1=0.8235294117647058`, `peak_vram≈4.67 GiB`, `total_seconds≈2949.6` → **discard**（与 minimal 版在 `val_acc` 上完全打平，但 `val_auc` 低 `0.0354545454545454`。）
+- [x] **CMP-FUSION-PATH-RESNEXT-MINIMAL-512X16-E20-S42**：`configs/cmp_fusion_path_resnext_minimal_512x16_e20_s42.yaml` → `val_acc=0.8404255319148937`, `val_auc=0.9218181818181818`, `val_f1=0.8192771084337349`, `peak_vram≈4.64 GiB`, `total_seconds≈2919.5` → **keep**（在不损失 accuracy 的前提下，明显提升了 ranking quality。）
+- **控制变量结论**：在这轮严格 matched 的 `seed=42` 对照里，**current learned VRG path 没有比 minimal learned baseline 更好**。更具体地说：它既没有带来 `val_acc` 提升，也没有保住 AUC，反而把 `val_auc` 从 `0.9218181818181818` 拉低到 `0.8863636363636364`。
+- **结构解释**：当前证据指向一个很具体的怀疑：对 `resnext decision` 而言，fusion path 里的 `cross-view mixer + shared low-rank calibrator` 这层 richer reliability modeling 可能过度复杂，带来了额外方差，但没有换回更好的主指标。
+- **主线动作建议**：下一步不要回到 equal-weight 叙事，也不要立刻扩成更大语义差异的 family compare。最合理的动作是先把 **minimal learned vs current learned** 扩到 `seed=123/456`，确认这次“简化 fusion path 反而更稳”的信号是不是可复现。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-DECISION-EQUAL-RESNEXT-512X16-E20-S123/S456（按人类要求继续补 canonical backbone 的 remaining `2` seed matched equal-vs-learned 对照；提交 `3b826ad` 新增 `seed=123/456` 的四份 `resnext` learned/equal 控制变量配置与串行两波的 3-GPU Slurm batch。正式运行提交为 `427395`，固定在 `V100q` 的 `node20`，请求 `1 node / 3 GPU / 12 CPU / 96G / 5h`，先并行跑 `seed=123` 的 learned/equal，两条都完成后自动切到 `seed=456`，最终四个 step 全部 `COMPLETED`。） |
-| 上次结果 | keep（`node20` 的 `427395` 给出了**混合但可判定**的结果：`seed=123` 和 `seed=456` 都是 learned 胜 equal，分别拿到 `0.851063829787234 > 0.8404255319148937` 的 `val_acc`；但和已完成的 `seed=42` 合并后，三 seed mean `val_acc` 仍是 **equal 更高**，`0.854609929078014` 对 `0.847517730496454`，领先 `0.007092198581560`。相反，三 seed mean `val_auc` 则是 **learned 更高**，`0.906363636363636` 对 `0.897272727272727`，高 `0.009090909090909`。因此按预先定义的选择规则（先 mean `val_acc`，再 mean `val_auc`），equal-weight 仍然是当前更优的 fusion default；但证据明显不是单边碾压，而是 accuracy 与 ranking quality 分别站在两边。另一个必须记录的现象是：fresh rerun 的 `seed=123 learned` 在同配置下只有 `0.851063829787234`，明显低于早先 backbone final 的 `0.8829787234042553`，说明这条 lane 存在非小量的复现实验波动。） |
-| 下一步 | 按 2026-04-20 最新人类指令，**不要把 fixed equal-weight / 均分方法作为最终主线结果**。backbone 继续固定 **`resnext`**，但 autoresearch 主线正式切到 **探索 `resnext` 的融合策略**。下一步优先做 `resnext + decision fusion` 内部的 fusion-path ablation，先比较**当前 learned decision fusion** 与 **minimal learned decision baseline**（去掉 cross-view mixer + low-rank calibrator，只保留 raw-logit reliability heads），判断当前 richer fusion path 到底是在帮忙还是在添噪声。paper reproduction side campaign 已收官，可暂不继续。 |
+| 上次实验 | CMP-FUSION-PATH-RESNEXT-512X16-E20-S42（按最新人类指令把主线切到 `resnext` 融合策略后，提交 `aaa417a` 新增一组 fusion-path ablation：保持 `resnext / decision / 512x16 / 20 epochs / freeze=3 / seed=42` 全部不变，只比较 **current learned VRG path** 对 **minimal learned decision baseline**。正式运行是 `node20` / `V100q` 的 `427812`，请求 `1 node / 3 GPU / 12 CPU / 96G / 5h`，两条 formal step `427812.0/.1` 都 `COMPLETED`。） |
+| 上次结果 | keep（这轮结论很清楚：**current learned VRG path 没有带来 accuracy 收益**。`learned` 得到 `val_acc=0.8404255319148937`, `val_auc=0.8863636363636364`, `val_f1=0.8235294117647058`；`minimal learned` 得到 `val_acc=0.8404255319148937`, `val_auc=0.9218181818181818`, `val_f1=0.8192771084337349`。也就是在 `val_acc` 完全打平的前提下，minimal 把 `val_auc` 提高了 `0.0354545454545454`。按当前规则（先 `val_acc`，再 `val_auc`），**minimal fusion path 胜出**。这说明对 `resnext decision` 主线而言，当前 richer fusion path 里的 `cross-view mixer + shared low-rank calibrator` 至少在 `seed=42` 上没有兑现净收益，反而更像额外噪声源。） |
+| 下一步 | 主线继续固定 **`resnext`**，且继续按人类要求探索**融合策略**而不是收束到均分方法。下一步优先把这轮的 fusion-path ablation 扩到 **`seed=123/456`**，确认 `minimal learned` 是否稳定优于 current learned。如果这个结论在多 seed 上也成立，再决定是把主线 decision path 收缩到 minimal 版，还是把它拿去对更大语义差异的 fusion family 做下一轮 compare。paper reproduction side campaign 已收官，可暂不继续。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 14（按全局主线 `val_acc` 改善口径继续累计；这轮 backbone 终局赛完成了 canonical backbone 收束，但不直接刷新该历史计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
