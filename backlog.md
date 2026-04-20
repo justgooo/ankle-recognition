@@ -12,6 +12,18 @@
 
 ---
 
+## 2026-04-21：ResNeXt Fusion-Path Ablation（minimal learned，seed=123，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是按当前 canonical 主线继续补的 **matched 模块贡献分析**：在已有 `equal-weight vs current learned` 三 seed 控制变量和 `minimal learned vs current learned (seed=42)` 的基础上，补跑 `minimal learned` 的 `seed=123`。
+> - 为遵守“优先 fresh main-study”但又不把超参搜索和模块对照混在一起，本轮把 `configs/optuna_main_search.yaml` 收成 **单 trial fixed-config study**：`study.n_trials=1`，并通过 `fixed_overrides` 锁定 canonical recipe（`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`），只让 trial 参数显式记录 `seed=123` 和 `model.minimal_fusion_baseline=true`。
+> - 本轮运行 commit 为 `cc6ebb8`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260421_020353.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0001_20260421_020353`。
+> - 运行时按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；由于这轮只有 1 个 fixed trial，最终只在 `GPU 0` 上实际执行训练，其余两张卡保持空闲。
+
+- [x] **CMP-FUSION-PATH-RESNEXT-MINIMAL-512X16-E20-S123-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0001_20260421_020353` 的 best completed trial（trial `0`，`seed=123`, `minimal_fusion_baseline=true`）→ `val_acc=0.8085106382978723`, `val_auc=0.9322727272727273`, `val_f1=0.7428571428571429`, `peak_vram≈4.64 GiB`, `total_seconds≈2897.6` → **discard**（相较 matched `current learned` seed123 `0.8510638297872340 / 0.9109090909090910`，minimal 的 accuracy 回落 `0.0425531914893617`，虽然 AUC 反而提升 `0.0213636363636363`；同时也低于 matched `equal-weight` seed123 的 `0.8404255319148937 / 0.8663636363636364`，因此不能把 simpler path 当成当前默认参考。）
+- **模块分析结论（到目前为止）**：`minimal learned` 现在呈现明显的 **seed-sensitive split verdict**。`seed=42` 时它能在不损失 accuracy 的前提下显著优于 `current learned` 的 AUC；但 `seed=123` 时它虽然继续给出更高 AUC，却把 threshold accuracy 拉低到了 `0.8085`。这说明“去掉 `cross-view mixer + shared low-rank calibrator`”并不是稳定单调增益，更像是在降低某些 seed 的过拟合同时，也可能伤害主指标。
+- **推荐动作**：下一步应优先补 **`minimal learned` 的 `seed=456` matched run**，把 `equal-weight / current learned / minimal learned` 在 canonical `resnext + decision + 512x16 + 20 epochs` 下的三 seed 证据补齐。只有在 `seed=456` 也落地后，才适合决定 simpler path 是否应该成为主参考，还是保留“`current learned` 与 `minimal learned` 各有一部分净收益”的结论。
+
 ## 2026-04-21：7ae19a0 原配方 Equal-Weight 3-seed 对照（V100q node20）
 
 > **独立 campaign 说明**
@@ -117,11 +129,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-7AE19A0-RESNEXT-EQUAL-256X8-3SEED-CONTROL（V100q node20 job 428936；1 node / 3 GPU / 36 CPU / 120G / 3h；在 detached worktree `1b84e85` 中以 `7ae19a0` 为底座，仅新增 `equal_weight_fusion=true` 控制开关，对原始 `256x8` ResNeXt formal 配方做 `seed=42/123/456` 并行复验。） |
-| 上次结果 | keep（equal-weight 的 `mean val_acc=0.936170`, `mean val_auc=0.965606`, `mean val_f1=0.931023`；相对上一轮 learned-weighting 的 `0.900709 / 0.939545 / 0.891266` 提升 `0.035461 / 0.026061 / 0.039757`，且 `val_acc` std 从 `0.027922` 降到 `0.008686`。） |
-| 下一步 | canonical 主线改为先做 matched **模块贡献分析**：优先拆清当前 decision-fusion / weighting 路径里 `equal-weight`、`minimal learned`、`current learned` 以及 reliability-path richer module 的净贡献；只有模块级证据明确后，才进入“自动优化 weighting 比例”阶段。legacy `7ae19a0` 若再被引用，仍默认使用 equal-weight 3-seed mean `0.936170 / 0.965606`。 |
+| 上次实验 | CMP-FUSION-PATH-RESNEXT-MINIMAL-512X16-E20-S123-MAIN（commit `cc6ebb8`；fresh adaptive main-study `runs/optuna_main_autoloop/iter_0001_20260421_020353`；search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260421_020353.yaml`；通过单 trial fixed-config study 在 canonical `resnext + decision + 512x16 + 20 epochs` recipe 下补跑 `minimal learned` 的 `seed=123` matched 控制变量。） |
+| 上次结果 | discard（best completed trial `0.808511 / 0.932273 / 0.742857`；相较 matched `current learned` seed123 的 `0.851064 / 0.910909 / 0.844444`，accuracy 回落 `0.042553`，虽然 AUC 提升 `0.021364`；说明 simpler path 目前不是稳定主胜方。） |
+| 下一步 | 继续 canonical **模块贡献分析**，优先补 `minimal learned` 的 `seed=456` matched run，把 `equal-weight / current learned / minimal learned` 的 canonical 三 seed 证据补齐；在此之前不要把“自动优化 weighting 比例”升格为默认主线。legacy `7ae19a0` 若再被引用，仍默认使用 equal-weight 3-seed mean `0.936170 / 0.965606`。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 16（按 canonical `512x16 / 当前主线` 口径保持不变；这轮 equal-weight legacy control 虽然明确胜出，但属于用户指定的 `7ae19a0` side campaign，不作为主线 discard 计数清零条件。） |
+| 连续 discard 计数 | 17（按 canonical `512x16 / 当前主线` 口径递增；本轮 `minimal learned` seed123 是主线模块贡献分析实验，主指标未超过 matched `current learned` / `equal-weight` 对照，因此继续记作 discard。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
