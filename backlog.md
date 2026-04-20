@@ -12,6 +12,18 @@
 
 ---
 
+## 2026-04-20：人类方向改动（主线改成探索 ResNeXt 融合策略）
+
+> **最高优先级说明**
+> - 人类明确要求：**不能把 fixed equal-weight / 均分方法当作最终结果**。因此上一轮 `equal-weight` 在 3-seed mean `val_acc` 上占优，只能视为一个重要的控制变量证据，**不能直接升格为最终主线方法**。
+> - 从现在起，autoresearch 主线不再围绕“learned vs equal 到底谁做最终 default”做终局收束，而是改成：**固定 `resnext` backbone，继续系统性探索 fusion strategy 本身**。
+> - 研究优先级改成：
+>   1. 先在现有 `resnext + decision fusion` family 内做 fusion-path ablation，拆清楚 current learned VRG 路径里的 `plain per-view classifier`、`raw reliability head`、`cross-view mixer`、`shared low-rank calibrator` 各自是否有净收益
+>   2. 只有当 decision family 内部的最优 fusion path 收敛后，再决定是否扩展到更大语义差异的其它 fusion family
+> - 下一轮 immediate task：优先比较 **current learned decision fusion** 对 **minimal learned decision baseline**，保持 `512x16 / 20 epochs / freeze=3 / resnext / seed` 等 recipe 完全 matched，只改变 fusion path 复杂度。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
@@ -20,7 +32,7 @@
 |------|-----|
 | 上次实验 | CMP-DECISION-EQUAL-RESNEXT-512X16-E20-S123/S456（按人类要求继续补 canonical backbone 的 remaining `2` seed matched equal-vs-learned 对照；提交 `3b826ad` 新增 `seed=123/456` 的四份 `resnext` learned/equal 控制变量配置与串行两波的 3-GPU Slurm batch。正式运行提交为 `427395`，固定在 `V100q` 的 `node20`，请求 `1 node / 3 GPU / 12 CPU / 96G / 5h`，先并行跑 `seed=123` 的 learned/equal，两条都完成后自动切到 `seed=456`，最终四个 step 全部 `COMPLETED`。） |
 | 上次结果 | keep（`node20` 的 `427395` 给出了**混合但可判定**的结果：`seed=123` 和 `seed=456` 都是 learned 胜 equal，分别拿到 `0.851063829787234 > 0.8404255319148937` 的 `val_acc`；但和已完成的 `seed=42` 合并后，三 seed mean `val_acc` 仍是 **equal 更高**，`0.854609929078014` 对 `0.847517730496454`，领先 `0.007092198581560`。相反，三 seed mean `val_auc` 则是 **learned 更高**，`0.906363636363636` 对 `0.897272727272727`，高 `0.009090909090909`。因此按预先定义的选择规则（先 mean `val_acc`，再 mean `val_auc`），equal-weight 仍然是当前更优的 fusion default；但证据明显不是单边碾压，而是 accuracy 与 ranking quality 分别站在两边。另一个必须记录的现象是：fresh rerun 的 `seed=123 learned` 在同配置下只有 `0.851063829787234`，明显低于早先 backbone final 的 `0.8829787234042553`，说明这条 lane 存在非小量的复现实验波动。） |
-| 下一步 | backbone 不需要再切，仍固定 **`resnext`**。如果必须立刻给主线 fusion 下结论，应按规则**暂时收束到 `fixed equal-weight decision fusion`**；但由于 `2/3` 个新 seed pair 是 learned 更好、且 learned 的 mean `val_auc` 更高，下一步更合理的是做 **same-hardware stability confirmation**，优先复核 `seed=123 learned` 的回落到底是正常随机波动，还是需要把 fusion 结论建立在 repeated runs 而不是单次 seed 上。paper reproduction side campaign 已收官，可暂不继续。 |
+| 下一步 | 按 2026-04-20 最新人类指令，**不要把 fixed equal-weight / 均分方法作为最终主线结果**。backbone 继续固定 **`resnext`**，但 autoresearch 主线正式切到 **探索 `resnext` 的融合策略**。下一步优先做 `resnext + decision fusion` 内部的 fusion-path ablation，先比较**当前 learned decision fusion** 与 **minimal learned decision baseline**（去掉 cross-view mixer + low-rank calibrator，只保留 raw-logit reliability heads），判断当前 richer fusion path 到底是在帮忙还是在添噪声。paper reproduction side campaign 已收官，可暂不继续。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 14（按全局主线 `val_acc` 改善口径继续累计；这轮 backbone 终局赛完成了 canonical backbone 收束，但不直接刷新该历史计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
