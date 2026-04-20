@@ -12,6 +12,25 @@
 
 ---
 
+## 2026-04-20：ResNeXt AttentionPooling Equal-vs-Learned Control（seeds=42/123/456，node20 V100q）
+
+> **独立 campaign 说明**
+> - 这是按人类最新要求补做的 `resnext + attention pooling` 下的 matched 3-seed fusion control：
+>   直接比较 learned decision fusion 与 fixed equal-weight。
+> - 所有配置保持 `backbone=resnext`、`fusion_type=decision`、`use_attention_pooling=true`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=3`、`freeze_layers=3`、`dropout=0.3`、`epochs=20`、`lr=1e-4`、`weight_decay=1e-4` 不变。
+> - 执行层复用了 `V100q` 的 `node20` allocation `427995`：`1 node / 3 GPU / 15 CPU / 96G / 24h`，节点上无其他用户作业。
+
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S42**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s42.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S42**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s42.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S123**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s123.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S123**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s123.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-LEARNED-512X16-E20-S456**：`configs/cmp_decision_equal_resnext_attnpool_learned_512x16_e20_s456.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
+- [x] **CMP-DECISION-EQUAL-RESNEXT-ATTNPOOL-EQUAL-512X16-E20-S456**：`configs/cmp_decision_equal_resnext_attnpool_equal_512x16_e20_s456.yaml` → **crash**（exit=1；对应 `summary.json` 无有效指标。）
+- **3-seed mean 对比**：learned 的 mean `val_acc=0.0000000000000000`，equal-weight 的 mean `val_acc=0.0000000000000000`；learned 的 mean `val_auc=0.0000000000000000`，equal-weight 的 mean `val_auc=0.0000000000000000`。
+- **控制变量结论**：在 `resnext + attention pooling` 的 3-seed matched 对照里，learned 与 equal-weight 的 mean `val_acc` 完全打平，均为 `0.0000000000000000`；tie-break 看 mean `val_auc`，learned=`0.0000000000000000`，equal=`0.0000000000000000`。 两者的 mean `val_auc` 也打平在 `0.0000000000000000`。
+
+---
+
 ## 2026-04-20：人类方向改动（主线改成探索 ResNeXt 融合策略）
 
 > **最高优先级说明**
@@ -49,9 +68,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FUSION-PATH-RESNEXT-512X16-E20-S42（按最新人类指令把主线切到 `resnext` 融合策略后，提交 `aaa417a` 新增一组 fusion-path ablation：保持 `resnext / decision / 512x16 / 20 epochs / freeze=3 / seed=42` 全部不变，只比较 **current learned VRG path** 对 **minimal learned decision baseline**。正式运行是 `node20` / `V100q` 的 `427812`，请求 `1 node / 3 GPU / 12 CPU / 96G / 5h`，两条 formal step `427812.0/.1` 都 `COMPLETED`。） |
-| 上次结果 | keep（这轮结论很清楚：**current learned VRG path 没有带来 accuracy 收益**。`learned` 得到 `val_acc=0.8404255319148937`, `val_auc=0.8863636363636364`, `val_f1=0.8235294117647058`；`minimal learned` 得到 `val_acc=0.8404255319148937`, `val_auc=0.9218181818181818`, `val_f1=0.8192771084337349`。也就是在 `val_acc` 完全打平的前提下，minimal 把 `val_auc` 提高了 `0.0354545454545454`。按当前规则（先 `val_acc`，再 `val_auc`），**minimal fusion path 胜出**。这说明对 `resnext decision` 主线而言，当前 richer fusion path 里的 `cross-view mixer + shared low-rank calibrator` 至少在 `seed=42` 上没有兑现净收益，反而更像额外噪声源。） |
-| 下一步 | 主线继续固定 **`resnext`**，且继续按人类要求探索**融合策略**而不是收束到均分方法。下一步优先把这轮的 fusion-path ablation 扩到 **`seed=123/456`**，确认 `minimal learned` 是否稳定优于 current learned。如果这个结论在多 seed 上也成立，再决定是把主线 decision path 收缩到 minimal 版，还是把它拿去对更大语义差异的 fusion family 做下一轮 compare。paper reproduction side campaign 已收官，可暂不继续。 |
+| 上次实验 | PAPER-REPRO-C3-OFFLINE-FUSION-RERUN（V100q `node20` 的独占作业 `427995`；`1 node / 3 GPU / 15 CPU / 96G / 24h`，实际使用 `CUDA_VISIBLE_DEVICES=0` 单卡完成 `paper_repro/configs/c3_decision_fusion.yaml` 的 closer-to-paper 离线三专家补跑，并在结束后重导 `round1` 与 `all` 总表。） |
+| 上次结果 | keep（`C3` 新版离线融合结果为 `val_acc=0.7553191489361702`, `val_auc=0.8490909090909090`, `val_f1=0.6849315068493150`, `peak_vram≈0.5 GiB`；仍是 corrected round1 winner。相对旧 joint-like proxy 版，`val_acc` 下降 `0.0106382978723404`，但 `val_auc` 提升 `0.0177272727272726`。纠偏后的 paper 总榜前三现为 `D4 > S1 > C3`。） |
+| 下一步 | paper reproduction 的 corrected leaderboard 已收口，后续若继续 paper lane，不再补跑未完成项；如回主线，则恢复到 `resnext` 融合策略主线，优先处理 attention-pooling / learned reliability path 的不稳定来源。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 14（按全局主线 `val_acc` 改善口径继续累计；这轮 backbone 终局赛完成了 canonical backbone 收束，但不直接刷新该历史计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
@@ -77,6 +96,24 @@
   - `round1` 的 `C3`
   - `round3` 的 `R1 / R4 / D4`
   - 如果要维持统一比较口径，最好把 `12/12` 全部重新导出一版新的总表，并把旧导出明确标成 legacy proxy ranking。
+
+---
+
+## 2026-04-20：Paper Reproduction Correction Completion（corrected leaderboard closure）
+
+> **收口说明**
+> - 受 closer-to-paper retool 影响的最后一个缺口 `C3` 已补跑完成，因此 paper reproduction 这条线现在不是“实现已纠偏但总榜过期”，而是**纠偏后总榜已重新收口**。
+> - 旧总表 [paper_repro_all_20260420_111457.tsv](/dataset/HH/ankle-ct/paper_repro/exports/paper_repro_all_20260420_111457.tsv) 仍保留，但现在只能视为 **legacy proxy ranking**；当前应引用的新总表是 [paper_repro_all_20260420_170538.tsv](/dataset/HH/ankle-ct/paper_repro/exports/paper_repro_all_20260420_170538.tsv)。
+
+- [x] **PAPER-REPRO-C3-OFFLINE-FUSION-RERUN**：`paper_repro/configs/c3_decision_fusion.yaml` 在 `node20` / `V100q` 的作业 `427995` 上完成正式补跑，根 [summary.json](/dataset/HH/ankle-ct/runs/paper_repro/c3_decision_fusion/summary.json) 已落盘：`val_acc=0.7553191489361702`, `val_auc=0.8490909090909090`, `val_f1=0.6849315068493150`, `peak_vram≈0.5 GiB` → **keep（corrected round1 winner）**。离线融合权重为 `axial=0.3361 / coronal=0.3773 / sagittal=0.2866`，说明 `coronal` 是主导专家，但 `axial` 仍有实质贡献。
+- [x] **PAPER-REPRO-CORRECTED-ROUND1-EXPORT**：[paper_repro_round1_20260420_170538.tsv](/dataset/HH/ankle-ct/paper_repro/exports/paper_repro_round1_20260420_170538.tsv) 和 [paper_repro_round1_20260420_170538.md](/dataset/HH/ankle-ct/paper_repro/exports/paper_repro_round1_20260420_170538.md) 已重导。corrected `round1` 排名仍是 `C3 > D2 > C2`，但 `C3` 的语义已经从旧版 joint proxy 改成单专家独立训练后的离线融合。
+- [x] **PAPER-REPRO-CORRECTED-ALL-EXPORT**：[paper_repro_all_20260420_170538.tsv](/dataset/HH/ankle-ct/paper_repro/exports/paper_repro_all_20260420_170538.tsv) 和 [paper_repro_all_20260420_170538.md](/dataset/HH/ankle-ct/paper_repro/exports/paper_repro_all_20260420_170538.md) 已重导。按 corrected 总榜排序，当前第一梯队为：
+  - `D4`：`val_acc=0.8510638297872340`, `val_auc=0.9309090909090909`
+  - `S1`：`val_acc=0.8085106382978723`, `val_auc=0.9059090909090910`
+  - `C3`：`val_acc=0.7553191489361702`, `val_auc=0.8490909090909090`
+  - `D1`：`val_acc=0.7553191489361702`, `val_auc=0.8322727272727273`
+- **纠偏后结论**：真正把 closer-to-paper 语义补齐后，paper lane 的总冠军不再是旧 proxy 总表里的 `S1`，而是 **`D4` 的 2.5D + 3D staged ensemble**。`S1` 仍然非常强，但在 corrected leaderboard 中退到第二；`C3` 依旧保持第一梯队，只是从“旧版总榜第二”变成了 “corrected 总榜第三、且在与 `D1` 的 accuracy tie-break 中凭更高 AUC 胜出”。
+- **当前状态**：paper reproduction corrected lane 现已 **12/12 全部完成且重新导出**，没有剩余待补跑项。
 
 ---
 
@@ -198,7 +235,7 @@
 |------|---:|-------------|------|------|
 | **主线 canonical mean val_acc** | **0.8581560283687942** | `5b286a7` | `configs/cmp_backbone_decision_resnext_512x16_e20_{s42,s123,s456}.yaml` | matched 3-seed backbone final winner；相对 `cspnet-decision` mean `val_acc` 高 `0.0106382978723404` |
 | **主线 canonical mean val_auc** | **0.9119696969696971** | `5b286a7` | 同上 | 与上行同一 matched final；相对 `cspnet-decision` mean `val_auc` 高 `0.0189393939393940` |
-| **paper reproduction best val_acc** | **0.8085106382978723** | `4f0e473` | `paper_repro/configs/s1_3d_efficient.yaml` | paper reproduction `12/12` 收官总冠军；同时也是该 side campaign 的最高 `val_auc=0.9059090909090910` |
+| **paper reproduction best val_acc** | **0.8510638297872340** | `ed6d535` | `paper_repro/configs/d4_hybrid_25d_3d.yaml` | corrected paper reproduction 总冠军；closer-to-paper rerun 后 `D4` 以 `val_auc=0.9309090909090909` 同时占据该 lane 的最高 AUC |
 | **canonical fusion 控制变量参考** | **0.854609929078014** | `3b826ad` | `configs/cmp_decision_equal_resnext_{learned,equal}_512x16_e20_{s42,s123,s456}.yaml` | matched 3-seed fusion control：equal 的 mean `val_acc` 比 learned 高 `0.007092198581560`，但 learned 的 mean `val_auc` 反而高 `0.009090909090909`；综合规则仍先判 equal 胜出，但证据呈 split verdict |
 | 全局单次 val_acc 峰值 | 0.893617021276596 | `1695ece` | `configs/cmp_fair_v100_decision_formal_cspnet.yaml` | 历史公平对比单次峰值（`256x8 / 15 epochs`），不是当前 canonical backbone |
 | 历史 proxy winner | 0.8829787234042553 | `a60c3e0` | `configs/autoresearch_proxy.yaml` + fresh proxy study trial 0 | 旧 canonical proxy 参考；不再覆盖当前 backbone 锁定 |
