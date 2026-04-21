@@ -1651,7 +1651,12 @@ def run_study_parallel(
         env_overrides = {"CUDA_VISIBLE_DEVICES": str(gpu_id)}
         while not stop_event.is_set():
             with study_lock:
-                if len(prepared.study.trials) >= prepared.target_trials:
+                launched_or_finished_trials = [
+                    trial
+                    for trial in prepared.study.trials
+                    if getattr(trial.state, "name", str(trial.state)) != "WAITING"
+                ]
+                if len(launched_or_finished_trials) >= prepared.target_trials:
                     return
                 trial = prepared.study.ask()
                 params = sample_trial_params(trial, prepared.search_space)
