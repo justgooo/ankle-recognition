@@ -28,6 +28,8 @@ model.py — 多视角 CT 分类模型
 
 from __future__ import annotations
 
+import os
+
 import torch  # type: ignore[import-not-found]          # PyTorch：深度学习框架的核心库
 import torch.nn as nn  # type: ignore[import-not-found]  # nn 模块：提供各种神经网络层（卷积、线性层等）
 from torchvision.models import ResNet18_Weights, resnet18  # type: ignore[import-not-found]
@@ -747,7 +749,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
         2. 每个视角先经过 baseline plain classifier，避免继续扰动 classifier path
         3. reliability estimation 分支保留轻量 residual cross-view attention，
-           然后直接用 raw reliability head 读出 logits，单独检验 calibrator 是否在制造额外方差
+           再用共享、低秩、identity-init 的 residual calibrator 对 raw reliability logit 做小幅校准
         4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
     """
@@ -773,6 +775,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         )
         self.minimal_fusion_baseline = minimal_fusion_baseline
         self.equal_weight_fusion = equal_weight_fusion
+        self.disable_fusion_cross_view_mixer = (
+            os.getenv("ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
         self.fusion_temperature = 1.0
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
@@ -810,22 +816,19 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 ]
             )
             if not self.equal_weight_fusion:
-                # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
-                # per-view classifier 保持 baseline pooled-feature 路径；
-                # richer cross-view context 只用于 fusion weighting，单独检验
-                # shared low-rank calibrator 是否才是 variance 来源。
-                from .cross_view_attention import CrossViewAttention
+                # 默认 learned path：先做轻量 cross-view token interaction，再叠加共享的
+                # 低秩 residual calibrator。需要做单模块 ablation 时，可通过
+                # ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1 只关闭 mixer，保留 calibrator。
+                if not self.disable_fusion_cross_view_mixer:
+                    from .cross_view_attention import CrossViewAttention
 
-                self.cross_view_mixer = CrossViewAttention(
-                    feature_dim=self.feature_dim,
-                    num_heads=4,
-                    num_layers=1,
-                    dropout=0.1,
-                    residual_scale=0.125,
-                )
-                # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
-                # 但不再叠加共享 calibrator，只测试 cross-view mixed context
-                # 对 reliability weighting 本身是否已经足够。
+                    self.cross_view_mixer = CrossViewAttention(
+                        feature_dim=self.feature_dim,
+                        num_heads=4,
+                        num_layers=1,
+                        dropout=0.1,
+                        residual_scale=0.125,
+                    )
                 self.confidence_heads = nn.ModuleList(
                     [
                         nn.Sequential(
@@ -835,8 +838,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         for _ in range(3)
                     ]
                 )
-                # Keep softmax scaling at the matched baseline so this round only
-                # changes the presence/absence of the shared calibrator.
+                self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
+                    feature_dim=self.feature_dim,
+                    bottleneck_dim=32,
+                    scale_limit=0.25,
+                    bias_limit=0.15,
+                )
+                # Keep softmax scaling at the matched baseline while isolating a
+                # single reliability-path module at a time.
                 self.fusion_temperature = LEARNED_FUSION_TEMPERATURE
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
@@ -874,13 +883,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 dim=1,
             )  # (B, 3, 1)
         else:
-            # 第 4 步：保留 cross-view mixed reliability context，但直接读取 raw logits，
-            # 单独隔离 shared low-rank calibrator 的净贡献。
-            stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
-            gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
+            # 第 4 步：默认先做 cross-view mixing，再用共享 calibrator 做温和 scale+bias
+            # 校准；单模块 ablation 可通过环境变量跳过 mixer，仅保留 calibrator。
+            if self.disable_fusion_cross_view_mixer:
+                gating_features = view_features
+            else:
+                stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
+                gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
             confidences = torch.stack(
                 [
-                    head(feature)
+                    self.confidence_calibrator(feature, head(feature))
                     for head, feature in zip(self.confidence_heads, gating_features)
                 ],
                 dim=1,
