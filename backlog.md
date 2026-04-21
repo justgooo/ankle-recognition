@@ -12,6 +12,25 @@
 
 ---
 
+## 2026-04-22：人类追加任务（融合权重合理性 side campaign，限定 3 轮 autoresearch）
+
+> **高优先级 side campaign 说明**
+> - 人类已明确要求：把“融合权重合理性”补成一个 **限定 3 轮 outer autoresearch iterations** 的独立 side campaign；本轮只跑 3 轮，然后退出，**不要无限循环**。
+> - 当前已有独立作业 **`432763` / `ankle-rx256x8-l6s123`** 在 `node20` 上运行，负责 `L6` scalar repair（`L3-no-mixer` 的 `seed=123` tuning）。这个 side campaign **不得重复 `L6`**，不得复用该作业的 `study_root`、`output_dir`、日志路径或任何正在运行的 trial 目录。
+> - 当前 side campaign 的默认主锚点不是 `L1`，而是 **`256x8 ResNeXt decision fusion + L3-no-mixer`**（即 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` 的 strongest learned branch）。如需对照，可派生 `equal-weight`、single-view 或 leave-one-view-out control，但**不要切回 `512x16`**。
+> - 资源约束：仅申请 **V100q 32GB** 卡；单节点运行；不超过 4 张 GPU。本轮计划优先用 **2 张 V100 32GB** 启动 bounded loop，既避免与 `432763` 冲突，也避免单卡串行把 3 轮 side campaign 拖得过慢。
+> - 若某一轮需要新增轻量 instrumentation，优先把分析产物写到各自 `output_dir`（例如 `fusion_weight_analysis.json`、`view_ablation_summary.json`、`perturbation_summary.json`），避免把结论只留在临时 shell 输出里。
+>
+> **本轮 3 个固定任务（按顺序执行）**
+> - [ ] **FWR-01 single-view / leave-one-view-out matched control**：围绕当前 `L3-no-mixer` 主线补一轮视角贡献对照，至少比较 `single-view axial/coronal/sagittal` 与 `leave-one-view-out`，回答 learned fusion 的收益是否主要来自“接近 best single view”还是“主动压低拖后腿视角”。
+> - [ ] **FWR-02 fusion-weight telemetry**：对当前 learned fusion 记录样本级 `fusion_weights`，并补最小可解释统计，至少包括 `top-weight hit rate`，以及 fusion weight 与 per-view logit margin / per-view correctness 之间的一致性或相关性，回答“最高权重是否真的落在最有证据的视角上”。
+> - [ ] **FWR-03 perturbation-based weight migration**：对单视角施加可控退化（优先低容量、可复现的 blur / noise / slice-drop 之一），比较扰动前后 `fusion_weights`、预测稳定性与 val 指标变化，回答 learned fusion 是否会在视角质量下降时自动下调该视角权重。
+>
+> **执行规则**
+> - 外层 loop 固定为 `max-iterations=3`，每轮只做一个离散实验，不要在同一轮混多个独立想法。
+> - 除非 implementation risk 很高，否则优先用当前 canonical `256x8` formal/main lane；只有 smoke/debug 才允许先走 proxy。
+> - 每轮都必须更新 `backlog.md` 与 `results.tsv`；记录时明确标注这是 `fusion-weight rationality` side campaign，而不是 `L6` scalar repair 延续。
+
 ## 2026-04-21：人类方向追加约束（主线切回 ResNeXt decision 256x8 learned-weighting）
 
 > **方向约束说明**
