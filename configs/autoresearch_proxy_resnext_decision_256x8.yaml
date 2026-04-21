@@ -1,4 +1,4 @@
-# Dedicated proxy config for the ResNeXt-only 256x8 learned decision-fusion lane.
+# Canonical proxy config for the ResNeXt-only 256x8 learned decision-fusion mainline.
 # Keeps the legacy learned-weighting geometry and scalars, but shortens the budget for smoke tests.
 experiment_name: autoresearch_proxy_resnext_decision_256x8
 output_dir: runs/autoresearch_proxy_resnext_decision_256x8
