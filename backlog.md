@@ -17,7 +17,7 @@
 > **方向约束说明**
 > - 人类已明确要求：后续 `decision fusion` 主线不再继续沿当前 `512x16` canonical lane 做方法收敛，而是切回 **`image_size=256` + `num_slices_per_view=8`** 的 `ResNeXt + decision fusion` 几何。
 > - 研究目标同步改写为：**以 learned weighting 为主方法方向**，优先做模块贡献分析；`equal-weight` 仍必须保留为 matched control，但不再作为人类期望的最终方法叙事。
-> - 当前阶段 **先不训练**。在没有新的 human go-ahead 之前，只允许完成方案整理、配置对齐、ledger 更新与分析，不启动新的 proxy / main / formal 作业。
+> - 上述“先不训练”限制已在同日被人类后续消息“开始启动模块贡献分析”正式解除；当前允许按 `256x8` module matrix 直接启动 matched formal 作业。
 >
 > **主线基座选择**
 > - `256x8` learned-weighting 的主参考应优先锚定到 legacy `7ae19a0` 这条已知最强 learned recipe，而不是当前较弱的 fair-compare `256x8` decision 模板。
@@ -26,7 +26,7 @@
 >   - legacy equal 3-seed mean：`0.936170 / 0.965606`
 > - 这意味着新一轮模块贡献分析的目的，不是证明 learned 已经优于 equal，而是先回答：**learned weighting 在 `256x8` 上到底差在哪里，哪个模块组合最接近 closing the gap。**
 >
-> **待执行的模块贡献分析矩阵（仅规划，未启动）**
+> **待执行的模块贡献分析矩阵（当前进度：`L0/L1` formal controls 已完成，`L2+` 待继续）**
 > - `L0 control`: legacy `256x8` equal-weight（只作 control，不作主方法）
 > - `L1 anchor`: legacy-style `256x8` learned weighting baseline
 > - `L2 minimal`: 去掉 richer reliability path，仅保留最基础 per-view classifier + raw confidence head
@@ -38,6 +38,23 @@
 > - 第一优先级不是继续扩模块，而是先把 `256x8` learned 主线的 matched controls 和单模块 ablations 重新对齐到同一几何、同一 seed 集、同一 scalar budget。
 > - 如果后续训练显示 `L3/L4/L5` 都无法稳定缩小与 equal-weight 的差距，则 learned-weighting 主叙事需要降级为“机制研究”，不能再直接写 overall winner。
 > - 工程准备已完成：`256x8` learned lane 的 dedicated formal/proxy/search 模板已补到 `configs/autoresearch_*_resnext_decision_256x8.yaml` 与 `configs/optuna_*_resnext_decision_256x8.yaml`；模块矩阵清单写入 `docs/resnext_decision_256x8_module_matrix.md`。同时，`src/model.py` 已补 runtime toggles：`ANKLE_DISABLE_FUSION_CALIBRATOR=1` 与 `ANKLE_LEARNED_FUSION_TEMPERATURE=<float>`；`scripts/optuna_workflow.py` 与 `scripts/run_train_with_config_env.py` 也已把这些 env overrides 显式写入 trial/config 产物。现在 `scripts/prepare_resnext_decision_256x8_matrix.py` 还已把 `7 lanes × 3 seeds × 2 phases = 42` 份 runnable YAML 与 manifest materialize 到 `configs/generated_resnext_decision_256x8_matrix/`，后续做 `no-calibrator` / `temperature` probe 不再需要依赖隐式 shell 状态。
+
+## 2026-04-21：ResNeXt Decision 256x8 Matched Controls（L0 equal vs L1 learned，formal multiseed，V100q node20）
+
+> **独立 campaign 说明**
+> - 这是在人类正式放行“开始启动模块贡献分析”后的第一批 `256x8` formal 矩阵作业：直接用 [scripts/slurm_resnext_decision_256x8_matrix.sbatch](/dataset/HH/ankle-ct/scripts/slurm_resnext_decision_256x8_matrix.sbatch) 在同一节点上按 `3 GPU` 并行跑完 `L0-equal` 与 `L1-learned` 的 `seed=42/123/456`。
+> - 有效 batch 是 `431122`：`V100q/node20`，`1 node / 3 GPU / 36 CPU / 120G / 4h`；job 内 `CUDA_VISIBLE_DEVICES=0,1,2`，六个 `srun` step `431122.0-.5` 全部 `COMPLETED`。首个提交 `431106` 因 launcher 预检没有导出 `MIN_FREE_GB` 而在训练前 fail-fast，不计入实验结论；该提交已由 commit `8e0bdf4` 修复。
+> - 配方保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=256`、`num_slices_per_view=8`、`trim_edge_slices=2`、`batch_size=6`、`num_workers=12`、`epochs=15`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=5e-4`、`dropout=0.25`、`gradient_clip_norm=2.0`；唯一变量是 `L0` 的 `model.equal_weight_fusion=true` 与 `L1` 的 learned weighting anchor。
+
+- [x] **CMP-RESNEXT-DECISION-256X8-L0-EQUAL-FORMAL-S42**：`runs/resnext_decision_256x8_matrix/formal/l0_equal/s42`（commit `8e0bdf4`，matched control `equal_weight_fusion=true`）→ `val_acc=0.9255319148936170`, `val_auc=0.9486363636363637`, `val_f1=0.9176470588235294`, `peak_vram≈2.14 GiB`, `total_seconds≈900.8` → **keep**（相较 matched `L1-learned` seed42 `0.9042553191489362 / 0.9731818181818181`，accuracy 提升 `0.0212765957446808`，但 AUC 回落 `0.0245454545454544`；control 继续证明 learned 在这个 seed 上仍有 accuracy 劣势。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L0-EQUAL-FORMAL-S123**：`runs/resnext_decision_256x8_matrix/formal/l0_equal/s123`（commit `8e0bdf4`，matched control `equal_weight_fusion=true`）→ `val_acc=0.9255319148936170`, `val_auc=0.9718181818181818`, `val_f1=0.9135802469135802`, `peak_vram≈2.14 GiB`, `total_seconds≈903.3` → **keep**（相较 matched `L1-learned` seed123 `0.8404255319148937 / 0.9131818181818182`，accuracy / AUC 分别提升 `0.0851063829787233 / 0.0586363636363636`；这是本轮最大的 cross-seed gap。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L0-EQUAL-FORMAL-S456**：`runs/resnext_decision_256x8_matrix/formal/l0_equal/s456`（commit `8e0bdf4`，matched control `equal_weight_fusion=true`）→ `val_acc=0.9148936170212766`, `val_auc=0.9613636363636364`, `val_f1=0.9024390243902439`, `peak_vram≈2.14 GiB`, `total_seconds≈902.4` → **keep**（相较 matched `L1-learned` seed456 `0.8936170212765957 / 0.9413636363636363`，accuracy / AUC 分别提升 `0.0212765957446809 / 0.0200000000000001`。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L1-LEARNED-FORMAL-S42**：`runs/resnext_decision_256x8_matrix/formal/l1_learned/s42`（commit `8e0bdf4`，legacy-style learned-weighting anchor）→ `val_acc=0.9042553191489362`, `val_auc=0.9731818181818181`, `val_f1=0.8988764044943820`, `peak_vram≈2.17 GiB`, `total_seconds≈904.2` → **discard**（虽然 AUC 高于 matched `L0-equal` `0.0245454545454544`，但主指标 accuracy 仍落后 `0.0212765957446808`。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L1-LEARNED-FORMAL-S123**：`runs/resnext_decision_256x8_matrix/formal/l1_learned/s123`（commit `8e0bdf4`，legacy-style learned-weighting anchor）→ `val_acc=0.8404255319148937`, `val_auc=0.9131818181818182`, `val_f1=0.8351648351648352`, `peak_vram≈2.17 GiB`, `total_seconds≈905.3` → **discard**（相较 matched `L0-equal` seed123 `0.9255319148936170 / 0.9718181818181818`，accuracy / AUC 分别回落 `0.0851063829787233 / 0.0586363636363636`。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L1-LEARNED-FORMAL-S456**：`runs/resnext_decision_256x8_matrix/formal/l1_learned/s456`（commit `8e0bdf4`，legacy-style learned-weighting anchor）→ `val_acc=0.8936170212765957`, `val_auc=0.9413636363636363`, `val_f1=0.8888888888888888`, `peak_vram≈2.17 GiB`, `total_seconds≈901.0` → **discard**（相较 matched `L0-equal` seed456 `0.9148936170212766 / 0.9613636363636364`，accuracy / AUC 分别回落 `0.0212765957446809 / 0.0200000000000001`。）
+- **3-seed matched control 结论**：`L0-equal` 的 mean `val_acc=0.9219858156028368`、mean `val_auc=0.9606060606060606`、mean `val_f1=0.9112221100424511`，`val_acc` population std 为 `0.0050149417105429`；`L1-learned` 的对应均值是 `0.8794326241134751 / 0.9425757575757575 / 0.8743100428493688`，`val_acc` population std 为 `0.0279220137376305`。在完全 matched 的当前 scaffold 下，equal 相对 learned 的 mean 增益是 `+0.0425531914893617 val_acc`、`+0.0180303030303031 val_auc`、`+0.0369120671930823 val_f1`。
+- **当前判断**：这批第一性对照已经把主线问题重新钉死了。即便把几何、budget、seed 集和 runtime provenance 全部对齐到同一个 current scaffold，`learned weighting` 仍然在 3 个 matched seed 上全部输给 `equal-weight` 的主指标，而且 stability 明显更差。下一步没有理由先拆 `L3/L4/L5`；应先继续跑 `L2-minimal`，确认 “更简单的 learned path” 是否至少能缩小这条基础差距。
+- **备注**：本轮 current-code `L0/L1` 两条线都低于 detached legacy rerun 的 `1b84e85` equal `0.936170 / 0.965606` 与 `7ae19a0` learned `0.900709 / 0.939545`，说明当前 scaffold 与 detached legacy recipe 之间仍存在一定实现/语义漂移；但由于本轮所有 lane 都在同一 current scaffold 下 matched，对模块贡献结论本身仍然有效。
 
 ## 2026-04-21：ResNeXt Fusion-Path Ablation（remove cross-view mixer, keep shared calibrator，seed=123/456，direct single-trial Slurm completion）
 
@@ -280,11 +297,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FUSION-PATH-RESNEXT-NOMIXER-512X16-E20-S123-MAIN / S456-MAIN（commits `2cf4602` 与 `e3cc52b`；fresh direct main-study `runs/optuna_main_manual/nomixer_seed123_20260421_151406` 与 `runs/optuna_main_manual/nomixer_seed456_20260421_151439`；search-config copies `autoresearch_logs/generated_search_configs/optuna_main_search_nomixer_seed123_20260421_151406.yaml` 与 `autoresearch_logs/generated_search_configs/optuna_main_search_nomixer_seed456_20260421_151439.yaml`；通过两个单 trial `scripts/optuna_main.py --sequential` 作业把“去掉 cross-view mixer、保留 shared low-rank reliability calibrator”的 matched no-mixer 对照补到剩余的 `seed=123/456`。） |
-| 上次结果 | discard / discard（seed123 `0.819149 / 0.905000 / 0.784810`；seed456 `0.829787 / 0.879545 / 0.804878`；补完后 no-mixer + calibrator 的 3-seed mean 为 `0.829787 / 0.897121 / 0.798294`，相较 `current learned` 的 `0.847518 / 0.906364` 在 mean accuracy / AUC 上分别回落 `0.017730 / 0.009242`，说明 seed42 的局部收益没有跨 seed 成立。） |
-| 下一步 | **人类方向已改写**：后续主线切回 `ResNeXt + decision fusion + 256x8`，并以 **learned weighting** 为主方法方向，先做模块贡献分析、暂不训练。`256x8` learned lane 的 config scaffold、runtime toggles、以及 `42` 份 materialized matrix YAML 已准备好；下一步应按 `docs/resnext_decision_256x8_module_matrix.md` 里的顺序，从 `L0-equal` vs `L1-learned` 的 matched controls 开始，直接选定首轮 seed / phase / batch 后执行。 |
+| 上次实验 | `L0-equal` vs `L1-learned` 的 `256x8` formal matched controls（commit `8e0bdf4`；Slurm batch `431122`；`V100q/node20`；用 `scripts/slurm_resnext_decision_256x8_matrix.sbatch` 在同一节点并行跑完 `seed=42/123/456` 六个 current-scaffold formal 配置，run dirs 位于 `runs/resnext_decision_256x8_matrix/formal/l0_equal/*` 与 `runs/resnext_decision_256x8_matrix/formal/l1_learned/*`。） |
+| 上次结果 | `L0-equal` keep ×3 / `L1-learned` discard ×3（`L0` 3-seed mean `0.921986 / 0.960606 / 0.911222`，`L1` 3-seed mean `0.879433 / 0.942576 / 0.874310`；equal 相对 learned 的 mean 增益为 `+0.042553 val_acc`、`+0.018030 val_auc`，且 `val_acc` std 从 `0.027922` 降到 `0.005015`。） |
+| 下一步 | 继续同一 `256x8` formal matrix，直接跑 **`L2-minimal` 的 matched `seed=42/123/456`**。目标不是证明 minimal 会赢，而是先确认“去掉 richer reliability path 后”是否能比当前 `L1-learned` 更接近 `L0-equal`，从而决定后续还有没有必要继续拆 `L3/L4/L5`。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 2（本轮补完的 `no-mixer + shared calibrator` `seed=123/456` 两次 matched 验证都记为 discard；当前 discard streak 重新从这两轮累计。） |
+| 连续 discard 计数 | 3（`L0-equal` 三次 keep 已经把上一轮 streak 清零；随后 `L1-learned` 的 `seed=42/123/456` 三个 matched anchor 连续记 discard，因此当前 discard streak 为 3。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
