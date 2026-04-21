@@ -1,5 +1,5 @@
 study:
-  name: fusion_path_resnext_nomixer_seed123_main
+  name: fusion_path_resnext_nomixer_seed456_main
   phase: main
   base_config: configs/autoresearch_formal.yaml
   study_root: runs/optuna_main
@@ -49,4 +49,4 @@ fixed_overrides:
 search_space:
   seed:
     type: categorical
-    choices: [123]
+    choices: [456]
