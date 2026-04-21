@@ -27,19 +27,37 @@
 >   - legacy equal 3-seed mean：`0.936170 / 0.965606`
 > - 这意味着新一轮模块贡献分析的目的，不是证明 learned 已经优于 equal，而是先回答：**learned weighting 在 `256x8` 上到底差在哪里，哪个模块组合能最稳定地提升 learned 自身的绝对性能与稳定性。**
 >
-> **待执行的模块贡献分析矩阵（当前进度：`L0/L1/L2` formal 已完成，`L3/L4/L5` 待继续）**
+> **待执行的模块贡献分析矩阵（当前进度：`L0/L1/L2/L3/L4` formal 已完成，`L5` 待继续）**
 > - `L0 control`: legacy `256x8` equal-weight（只作 control / 报告参考，不作主方法）
 > - `L1 anchor`: canonical `256x8` learned weighting baseline
 > - `L2 minimal`: 去掉 richer reliability path，仅保留最基础 per-view classifier + raw confidence head
 > - `L3 no-mixer`: 保留 calibrator，关闭 cross-view mixer
 > - `L4 no-calibrator`: 保留 cross-view mixer，移除 shared low-rank calibrator
-> - `L5 temperature`: 对 `L1` 或最强 learned 变体只加单标量 temperature shrinkage
+> - `L5 temperature`: 对当前最强 learned 变体只加单标量 temperature shrinkage（现阶段默认接到 `L3-no-mixer`）
 >
 > **分析优先级**
 > - 第一优先级是把 **canonical learned `256x8` 配方** 固定成唯一主锚点，之后所有 `L2/L3/L4/L5` 都只围绕这一个 recipe 做 matched ablation，不再在多个 learned recipe family 之间来回切换。
 > - 后续模块推进首先看：某个变体是否能提升 learned 主线自己的 `val_acc / val_auc / stability`；`equal-weight` 只负责提供 matched reference 和论文对照，不再作为 learned 主线继续与否的门槛。
 > - 如果某个 ablation 能稳定改善 learned 主线，即使仍低于 equal-weight，也应保留为主线候选并继续细化；只有当同一 scalar budget 下多个单模块/低容量变体都无法改善 canonical learned，learned-weighting 主叙事才需要降级为“机制研究”。
 > - 工程准备已完成：`256x8` learned lane 的 dedicated formal/proxy/search 模板已补到 `configs/autoresearch_*_resnext_decision_256x8.yaml` 与 `configs/optuna_*_resnext_decision_256x8.yaml`；模块矩阵清单写入 `docs/resnext_decision_256x8_module_matrix.md`。同时，`src/model.py` 已补 runtime toggles：`ANKLE_DISABLE_FUSION_CALIBRATOR=1` 与 `ANKLE_LEARNED_FUSION_TEMPERATURE=<float>`；`scripts/optuna_workflow.py` 与 `scripts/run_train_with_config_env.py` 也已把这些 env overrides 显式写入 trial/config 产物。现在 `scripts/prepare_resnext_decision_256x8_matrix.py` 还已把 `7 lanes × 3 seeds × 2 phases = 42` 份 runnable YAML 与 manifest materialize 到 `configs/generated_resnext_decision_256x8_matrix/`，后续做 `no-calibrator` / `temperature` probe 不再需要依赖隐式 shell 状态。
+
+## 2026-04-22：ResNeXt Decision 256x8 Module Contribution（L3 no-mixer + L4 no-calibrator，formal multiseed，V100q node20）
+
+> **独立 campaign 说明**
+> - 这是在 `L2-minimal` 之后继续沿 canonical learned `256x8` 主线做的 matched 单模块 attribution 收口：同一 current scaffold、同一几何、同一 scalar budget 下，把 `L3-no-mixer` 与 `L4-no-calibrator` 一次性补齐到 `seed=42/123/456`。
+> - 有效 batch 是 `432589`：`V100q/node20`，`1 node / 3 GPU / 36 CPU / 120G / 4h`；job 内 `CUDA_VISIBLE_DEVICES=0,1,2`，六个 `srun` step `432589.0-.5` 全部 `COMPLETED`。前三个 step 对应 `L3-no-mixer`，后三个 step 对应 `L4-no-calibrator`。本轮运行代码状态保持在 commit `27b557c`。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=256`、`num_slices_per_view=8`、`trim_edge_slices=2`、`batch_size=6`、`num_workers=12`、`epochs=15`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=5e-4`、`dropout=0.25`、`gradient_clip_norm=2.0`；唯一变量分别是 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` 与 `ANKLE_DISABLE_FUSION_CALIBRATOR=1`。
+
+- [x] **CMP-RESNEXT-DECISION-256X8-L3-NO-MIXER-FORMAL-S42**：`runs/resnext_decision_256x8_matrix/formal/l3_no_mixer/s42`（commit `27b557c`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`）→ `val_acc=0.9255319148936170`, `val_auc=0.9777272727272727`, `val_f1=0.9213483146067416`, `peak_vram≈2.15 GiB`, `total_seconds≈896.2` → **keep**（相较 matched `L1-learned` seed42，accuracy / AUC / F1 分别提升 `0.0212765957446808 / 0.0045454545454546 / 0.0224719101123596`；这是当前 `256x8` learned 主线里第一个同时追平 equal accuracy 区间并把 AUC 拉到全批最高的单-seed no-mixer 结果。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L3-NO-MIXER-FORMAL-S123**：`runs/resnext_decision_256x8_matrix/formal/l3_no_mixer/s123`（commit `27b557c`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`）→ `val_acc=0.8936170212765957`, `val_auc=0.9395454545454545`, `val_f1=0.8750000000000000`, `peak_vram≈2.15 GiB`, `total_seconds≈887.7` → **keep**（相较 matched `L1-learned` seed123，accuracy / AUC / F1 分别提升 `0.0531914893617020 / 0.0263636363636363 / 0.0398351648351648`；这说明 mixer removal 的收益不是局限于单个低点 seed。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L3-NO-MIXER-FORMAL-S456**：`runs/resnext_decision_256x8_matrix/formal/l3_no_mixer/s456`（commit `27b557c`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`）→ `val_acc=0.9255319148936170`, `val_auc=0.9713636363636363`, `val_f1=0.9176470588235294`, `peak_vram≈2.14 GiB`, `total_seconds≈900.1` → **keep**（相较 matched `L1-learned` seed456，accuracy / AUC / F1 分别提升 `0.0319148936170213 / 0.0300000000000000 / 0.0287581699346406`；accuracy 还超过 matched `L0-equal` seed456 `0.0106382978723404`。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L4-NO-CALIBRATOR-FORMAL-S42**：`runs/resnext_decision_256x8_matrix/formal/l4_no_calibrator/s42`（commit `27b557c`，`ANKLE_DISABLE_FUSION_CALIBRATOR=1`）→ `val_acc=0.9255319148936170`, `val_auc=0.9509090909090908`, `val_f1=0.9156626506024096`, `peak_vram≈2.17 GiB`, `total_seconds≈887.0` → **keep**（相较 matched `L1-learned` seed42，accuracy / F1 分别提升 `0.0212765957446808 / 0.0167862461080276`，但 AUC 回落 `0.0222727272727273`；这个 seed 说明去掉 calibrator 仍能修复 accuracy 低点，但排序质量没有跟上。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L4-NO-CALIBRATOR-FORMAL-S123**：`runs/resnext_decision_256x8_matrix/formal/l4_no_calibrator/s123`（commit `27b557c`，`ANKLE_DISABLE_FUSION_CALIBRATOR=1`）→ `val_acc=0.8404255319148937`, `val_auc=0.9068181818181819`, `val_f1=0.8235294117647058`, `peak_vram≈2.17 GiB`, `total_seconds≈898.1` → **discard**（相较 matched `L1-learned` seed123，accuracy 持平，但 AUC / F1 分别回落 `0.0063636363636363 / 0.0116354234001294`；这说明 calibrator removal 至少没有带来可保留的 seed123 修复。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L4-NO-CALIBRATOR-FORMAL-S456**：`runs/resnext_decision_256x8_matrix/formal/l4_no_calibrator/s456`（commit `27b557c`，`ANKLE_DISABLE_FUSION_CALIBRATOR=1`）→ `val_acc=0.9255319148936170`, `val_auc=0.9595454545454545`, `val_f1=0.9176470588235294`, `peak_vram≈2.17 GiB`, `total_seconds≈901.9` → **keep**（相较 matched `L1-learned` seed456，accuracy / AUC / F1 分别提升 `0.0319148936170213 / 0.0181818181818182 / 0.0287581699346406`；但和 `L3` 同 seed 相比仍有稳定差距。）
+- **3-seed learned-mainline 结论（L3）**：`L3-no-mixer` 的 mean `val_acc=0.9148936170212766`、mean `val_auc=0.9628787878787879`、mean `val_f1=0.9046651244767570`，`val_acc` population std 为 `0.0150448251316287`。相较 current-scaffold `L1-learned`，`L3` 分别提升 `+0.0354609929078015 val_acc`、`+0.0203030303030303 val_auc`、`+0.0303550816273882 val_f1`，同时把 `val_acc` std 从 `0.0279220137376305` 压到 `0.0150448251316287`。相较 matched `L0-equal`，`L3` 只剩 `-0.0070921985815602 val_acc` 差距，但 `val_auc` 已反超 `+0.0022727272727272`。
+- **3-seed learned-mainline 结论（L4）**：`L4-no-calibrator` 的 mean `val_acc=0.8971631205673759`、mean `val_auc=0.9390909090909091`、mean `val_f1=0.8856130403968816`，`val_acc` population std 为 `0.0401195336843431`。相较 `L1-learned`，它虽然还有 `+0.0177304964539008 val_acc` 与 `+0.0113029975475128 val_f1`，但 `val_auc` 反而回落 `0.0034848484848484`，而且 `val_acc` std 恶化到 `0.0401195336843431`；说明 calibrator removal 不是稳定主线。
+- **当前判断**：到这里，`L3-no-mixer` 已经成为当前 `256x8` learned 主线里最强、最稳、也最接近 equal 的 branch。相较之下，`L4-no-calibrator` 只能算部分 seed 的 accuracy repair，不能升格为新主线。`L2` 仍然是有效简化修复，但综合均值与 ceiling 都已经被 `L3` 超过。
+- **推荐动作**：下一步不再把 `temperature` 直接加在 `L1` 上，而是把 **`L3-no-mixer` 作为 strongest learned branch** 继续做低容量 repair：优先提交 `L5-temp1p5` 与 `L5-temp2p0` 的 matched 3-seed formal，并在运行语义上明确为 **`L3-no-mixer + temperature`**，不是 `L1 + temperature`。
 
 ## 2026-04-22：ResNeXt Decision 256x8 Module Contribution（L2 minimal，formal multiseed，V100q node20）
 

@@ -198,12 +198,13 @@
       "phase": "formal",
       "lane_key": "l5_temp1p5",
       "matrix_id": "L5-temp1p5",
-      "description": "Low-capacity repair probe: global fusion temperature 1.5.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 1.5.",
       "seed": 42,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s42.yaml",
       "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s42",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s42.yaml"
@@ -212,12 +213,13 @@
       "phase": "formal",
       "lane_key": "l5_temp1p5",
       "matrix_id": "L5-temp1p5",
-      "description": "Low-capacity repair probe: global fusion temperature 1.5.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 1.5.",
       "seed": 123,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s123.yaml",
       "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s123",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s123.yaml"
@@ -226,12 +228,13 @@
       "phase": "formal",
       "lane_key": "l5_temp1p5",
       "matrix_id": "L5-temp1p5",
-      "description": "Low-capacity repair probe: global fusion temperature 1.5.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 1.5.",
       "seed": 456,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s456.yaml",
       "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s456",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s456.yaml"
@@ -240,12 +243,13 @@
       "phase": "formal",
       "lane_key": "l5_temp2p0",
       "matrix_id": "L5-temp2p0",
-      "description": "Low-capacity repair probe: global fusion temperature 2.0.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 2.0.",
       "seed": 42,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s42.yaml",
       "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s42",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s42.yaml"
@@ -254,12 +258,13 @@
       "phase": "formal",
       "lane_key": "l5_temp2p0",
       "matrix_id": "L5-temp2p0",
-      "description": "Low-capacity repair probe: global fusion temperature 2.0.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 2.0.",
       "seed": 123,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s123.yaml",
       "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s123",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s123.yaml"
@@ -268,12 +273,13 @@
       "phase": "formal",
       "lane_key": "l5_temp2p0",
       "matrix_id": "L5-temp2p0",
-      "description": "Low-capacity repair probe: global fusion temperature 2.0.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 2.0.",
       "seed": 456,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s456.yaml",
       "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s456",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s456.yaml"
@@ -474,12 +480,13 @@
       "phase": "proxy",
       "lane_key": "l5_temp1p5",
       "matrix_id": "L5-temp1p5",
-      "description": "Low-capacity repair probe: global fusion temperature 1.5.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 1.5.",
       "seed": 42,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s42.yaml",
       "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp1p5/s42",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s42.yaml"
@@ -488,12 +495,13 @@
       "phase": "proxy",
       "lane_key": "l5_temp1p5",
       "matrix_id": "L5-temp1p5",
-      "description": "Low-capacity repair probe: global fusion temperature 1.5.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 1.5.",
       "seed": 123,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s123.yaml",
       "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp1p5/s123",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s123.yaml"
@@ -502,12 +510,13 @@
       "phase": "proxy",
       "lane_key": "l5_temp1p5",
       "matrix_id": "L5-temp1p5",
-      "description": "Low-capacity repair probe: global fusion temperature 1.5.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 1.5.",
       "seed": 456,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s456.yaml",
       "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp1p5/s456",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s456.yaml"
@@ -516,12 +525,13 @@
       "phase": "proxy",
       "lane_key": "l5_temp2p0",
       "matrix_id": "L5-temp2p0",
-      "description": "Low-capacity repair probe: global fusion temperature 2.0.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 2.0.",
       "seed": 42,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s42.yaml",
       "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp2p0/s42",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s42.yaml"
@@ -530,12 +540,13 @@
       "phase": "proxy",
       "lane_key": "l5_temp2p0",
       "matrix_id": "L5-temp2p0",
-      "description": "Low-capacity repair probe: global fusion temperature 2.0.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 2.0.",
       "seed": 123,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s123.yaml",
       "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp2p0/s123",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s123.yaml"
@@ -544,12 +555,13 @@
       "phase": "proxy",
       "lane_key": "l5_temp2p0",
       "matrix_id": "L5-temp2p0",
-      "description": "Low-capacity repair probe: global fusion temperature 2.0.",
+      "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 2.0.",
       "seed": 456,
       "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s456.yaml",
       "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
       "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp2p0/s456",
       "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
         "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
       },
       "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s456.yaml"

@@ -51,15 +51,21 @@ LANE_SPECS: dict[str, dict[str, Any]] = {
     },
     "l5_temp1p5": {
         "matrix_id": "L5-temp1p5",
-        "description": "Low-capacity repair probe: global fusion temperature 1.5.",
+        "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 1.5.",
         "config_overrides": {},
-        "runtime_env": {"ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"},
+        "runtime_env": {
+            "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
+            "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5",
+        },
     },
     "l5_temp2p0": {
         "matrix_id": "L5-temp2p0",
-        "description": "Low-capacity repair probe: global fusion temperature 2.0.",
+        "description": "Low-capacity repair probe on the strongest learned branch (L3 no-mixer): global fusion temperature 2.0.",
         "config_overrides": {},
-        "runtime_env": {"ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"},
+        "runtime_env": {
+            "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1",
+            "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0",
+        },
     },
 }
 

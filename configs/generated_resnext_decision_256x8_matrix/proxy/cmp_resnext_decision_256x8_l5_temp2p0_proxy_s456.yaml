@@ -32,4 +32,5 @@ train:
   label_smoothing: 0.0
   gradient_clip_norm: 2.0
 runtime_env:
+  ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: '1'
   ANKLE_LEARNED_FUSION_TEMPERATURE: '2.0'
