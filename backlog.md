@@ -27,7 +27,7 @@
 >   - legacy equal 3-seed mean：`0.936170 / 0.965606`
 > - 这意味着新一轮模块贡献分析的目的，不是证明 learned 已经优于 equal，而是先回答：**learned weighting 在 `256x8` 上到底差在哪里，哪个模块组合能最稳定地提升 learned 自身的绝对性能与稳定性。**
 >
-> **待执行的模块贡献分析矩阵（当前进度：`L0/L1/L2/L3/L4` formal 已完成，`L5` 待继续）**
+> **待执行的模块贡献分析矩阵（当前进度：`L0/L1/L2/L3/L4/L5` formal 已完成；`temperature` 线已封口，后续转入 `L3-no-mixer` 的非-temp 标量修复）**
 > - `L0 control`: legacy `256x8` equal-weight（只作 control / 报告参考，不作主方法）
 > - `L1 anchor`: canonical `256x8` learned weighting baseline
 > - `L2 minimal`: 去掉 richer reliability path，仅保留最基础 per-view classifier + raw confidence head
@@ -40,6 +40,7 @@
 > - 后续模块推进首先看：某个变体是否能提升 learned 主线自己的 `val_acc / val_auc / stability`；`equal-weight` 只负责提供 matched reference 和论文对照，不再作为 learned 主线继续与否的门槛。
 > - 如果某个 ablation 能稳定改善 learned 主线，即使仍低于 equal-weight，也应保留为主线候选并继续细化；只有当同一 scalar budget 下多个单模块/低容量变体都无法改善 canonical learned，learned-weighting 主叙事才需要降级为“机制研究”。
 > - 工程准备已完成：`256x8` learned lane 的 dedicated formal/proxy/search 模板已补到 `configs/autoresearch_*_resnext_decision_256x8.yaml` 与 `configs/optuna_*_resnext_decision_256x8.yaml`；模块矩阵清单写入 `docs/resnext_decision_256x8_module_matrix.md`。同时，`src/model.py` 已补 runtime toggles：`ANKLE_DISABLE_FUSION_CALIBRATOR=1` 与 `ANKLE_LEARNED_FUSION_TEMPERATURE=<float>`；`scripts/optuna_workflow.py` 与 `scripts/run_train_with_config_env.py` 也已把这些 env overrides 显式写入 trial/config 产物。现在 `scripts/prepare_resnext_decision_256x8_matrix.py` 还已把 `7 lanes × 3 seeds × 2 phases = 42` 份 runnable YAML 与 manifest materialize 到 `configs/generated_resnext_decision_256x8_matrix/`，后续做 `no-calibrator` / `temperature` probe 不再需要依赖隐式 shell 状态。
+> - **主线叙事补充规则（2026-04-22）**：`temperature` 只保留为当前 `L5` 的一次性低容量校准收口，不再扩展为后续常规消融维度。也就是说，`L5-temp1p5 / L5-temp2p0` 跑完后，后续主线模块分析默认不再新增新的 `temp=*` 探针，除非出现明确机制证据表明必须重新检查 temperature 才能解释主指标变化。
 
 ## 2026-04-22：ResNeXt Decision 256x8 Module Contribution（L3 no-mixer + L4 no-calibrator，formal multiseed，V100q node20）
 
@@ -58,6 +59,24 @@
 - **3-seed learned-mainline 结论（L4）**：`L4-no-calibrator` 的 mean `val_acc=0.8971631205673759`、mean `val_auc=0.9390909090909091`、mean `val_f1=0.8856130403968816`，`val_acc` population std 为 `0.0401195336843431`。相较 `L1-learned`，它虽然还有 `+0.0177304964539008 val_acc` 与 `+0.0113029975475128 val_f1`，但 `val_auc` 反而回落 `0.0034848484848484`，而且 `val_acc` std 恶化到 `0.0401195336843431`；说明 calibrator removal 不是稳定主线。
 - **当前判断**：到这里，`L3-no-mixer` 已经成为当前 `256x8` learned 主线里最强、最稳、也最接近 equal 的 branch。相较之下，`L4-no-calibrator` 只能算部分 seed 的 accuracy repair，不能升格为新主线。`L2` 仍然是有效简化修复，但综合均值与 ceiling 都已经被 `L3` 超过。
 - **推荐动作**：下一步不再把 `temperature` 直接加在 `L1` 上，而是把 **`L3-no-mixer` 作为 strongest learned branch** 继续做低容量 repair：优先提交 `L5-temp1p5` 与 `L5-temp2p0` 的 matched 3-seed formal，并在运行语义上明确为 **`L3-no-mixer + temperature`**，不是 `L1 + temperature`。
+
+## 2026-04-22：ResNeXt Decision 256x8 Module Contribution（L5 temperature closeout，formal multiseed，V100q node20）
+
+> **独立 campaign 说明**
+> - 这是在 `L3-no-mixer` 被确认成 strongest learned branch 之后，对 `temperature` 这条低容量校准线做的一次性收口，而不是新的长期 ablation family。按人类最新规则，`L5-temp1p5 / L5-temp2p0` 跑完后，后续主线默认不再新增新的 `temp=*` probe。
+> - 有效 batch 是 `432737`：`V100q/node20`，`1 node / 3 GPU / 36 CPU / 120G / 4h`；job 内 `CUDA_VISIBLE_DEVICES=0,1,2`，前 3 个 `srun` step `432737.0-.2` 对应 `L5-temp1p5`，后 3 个 step `432737.3-.5` 对应 `L5-temp2p0`，六个 step 全部 `COMPLETED`。本轮运行代码状态保持在 commit `f84df46`。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=256`、`num_slices_per_view=8`、`trim_edge_slices=2`、`batch_size=6`、`num_workers=12`、`epochs=15`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=5e-4`、`dropout=0.25`、`gradient_clip_norm=2.0`；共同 runtime path 是 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`，唯一变量是 `ANKLE_LEARNED_FUSION_TEMPERATURE=1.5` 或 `2.0`。
+
+- [x] **CMP-RESNEXT-DECISION-256X8-L5-TEMP1P5-FORMAL-S42**：`runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s42`（commit `f84df46`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`，`ANKLE_LEARNED_FUSION_TEMPERATURE=1.5`）→ `val_acc=0.9255319148936170`, `val_auc=0.9800000000000000`, `val_f1=0.9176470588235294`, `peak_vram≈2.15 GiB`, `total_seconds≈897.3` → **keep**（与 matched `L3-no-mixer` seed42 在 `val_acc` 上打平，同时把 AUC 再抬高 `0.0022727272727273`；但 F1 略低 `0.0037012557832122`，属于“更软的 ranking 修正”而不是主指标突破。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L5-TEMP1P5-FORMAL-S123**：`runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s123`（commit `f84df46`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`，`ANKLE_LEARNED_FUSION_TEMPERATURE=1.5`）→ `val_acc=0.8829787234042553`, `val_auc=0.9472727272727273`, `val_f1=0.8791208791208791`, `peak_vram≈2.15 GiB`, `total_seconds≈896.9` → **discard**（相较 matched `L3-no-mixer` seed123，AUC 虽提升 `0.0077272727272728`，但主指标 accuracy 回落 `0.0106382978723404`；说明 temperature=1.5 没有修复当前最关键的低点 seed。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L5-TEMP1P5-FORMAL-S456**：`runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s456`（commit `f84df46`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`，`ANKLE_LEARNED_FUSION_TEMPERATURE=1.5`）→ `val_acc=0.9361702127659575`, `val_auc=0.9686363636363636`, `val_f1=0.9285714285714286`, `peak_vram≈2.14 GiB`, `total_seconds≈902.1` → **keep**（相较 matched `L3-no-mixer` seed456，accuracy / F1 分别提升 `0.0106382978723405 / 0.0109243697478992`，但 AUC 回落 `0.0027272727272727`；这更像局部 seed 的 softmax-shrinkage 收益，不是稳定主线替代。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L5-TEMP2P0-FORMAL-S42**：`runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s42`（commit `f84df46`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`，`ANKLE_LEARNED_FUSION_TEMPERATURE=2.0`）→ `val_acc=0.9042553191489362`, `val_auc=0.9827272727272728`, `val_f1=0.8988764044943820`, `peak_vram≈2.15 GiB`, `total_seconds≈898.0` → **discard**（虽然 AUC 进一步升到本轮最高，但相较 matched `L3-no-mixer` seed42，accuracy / F1 分别回落 `0.0212765957446808 / 0.0224719101123596`；主指标代价过大。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L5-TEMP2P0-FORMAL-S123**：`runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s123`（commit `f84df46`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`，`ANKLE_LEARNED_FUSION_TEMPERATURE=2.0`）→ `val_acc=0.8617021276595744`, `val_auc=0.9500000000000000`, `val_f1=0.8266666666666667`, `peak_vram≈2.15 GiB`, `total_seconds≈900.5` → **discard**（相较 matched `L3-no-mixer` seed123，accuracy / F1 分别回落 `0.0319148936170213 / 0.0483333333333333`；这条线没有修复低点，反而把 low-point 拉得更低。）
+- [x] **CMP-RESNEXT-DECISION-256X8-L5-TEMP2P0-FORMAL-S456**：`runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s456`（commit `f84df46`，`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`，`ANKLE_LEARNED_FUSION_TEMPERATURE=2.0`）→ `val_acc=0.9255319148936170`, `val_auc=0.9618181818181817`, `val_f1=0.9195402298850575`, `peak_vram≈2.14 GiB`, `total_seconds≈904.0` → **discard**（与 matched `L3-no-mixer` seed456 在 `val_acc` 上打平，但 AUC 回落 `0.0095454545454546`；因此不能保留。）
+- **3-seed learned-mainline 结论（L5-temp1p5）**：`L5-temp1p5` 的 mean `val_acc=0.9148936170212766`、mean `val_auc=0.9653030303030303`、mean `val_f1=0.9084464555052790`，`val_acc` population std 为 `0.0229813499943541`。相较 `L3-no-mixer`，它没有提升主指标 mean accuracy，但提升了 `+0.0024242424242424 val_auc` 与 `+0.0037813310285220 val_f1`，同时把 `val_acc` std 从 `0.0150448251316287` 拉高到 `0.0229813499943541`。这说明 `temperature=1.5` 更像是 ranking-side softening，而不是更强的主线 recipe。
+- **3-seed learned-mainline 结论（L5-temp2p0）**：`L5-temp2p0` 的 mean `val_acc=0.8971631205673759`、mean `val_auc=0.9648484848484848`、mean `val_f1=0.8816944336820353`，`val_acc` population std 为 `0.0265365772111627`。相较 `L3-no-mixer`，它虽然把 mean AUC 再抬了 `0.0019696969696969`，但 mean accuracy 回落 `0.0177304964539007`，mean F1 回落 `0.0229706907947217`；不具备主线保留价值。
+- **当前判断**：到这里，`temperature` 线已经足够回答问题了。`temp1.5` 只能提供轻度 ranking 修正，`temp2.0` 则明显伤害主指标 accuracy；两者都没有把 `L3-no-mixer` 从 “当前 strongest learned branch” 的位置上替换掉。按主线规则，`temperature` 现在正式封口，后续模块消融不再默认继续新增 `temp=*`。
+- **推荐动作**：下一步不再继续任何 `temperature` probe，而是把 **`L3-no-mixer` 固定为新的 canonical learned branch**，转入非-temp 的小范围标量修复。最高优先级是围绕当前低点 `seed=123` 发起一轮 fresh `main-study`，只在 `lr / weight_decay / dropout / gradient_clip_norm` 上做小范围搜索，看能否在不回引 mixer 的前提下把 accuracy 从 `0.893617` 往上抬。
 
 ## 2026-04-22：ResNeXt Decision 256x8 Module Contribution（L2 minimal，formal multiseed，V100q node20）
 
@@ -332,11 +351,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `L0-equal` vs `L1-learned` 的 `256x8` formal matched controls（commit `8e0bdf4`；Slurm batch `431122`；`V100q/node20`；用 `scripts/slurm_resnext_decision_256x8_matrix.sbatch` 在同一节点并行跑完 `seed=42/123/456` 六个 current-scaffold formal 配置，run dirs 位于 `runs/resnext_decision_256x8_matrix/formal/l0_equal/*` 与 `runs/resnext_decision_256x8_matrix/formal/l1_learned/*`。） |
-| 上次结果 | `L0-equal` keep ×3 / `L1-learned` discard ×3（`L0` 3-seed mean `0.921986 / 0.960606 / 0.911222`，`L1` 3-seed mean `0.879433 / 0.942576 / 0.874310`；equal 相对 learned 的 mean 增益为 `+0.042553 val_acc`、`+0.018030 val_auc`，且 `val_acc` std 从 `0.027922` 降到 `0.005015`。） |
-| 下一步 | 继续同一 `256x8` formal matrix，直接跑 **`L2-minimal` 的 matched `seed=42/123/456`**。目标不是证明 minimal 会赢，而是先确认“去掉 richer reliability path 后”是否能比当前 `L1-learned` 更接近 `L0-equal`，从而决定后续还有没有必要继续拆 `L3/L4/L5`。 |
+| 上次实验 | `L5-temp1p5` + `L5-temp2p0` 的 `256x8` formal matched closeout（commit `f84df46`；Slurm batch `432737`；`V100q/node20`；用 `scripts/slurm_resnext_decision_256x8_matrix.sbatch` 在同一节点并行跑完 strongest learned branch `L3-no-mixer` 上的 `temperature=1.5 / 2.0` 三 seed closeout，run dirs 位于 `runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/*` 与 `runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/*`。） |
+| 上次结果 | `L5-temp1p5` keep ×2 / discard ×1，`L5-temp2p0` discard ×3（`temp1.5` 3-seed mean `0.914894 / 0.965303 / 0.908446`，相较 `L3` 只提升 AUC / F1，不提升 mean accuracy，且 `val_acc` std 从 `0.015045` 恶化到 `0.022981`；`temp2.0` 3-seed mean `0.897163 / 0.964848 / 0.881694`，mean accuracy 比 `L3` 回落 `0.017730`。结论：temperature 线正式封口，`L3-no-mixer` 继续保持 strongest learned branch。） |
+| 下一步 | 不再继续 `temp=*` probe；转入 **`L3-no-mixer` 的非-temp 标量修复**。最高优先级是先做 `seed=123` 的 fresh `main-study`，只在 `lr / weight_decay / dropout / gradient_clip_norm` 上做小范围搜索，目标是优先修复当前 strongest learned branch 的剩余低点。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 3（`L0-equal` 三次 keep 已经把上一轮 streak 清零；随后 `L1-learned` 的 `seed=42/123/456` 三个 matched anchor 连续记 discard，因此当前 discard streak 为 3。） |
+| 连续 discard 计数 | 4（上一轮 `L4-no-calibrator` 的 `seed=42/456` 与 `L5-temp1p5` 的 `seed=42/456` 都有 keep，已多次打断 discard streak；当前最新连续 discard 序列是 `L5-temp1p5-s123` → `L5-temp2p0-s42` → `L5-temp2p0-s123` → `L5-temp2p0-s456`，因此当前 discard streak 为 4。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 

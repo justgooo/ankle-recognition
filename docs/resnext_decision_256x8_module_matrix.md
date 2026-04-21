@@ -21,15 +21,16 @@ The shared anchor is [configs/autoresearch_formal_resnext_decision_256x8.yaml](/
 | `L2-minimal` | Remove richer reliability path | base config + `model.minimal_fusion_baseline=true` | none | tests whether a simpler learned path improves absolute performance |
 | `L3-no-mixer` | Keep calibrator, drop cross-view token mixing | base config | `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` | isolates mixer contribution against canonical learned |
 | `L4-no-calibrator` | Keep mixer, drop shared residual calibrator | base config | `ANKLE_DISABLE_FUSION_CALIBRATOR=1` | isolates calibrator contribution against canonical learned |
-| `L5-temp1p5` | Low-capacity shrinkage probe | base config + strongest learned branch runtime path | `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`, `ANKLE_LEARNED_FUSION_TEMPERATURE=1.5` | tests lighter softening on the strongest learned branch |
-| `L5-temp2p0` | Low-capacity shrinkage probe | base config + strongest learned branch runtime path | `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`, `ANKLE_LEARNED_FUSION_TEMPERATURE=2.0` | tests stronger softening on the strongest learned branch |
+| `L5-temp1p5` | Final one-off shrinkage probe | base config + strongest learned branch runtime path | `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`, `ANKLE_LEARNED_FUSION_TEMPERATURE=1.5` | tests lighter softening on the strongest learned branch, then closes the temp line |
+| `L5-temp2p0` | Final one-off shrinkage probe | base config + strongest learned branch runtime path | `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`, `ANKLE_LEARNED_FUSION_TEMPERATURE=2.0` | tests stronger softening on the strongest learned branch, then closes the temp line |
 
 ## Recommended Order
 
 1. Lock `L1-learned` as the only canonical mainline recipe across `42/123/456`
 2. Run `L2-minimal`, `L3-no-mixer`, and `L4-no-calibrator` as single-module ablations against `L1`
-3. Promote the strongest learned branch from step 2 into `L5-temp1p5` / `L5-temp2p0`
-4. Keep `L0-equal` only as a matched control snapshot for reporting and final discussion
+3. Promote the strongest learned branch from step 2 into a single closing `L5-temp1p5` / `L5-temp2p0` check
+4. After `L5` closes, stop opening new `temp=*` ablations unless a later mechanism result forces a targeted re-check
+5. Keep `L0-equal` only as a matched control snapshot for reporting and final discussion
 
 ## Materialized Configs
 
@@ -50,6 +51,8 @@ The shared anchor is [configs/autoresearch_formal_resnext_decision_256x8.yaml](/
 - `equal-weight` remains mandatory as a matched control, but it is not the optimization target for this mainline.
 - A learned ablation can remain on the mainline even if it is still below `equal-weight`, as long as it improves the canonical learned branch in `val_acc`, `val_auc`, or seed stability.
 - As of `2026-04-22`, the strongest learned branch from the matched single-module sweep is `L3-no-mixer`, so `L5-temp*` should be interpreted as `L3-no-mixer + temperature`, not `L1 + temperature`.
+- `temperature` is now treated as a closing calibration probe rather than an open-ended ablation axis. Once the current `L5-temp1p5 / L5-temp2p0` pair finishes, later mainline sweeps should not add more `temp=*` lanes by default.
+- The completed `L5` closeout did not beat `L3-no-mixer` on mean `val_acc`: `temp1.5` only improved AUC/F1 with worse seed stability, and `temp2.0` reduced accuracy. So the post-`L5` canonical branch remains plain `L3-no-mixer`.
 - `L3/L4/L5` can now be serialized into `config.runtime_env` or Optuna `study.env`; trial artifacts will keep the explicit env map instead of relying on shell history alone.
 - Direct single-run launches that depend on `runtime_env` should go through [scripts/run_train_with_config_env.py](/dataset/HH/ankle-ct/scripts/run_train_with_config_env.py), not raw `train.py`.
 - The matrix has already been materialized; current execution status and results should be read from [backlog.md](/dataset/HH/ankle-ct/backlog.md), not inferred from this note alone.
