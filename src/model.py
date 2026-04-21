@@ -871,20 +871,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         bias_limit=0.15,
                     )
 
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播：每个视角独立分类，用动态可信度权重融合。
-
-        参数：
-            images: (B, 3, S, H, W) 的 CT 图像张量
-
-        返回：
-            logits: (B, 2) 的张量，3 个视角动态加权投票后的分类结果
-        """
-        # 第 1 步：提取 3 个视角的 pooled feature。
+    def _compute_decision_outputs(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return per-view logits plus learned fusion weights for analysis/control runs."""
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
 
-        # 第 3 步：每个视角分别做分类
         view_logits = torch.stack(
             [
                 classifier(feature)
@@ -894,8 +884,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         )  # (B, 3, 2)
 
         if self.equal_weight_fusion:
-            # 固定等比例权重控制组：仅关闭 learned weighting。
-            return view_logits.mean(dim=1)
+            batch_size = view_logits.shape[0]
+            confidences = torch.zeros(
+                batch_size,
+                view_logits.shape[1],
+                1,
+                device=view_logits.device,
+                dtype=view_logits.dtype,
+            )
+            fusion_weights = torch.full_like(confidences, 1.0 / view_logits.shape[1])
+            return {
+                "view_logits": view_logits,
+                "confidences": confidences,
+                "scaled_confidences": confidences,
+                "fusion_weights": fusion_weights,
+            }
 
         if self.minimal_fusion_baseline:
             confidences = torch.stack(
@@ -906,8 +909,6 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 dim=1,
             )  # (B, 3, 1)
         else:
-            # 第 4 步：默认先做 cross-view mixing，再用共享 calibrator 做温和 scale+bias
-            # 校准；单模块 ablation 可通过环境变量跳过 mixer 或 calibrator。
             if self.disable_fusion_cross_view_mixer:
                 gating_features = view_features
             else:
@@ -924,13 +925,67 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     )
             confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
 
-        # 第 5 步：softmax 归一化，得到 3 个视角的融合权重
         scaled_confidences = confidences / self.fusion_temperature
         fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
+        return {
+            "view_logits": view_logits,
+            "confidences": confidences,
+            "scaled_confidences": scaled_confidences,
+            "fusion_weights": fusion_weights,
+        }
 
-        # 第 6 步：动态加权求和
-        # (B, 3, 2) × (B, 3, 1) → (B, 3, 2)，然后沿着视角维度求和 → (B, 2)
+    def fuse_decisions(
+        self,
+        view_logits: torch.Tensor,
+        fusion_weights: torch.Tensor,
+        active_view_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Fuse per-view logits, optionally renormalizing over an active view subset."""
+        if active_view_mask is not None:
+            if active_view_mask.ndim == 1:
+                active_view_mask = active_view_mask.unsqueeze(0)
+            if active_view_mask.ndim != 2:
+                raise ValueError("active_view_mask must have shape (3,) or (B, 3).")
+            if active_view_mask.shape[-1] != view_logits.shape[1]:
+                raise ValueError(
+                    "active_view_mask last dimension must match the number of views."
+                )
+            if active_view_mask.shape[0] not in {1, view_logits.shape[0]}:
+                raise ValueError(
+                    "active_view_mask batch dimension must be 1 or match view_logits."
+                )
+            if active_view_mask.shape[0] == 1 and view_logits.shape[0] != 1:
+                active_view_mask = active_view_mask.expand(view_logits.shape[0], -1)
+            mask = active_view_mask.to(device=view_logits.device, dtype=view_logits.dtype).unsqueeze(-1)
+            masked_weights = fusion_weights * mask
+            normalizer = masked_weights.sum(dim=1, keepdim=True)
+            if torch.any(normalizer <= 0):
+                raise ValueError("active_view_mask must keep at least one view per sample.")
+            fusion_weights = masked_weights / normalizer
+
         return (view_logits * fusion_weights).sum(dim=1)
+
+    def forward_with_decision_info(self, images: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Return the usual fused logits plus intermediate tensors for matched controls."""
+        decision_outputs = self._compute_decision_outputs(images)
+        logits = self.fuse_decisions(
+            decision_outputs["view_logits"],
+            decision_outputs["fusion_weights"],
+        )
+        return logits, decision_outputs
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        前向传播：每个视角独立分类，用动态可信度权重融合。
+
+        参数：
+            images: (B, 3, S, H, W) 的 CT 图像张量
+
+        返回：
+            logits: (B, 2) 的张量，3 个视角动态加权投票后的分类结果
+        """
+        logits, _ = self.forward_with_decision_info(images)
+        return logits
 
 
 class MultiViewAttentionClassifier(nn.Module):
