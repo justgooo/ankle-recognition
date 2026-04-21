@@ -40,7 +40,7 @@ from .attention_pooling import AttentionPooling  # 可学习注意力池化模�
 # 设为 0 表示不冻结（原始行为），设为 3 表示只训练 layer4 + 分类头。
 # autoresearch Agent 通过修改此常量来实验不同冻结策略。
 DEFAULT_FREEZE_LAYERS = 3  # Stage 10C VR-MS：冻结 conv1+layer1+layer2+layer3，只训练 layer4+head
-LEARNED_FUSION_TEMPERATURE = 1.5
+LEARNED_FUSION_TEMPERATURE = 1.75
 
 
 def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:

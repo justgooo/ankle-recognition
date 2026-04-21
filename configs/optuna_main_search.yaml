@@ -1,5 +1,5 @@
 study:
-  name: fusion_ratio_resnext_temperature1p5_seed42_main
+  name: fusion_ratio_resnext_temperature1p75_seed42_main
   phase: main
   base_config: configs/autoresearch_formal.yaml
   study_root: runs/optuna_main
