@@ -28,6 +28,7 @@ model.py — 多视角 CT 分类模型
 
 from __future__ import annotations
 
+import math
 import os
 
 import torch  # type: ignore[import-not-found]          # PyTorch：深度学习框架的核心库
@@ -45,6 +46,25 @@ DEFAULT_FREEZE_LAYERS = 3  # Stage 10C VR-MS：冻结 conv1+layer1+layer2+layer3
 # Keep the learned-weighting softmax untempered while isolating reliability-path
 # module ablations. Ratio probes can override this constant in dedicated runs.
 LEARNED_FUSION_TEMPERATURE = 1.0
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_positive_float(name: str, default: float) -> float:
+    if not math.isfinite(default) or default <= 0.0:
+        raise ValueError(f"Default value for {name} must be finite and > 0, got {default}.")
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a finite positive float, got {raw!r}.") from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be a finite positive float, got {raw!r}.")
+    return value
 
 
 def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:
@@ -775,11 +795,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         )
         self.minimal_fusion_baseline = minimal_fusion_baseline
         self.equal_weight_fusion = equal_weight_fusion
-        self.disable_fusion_cross_view_mixer = (
-            os.getenv("ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER", "").strip().lower()
-            in {"1", "true", "yes", "on"}
+        self.disable_fusion_cross_view_mixer = _env_flag(
+            "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER"
         )
-        self.fusion_temperature = 1.0
+        self.disable_fusion_calibrator = _env_flag(
+            "ANKLE_DISABLE_FUSION_CALIBRATOR"
+        )
+        self.fusion_temperature = _env_positive_float(
+            "ANKLE_LEARNED_FUSION_TEMPERATURE",
+            LEARNED_FUSION_TEMPERATURE,
+        )
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
                 "minimal_fusion_baseline and equal_weight_fusion are mutually exclusive."
@@ -817,8 +842,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             )
             if not self.equal_weight_fusion:
                 # 默认 learned path：先做轻量 cross-view token interaction，再叠加共享的
-                # 低秩 residual calibrator。需要做单模块 ablation 时，可通过
-                # ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1 只关闭 mixer，保留 calibrator。
+                # 低秩 residual calibrator。需要做单模块 ablation 时，可通过环境变量
+                # 关闭 mixer / calibrator，或直接覆写 softmax temperature。
                 if not self.disable_fusion_cross_view_mixer:
                     from .cross_view_attention import CrossViewAttention
 
@@ -838,15 +863,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         for _ in range(3)
                     ]
                 )
-                self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
-                    feature_dim=self.feature_dim,
-                    bottleneck_dim=32,
-                    scale_limit=0.25,
-                    bias_limit=0.15,
-                )
-                # Keep softmax scaling at the matched baseline while isolating a
-                # single reliability-path module at a time.
-                self.fusion_temperature = LEARNED_FUSION_TEMPERATURE
+                if not self.disable_fusion_calibrator:
+                    self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
+                        feature_dim=self.feature_dim,
+                        bottleneck_dim=32,
+                        scale_limit=0.25,
+                        bias_limit=0.15,
+                    )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -884,19 +907,22 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             )  # (B, 3, 1)
         else:
             # 第 4 步：默认先做 cross-view mixing，再用共享 calibrator 做温和 scale+bias
-            # 校准；单模块 ablation 可通过环境变量跳过 mixer，仅保留 calibrator。
+            # 校准；单模块 ablation 可通过环境变量跳过 mixer 或 calibrator。
             if self.disable_fusion_cross_view_mixer:
                 gating_features = view_features
             else:
                 stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
                 gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
-            confidences = torch.stack(
-                [
-                    self.confidence_calibrator(feature, head(feature))
-                    for head, feature in zip(self.confidence_heads, gating_features)
-                ],
-                dim=1,
-            )  # (B, 3, 1)
+            calibrated_confidences = []
+            for head, feature in zip(self.confidence_heads, gating_features):
+                raw_confidence = head(feature)
+                if self.disable_fusion_calibrator:
+                    calibrated_confidences.append(raw_confidence)
+                else:
+                    calibrated_confidences.append(
+                        self.confidence_calibrator(feature, raw_confidence)
+                    )
+            confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
 
         # 第 5 步：softmax 归一化，得到 3 个视角的融合权重
         scaled_confidences = confidences / self.fusion_temperature

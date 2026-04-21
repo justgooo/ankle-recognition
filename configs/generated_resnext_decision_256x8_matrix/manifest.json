@@ -1,0 +1,558 @@
+{
+  "generated_from": "scripts/prepare_resnext_decision_256x8_matrix.py",
+  "output_root": "configs/generated_resnext_decision_256x8_matrix",
+  "records": [
+    {
+      "phase": "formal",
+      "lane_key": "l0_equal",
+      "matrix_id": "L0-equal",
+      "description": "Matched equal-weight control.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l0_equal_formal_s42.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l0_equal/s42",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l0_equal_formal_s42.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l0_equal",
+      "matrix_id": "L0-equal",
+      "description": "Matched equal-weight control.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l0_equal_formal_s123.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l0_equal/s123",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l0_equal_formal_s123.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l0_equal",
+      "matrix_id": "L0-equal",
+      "description": "Matched equal-weight control.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l0_equal_formal_s456.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l0_equal/s456",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l0_equal_formal_s456.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l1_learned",
+      "matrix_id": "L1-learned",
+      "description": "Legacy-style learned-weighting anchor.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l1_learned_formal_s42.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l1_learned/s42",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l1_learned_formal_s42.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l1_learned",
+      "matrix_id": "L1-learned",
+      "description": "Legacy-style learned-weighting anchor.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l1_learned_formal_s123.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l1_learned/s123",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l1_learned_formal_s123.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l1_learned",
+      "matrix_id": "L1-learned",
+      "description": "Legacy-style learned-weighting anchor.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l1_learned_formal_s456.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l1_learned/s456",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l1_learned_formal_s456.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l2_minimal",
+      "matrix_id": "L2-minimal",
+      "description": "Minimal learned baseline with raw confidence heads.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l2_minimal_formal_s42.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l2_minimal/s42",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l2_minimal_formal_s42.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l2_minimal",
+      "matrix_id": "L2-minimal",
+      "description": "Minimal learned baseline with raw confidence heads.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l2_minimal_formal_s123.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l2_minimal/s123",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l2_minimal_formal_s123.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l2_minimal",
+      "matrix_id": "L2-minimal",
+      "description": "Minimal learned baseline with raw confidence heads.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l2_minimal_formal_s456.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l2_minimal/s456",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l2_minimal_formal_s456.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l3_no_mixer",
+      "matrix_id": "L3-no-mixer",
+      "description": "Disable cross-view mixer while keeping calibrator.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l3_no_mixer_formal_s42.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l3_no_mixer/s42",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l3_no_mixer_formal_s42.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l3_no_mixer",
+      "matrix_id": "L3-no-mixer",
+      "description": "Disable cross-view mixer while keeping calibrator.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l3_no_mixer_formal_s123.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l3_no_mixer/s123",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l3_no_mixer_formal_s123.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l3_no_mixer",
+      "matrix_id": "L3-no-mixer",
+      "description": "Disable cross-view mixer while keeping calibrator.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l3_no_mixer_formal_s456.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l3_no_mixer/s456",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l3_no_mixer_formal_s456.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l4_no_calibrator",
+      "matrix_id": "L4-no-calibrator",
+      "description": "Disable shared calibrator while keeping cross-view mixer.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l4_no_calibrator_formal_s42.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l4_no_calibrator/s42",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CALIBRATOR": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l4_no_calibrator_formal_s42.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l4_no_calibrator",
+      "matrix_id": "L4-no-calibrator",
+      "description": "Disable shared calibrator while keeping cross-view mixer.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l4_no_calibrator_formal_s123.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l4_no_calibrator/s123",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CALIBRATOR": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l4_no_calibrator_formal_s123.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l4_no_calibrator",
+      "matrix_id": "L4-no-calibrator",
+      "description": "Disable shared calibrator while keeping cross-view mixer.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l4_no_calibrator_formal_s456.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l4_no_calibrator/s456",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CALIBRATOR": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l4_no_calibrator_formal_s456.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l5_temp1p5",
+      "matrix_id": "L5-temp1p5",
+      "description": "Global fusion temperature 1.5.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s42.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s42",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s42.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l5_temp1p5",
+      "matrix_id": "L5-temp1p5",
+      "description": "Global fusion temperature 1.5.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s123.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s123",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s123.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l5_temp1p5",
+      "matrix_id": "L5-temp1p5",
+      "description": "Global fusion temperature 1.5.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s456.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/s456",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp1p5_formal_s456.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l5_temp2p0",
+      "matrix_id": "L5-temp2p0",
+      "description": "Global fusion temperature 2.0.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s42.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s42",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s42.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l5_temp2p0",
+      "matrix_id": "L5-temp2p0",
+      "description": "Global fusion temperature 2.0.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s123.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s123",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s123.yaml"
+    },
+    {
+      "phase": "formal",
+      "lane_key": "l5_temp2p0",
+      "matrix_id": "L5-temp2p0",
+      "description": "Global fusion temperature 2.0.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s456.yaml",
+      "base_config": "configs/autoresearch_formal_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/s456",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l5_temp2p0_formal_s456.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l0_equal",
+      "matrix_id": "L0-equal",
+      "description": "Matched equal-weight control.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l0_equal_proxy_s42.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l0_equal/s42",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l0_equal_proxy_s42.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l0_equal",
+      "matrix_id": "L0-equal",
+      "description": "Matched equal-weight control.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l0_equal_proxy_s123.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l0_equal/s123",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l0_equal_proxy_s123.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l0_equal",
+      "matrix_id": "L0-equal",
+      "description": "Matched equal-weight control.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l0_equal_proxy_s456.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l0_equal/s456",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l0_equal_proxy_s456.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l1_learned",
+      "matrix_id": "L1-learned",
+      "description": "Legacy-style learned-weighting anchor.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l1_learned_proxy_s42.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l1_learned/s42",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l1_learned_proxy_s42.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l1_learned",
+      "matrix_id": "L1-learned",
+      "description": "Legacy-style learned-weighting anchor.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l1_learned_proxy_s123.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l1_learned/s123",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l1_learned_proxy_s123.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l1_learned",
+      "matrix_id": "L1-learned",
+      "description": "Legacy-style learned-weighting anchor.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l1_learned_proxy_s456.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l1_learned/s456",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l1_learned_proxy_s456.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l2_minimal",
+      "matrix_id": "L2-minimal",
+      "description": "Minimal learned baseline with raw confidence heads.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l2_minimal_proxy_s42.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l2_minimal/s42",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l2_minimal_proxy_s42.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l2_minimal",
+      "matrix_id": "L2-minimal",
+      "description": "Minimal learned baseline with raw confidence heads.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l2_minimal_proxy_s123.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l2_minimal/s123",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l2_minimal_proxy_s123.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l2_minimal",
+      "matrix_id": "L2-minimal",
+      "description": "Minimal learned baseline with raw confidence heads.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l2_minimal_proxy_s456.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l2_minimal/s456",
+      "runtime_env": {},
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l2_minimal_proxy_s456.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l3_no_mixer",
+      "matrix_id": "L3-no-mixer",
+      "description": "Disable cross-view mixer while keeping calibrator.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l3_no_mixer_proxy_s42.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l3_no_mixer/s42",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l3_no_mixer_proxy_s42.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l3_no_mixer",
+      "matrix_id": "L3-no-mixer",
+      "description": "Disable cross-view mixer while keeping calibrator.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l3_no_mixer_proxy_s123.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l3_no_mixer/s123",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l3_no_mixer_proxy_s123.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l3_no_mixer",
+      "matrix_id": "L3-no-mixer",
+      "description": "Disable cross-view mixer while keeping calibrator.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l3_no_mixer_proxy_s456.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l3_no_mixer/s456",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l3_no_mixer_proxy_s456.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l4_no_calibrator",
+      "matrix_id": "L4-no-calibrator",
+      "description": "Disable shared calibrator while keeping cross-view mixer.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l4_no_calibrator_proxy_s42.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l4_no_calibrator/s42",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CALIBRATOR": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l4_no_calibrator_proxy_s42.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l4_no_calibrator",
+      "matrix_id": "L4-no-calibrator",
+      "description": "Disable shared calibrator while keeping cross-view mixer.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l4_no_calibrator_proxy_s123.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l4_no_calibrator/s123",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CALIBRATOR": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l4_no_calibrator_proxy_s123.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l4_no_calibrator",
+      "matrix_id": "L4-no-calibrator",
+      "description": "Disable shared calibrator while keeping cross-view mixer.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l4_no_calibrator_proxy_s456.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l4_no_calibrator/s456",
+      "runtime_env": {
+        "ANKLE_DISABLE_FUSION_CALIBRATOR": "1"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l4_no_calibrator_proxy_s456.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l5_temp1p5",
+      "matrix_id": "L5-temp1p5",
+      "description": "Global fusion temperature 1.5.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s42.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp1p5/s42",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s42.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l5_temp1p5",
+      "matrix_id": "L5-temp1p5",
+      "description": "Global fusion temperature 1.5.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s123.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp1p5/s123",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s123.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l5_temp1p5",
+      "matrix_id": "L5-temp1p5",
+      "description": "Global fusion temperature 1.5.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s456.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp1p5/s456",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "1.5"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp1p5_proxy_s456.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l5_temp2p0",
+      "matrix_id": "L5-temp2p0",
+      "description": "Global fusion temperature 2.0.",
+      "seed": 42,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s42.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp2p0/s42",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s42.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l5_temp2p0",
+      "matrix_id": "L5-temp2p0",
+      "description": "Global fusion temperature 2.0.",
+      "seed": 123,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s123.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp2p0/s123",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s123.yaml"
+    },
+    {
+      "phase": "proxy",
+      "lane_key": "l5_temp2p0",
+      "matrix_id": "L5-temp2p0",
+      "description": "Global fusion temperature 2.0.",
+      "seed": 456,
+      "config_path": "configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s456.yaml",
+      "base_config": "configs/autoresearch_proxy_resnext_decision_256x8.yaml",
+      "output_dir": "runs/resnext_decision_256x8_matrix/proxy/l5_temp2p0/s456",
+      "runtime_env": {
+        "ANKLE_LEARNED_FUSION_TEMPERATURE": "2.0"
+      },
+      "launch_command": ".venv/bin/python scripts/run_train_with_config_env.py --config configs/generated_resnext_decision_256x8_matrix/proxy/cmp_resnext_decision_256x8_l5_temp2p0_proxy_s456.yaml"
+    }
+  ]
+}

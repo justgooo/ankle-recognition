@@ -12,6 +12,33 @@
 
 ---
 
+## 2026-04-21：人类方向追加约束（主线切回 ResNeXt decision 256x8 learned-weighting）
+
+> **方向约束说明**
+> - 人类已明确要求：后续 `decision fusion` 主线不再继续沿当前 `512x16` canonical lane 做方法收敛，而是切回 **`image_size=256` + `num_slices_per_view=8`** 的 `ResNeXt + decision fusion` 几何。
+> - 研究目标同步改写为：**以 learned weighting 为主方法方向**，优先做模块贡献分析；`equal-weight` 仍必须保留为 matched control，但不再作为人类期望的最终方法叙事。
+> - 当前阶段 **先不训练**。在没有新的 human go-ahead 之前，只允许完成方案整理、配置对齐、ledger 更新与分析，不启动新的 proxy / main / formal 作业。
+>
+> **主线基座选择**
+> - `256x8` learned-weighting 的主参考应优先锚定到 legacy `7ae19a0` 这条已知最强 learned recipe，而不是当前较弱的 fair-compare `256x8` decision 模板。
+> - 现有最关键的历史证据：
+>   - legacy learned 3-seed mean：`0.900709 / 0.939545`
+>   - legacy equal 3-seed mean：`0.936170 / 0.965606`
+> - 这意味着新一轮模块贡献分析的目的，不是证明 learned 已经优于 equal，而是先回答：**learned weighting 在 `256x8` 上到底差在哪里，哪个模块组合最接近 closing the gap。**
+>
+> **待执行的模块贡献分析矩阵（仅规划，未启动）**
+> - `L0 control`: legacy `256x8` equal-weight（只作 control，不作主方法）
+> - `L1 anchor`: legacy-style `256x8` learned weighting baseline
+> - `L2 minimal`: 去掉 richer reliability path，仅保留最基础 per-view classifier + raw confidence head
+> - `L3 no-mixer`: 保留 calibrator，关闭 cross-view mixer
+> - `L4 no-calibrator`: 保留 cross-view mixer，移除 shared low-rank calibrator
+> - `L5 temperature`: 对 `L1` 或最强 learned 变体只加单标量 temperature shrinkage
+>
+> **分析优先级**
+> - 第一优先级不是继续扩模块，而是先把 `256x8` learned 主线的 matched controls 和单模块 ablations 重新对齐到同一几何、同一 seed 集、同一 scalar budget。
+> - 如果后续训练显示 `L3/L4/L5` 都无法稳定缩小与 equal-weight 的差距，则 learned-weighting 主叙事需要降级为“机制研究”，不能再直接写 overall winner。
+> - 工程准备已完成：`256x8` learned lane 的 dedicated formal/proxy/search 模板已补到 `configs/autoresearch_*_resnext_decision_256x8.yaml` 与 `configs/optuna_*_resnext_decision_256x8.yaml`；模块矩阵清单写入 `docs/resnext_decision_256x8_module_matrix.md`。同时，`src/model.py` 已补 runtime toggles：`ANKLE_DISABLE_FUSION_CALIBRATOR=1` 与 `ANKLE_LEARNED_FUSION_TEMPERATURE=<float>`；`scripts/optuna_workflow.py` 与 `scripts/run_train_with_config_env.py` 也已把这些 env overrides 显式写入 trial/config 产物。现在 `scripts/prepare_resnext_decision_256x8_matrix.py` 还已把 `7 lanes × 3 seeds × 2 phases = 42` 份 runnable YAML 与 manifest materialize 到 `configs/generated_resnext_decision_256x8_matrix/`，后续做 `no-calibrator` / `temperature` probe 不再需要依赖隐式 shell 状态。
+
 ## 2026-04-21：ResNeXt Fusion-Path Ablation（remove cross-view mixer, keep shared calibrator，seed=123/456，direct single-trial Slurm completion）
 
 > **独立 campaign 说明**
@@ -255,7 +282,7 @@
 |------|-----|
 | 上次实验 | CMP-FUSION-PATH-RESNEXT-NOMIXER-512X16-E20-S123-MAIN / S456-MAIN（commits `2cf4602` 与 `e3cc52b`；fresh direct main-study `runs/optuna_main_manual/nomixer_seed123_20260421_151406` 与 `runs/optuna_main_manual/nomixer_seed456_20260421_151439`；search-config copies `autoresearch_logs/generated_search_configs/optuna_main_search_nomixer_seed123_20260421_151406.yaml` 与 `autoresearch_logs/generated_search_configs/optuna_main_search_nomixer_seed456_20260421_151439.yaml`；通过两个单 trial `scripts/optuna_main.py --sequential` 作业把“去掉 cross-view mixer、保留 shared low-rank reliability calibrator”的 matched no-mixer 对照补到剩余的 `seed=123/456`。） |
 | 上次结果 | discard / discard（seed123 `0.819149 / 0.905000 / 0.784810`；seed456 `0.829787 / 0.879545 / 0.804878`；补完后 no-mixer + calibrator 的 3-seed mean 为 `0.829787 / 0.897121 / 0.798294`，相较 `current learned` 的 `0.847518 / 0.906364` 在 mean accuracy / AUC 上分别回落 `0.017730 / 0.009242`，说明 seed42 的局部收益没有跨 seed 成立。） |
-| 下一步 | 模块贡献分析已基本收口：`minimal`、`no-calibrator`、`no-mixer` 都没有成为稳定的新主线。后续应按人类批准顺序回到 **低容量 weighting-ratio 优化**，恢复以 `current learned` 为 learned-path 参考；最优先的是补 `seed=456` 上的单标量 shrinkage control（如 `temperature=1.5`），而不是继续做更多 fusion-path 拆模块。legacy `7ae19a0` 若再被引用，仍默认使用 equal-weight 3-seed mean `0.936170 / 0.965606`。 |
+| 下一步 | **人类方向已改写**：后续主线切回 `ResNeXt + decision fusion + 256x8`，并以 **learned weighting** 为主方法方向，先做模块贡献分析、暂不训练。`256x8` learned lane 的 config scaffold、runtime toggles、以及 `42` 份 materialized matrix YAML 已准备好；下一步应按 `docs/resnext_decision_256x8_module_matrix.md` 里的顺序，从 `L0-equal` vs `L1-learned` 的 matched controls 开始，直接选定首轮 seed / phase / batch 后执行。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 2（本轮补完的 `no-mixer + shared calibrator` `seed=123/456` 两次 matched 验证都记为 discard；当前 discard streak 重新从这两轮累计。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |

@@ -334,6 +334,14 @@ def load_search_config(path_like: str | Path) -> tuple[Path, dict[str, Any]]:
     return path, data
 
 
+def normalize_string_mapping(raw: Any, field_name: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_name} must be a mapping, got {type(raw).__name__}.")
+    return {str(key): str(value) for key, value in raw.items()}
+
+
 def normalize_choice(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
@@ -377,10 +385,29 @@ def current_template_params(base_config: dict[str, Any], search_space: dict[str,
     return params
 
 
-def build_env(study_cfg: dict[str, Any]) -> dict[str, str]:
+def resolve_runtime_env(config: dict[str, Any], study_cfg: dict[str, Any]) -> dict[str, str]:
+    runtime_env = normalize_string_mapping(config.get("runtime_env"), "config.runtime_env")
+    study_env = normalize_string_mapping(study_cfg.get("env"), "study.env")
+    for key, value in study_env.items():
+        existing = runtime_env.get(key)
+        if existing is not None and existing != value:
+            raise ValueError(
+                f"Conflicting runtime env for {key}: "
+                f"config.runtime_env={existing!r} vs study.env={value!r}."
+            )
+        runtime_env[key] = value
+    return runtime_env
+
+
+def build_env(
+    study_cfg: dict[str, Any],
+    runtime_env: dict[str, str] | None = None,
+) -> dict[str, str]:
     env = os.environ.copy()
-    for key, value in study_cfg.get("env", {}).items():
+    for key, value in normalize_string_mapping(study_cfg.get("env"), "study.env").items():
         env[str(key)] = str(value)
+    if runtime_env:
+        env.update({str(key): str(value) for key, value in runtime_env.items()})
     return env
 
 
@@ -1085,9 +1112,6 @@ def run_single_trial(
     worker_label: str | None = None,
 ) -> TrialOutcome:
     study_cfg = search_cfg["study"]
-    env = build_env(study_cfg)
-    if env_overrides:
-        env.update({str(key): str(value) for key, value in env_overrides.items()})
     trial_timeout_minutes = study_cfg.get("trial_timeout_minutes")
     trial_timeout_seconds = None
     if trial_timeout_minutes is not None:
@@ -1095,8 +1119,16 @@ def run_single_trial(
     failed_score = float(study_cfg.get("failed_score", DEFAULT_FAILED_SCORE))
 
     config = prepare_trial_config(base_config, search_cfg, params, trial_dir, trial_number)
+    runtime_env = resolve_runtime_env(config, study_cfg)
+    if runtime_env:
+        config["runtime_env"] = runtime_env
     config_path = trial_dir / "config.yaml"
     dump_yaml(config_path, config)
+
+    launcher_env_overrides = normalize_string_mapping(env_overrides, "env_overrides")
+    env = build_env(study_cfg, runtime_env=runtime_env)
+    if launcher_env_overrides:
+        env.update(launcher_env_overrides)
 
     metadata = {
         "trial_number": trial_number,
@@ -1106,6 +1138,8 @@ def run_single_trial(
         "run_dir": config["output_dir"],
         "started_at": now_iso(),
         "worker_label": worker_label,
+        "runtime_env": runtime_env,
+        "launcher_env_overrides": launcher_env_overrides,
     }
     save_json(trial_dir / "trial.json", metadata)
 
@@ -1182,6 +1216,8 @@ def run_single_trial(
         "--config",
         str(config_path.relative_to(REPO_ROOT)),
     ]
+    trial_payload["runtime_env"] = runtime_env
+    trial_payload["launcher_env_overrides"] = launcher_env_overrides
     save_json(trial_dir / "trial.json", trial_payload)
     return outcome
 

@@ -1,0 +1,35 @@
+experiment_name: cmp_resnext_decision_256x8_l5_temp1p5_proxy_s123
+output_dir: runs/resnext_decision_256x8_matrix/proxy/l5_temp1p5/s123
+seed: 123
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 256
+  num_slices_per_view: 8
+  trim_edge_slices: 2
+  batch_size: 6
+  num_workers: 12
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+model:
+  backbone: resnext
+  fusion_type: decision
+  share_backbone: false
+  use_pretrained: true
+  freeze_layers: 3
+  fusion_hidden_dim: 256
+  dropout: 0.25
+  use_attention_pooling: false
+train:
+  epochs: 4
+  lr: 0.0001
+  weight_decay: 0.0005
+  class_weight: true
+  device: auto
+  augmentation: true
+  scheduler: none
+  label_smoothing: 0.0
+  gradient_clip_norm: 2.0
+runtime_env:
+  ANKLE_LEARNED_FUSION_TEMPERATURE: '1.5'
