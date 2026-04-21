@@ -12,6 +12,130 @@
 
 ---
 
+## 2026-04-21：ResNeXt Fusion-Path Ablation（remove cross-view mixer, keep shared calibrator，seed=123/456，direct single-trial Slurm completion）
+
+> **独立 campaign 说明**
+> - 这是在人类明确要求“把剩下的补完”之后，对上一轮 `seed=42` no-mixer keep 的 **剩余 matched seed 收口**：不再通过 `autoresearch_loop.py` 外层 coordinator 调度，而是直接提交两个 fresh、单 trial 的 `scripts/optuna_main.py --sequential` main-study 作业，把 **`remove cross-view mixer + keep shared calibrator`** 一次性补到 `seed=123/456`。
+> - 两个 fresh search-config copy 分别为 `autoresearch_logs/generated_search_configs/optuna_main_search_nomixer_seed123_20260421_151406.yaml` 与 `autoresearch_logs/generated_search_configs/optuna_main_search_nomixer_seed456_20260421_151439.yaml`；对应 study_root 为 `runs/optuna_main_manual/nomixer_seed123_20260421_151406` 与 `runs/optuna_main_manual/nomixer_seed456_20260421_151439`。执行 commit 分别是 `2cf4602`（seed123）和 `e3cc52b`（seed456）。
+> - 两个 Slurm job 为 `430284` 与 `430285`，都跑在 `V100q/node19`，资源都是 `1 GPU / 12 CPU / 48G / 3h`。两单被 colocate 到同一节点并并发运行，所以单 trial `runtime.total_seconds` 分别拉长到了 `6866.4s / 6840.5s`，明显高于此前 node20 上 `~2900s` 的同类 single-trial；这是 **节点/并发吞吐退化**，不是 `autoresearch_loop` 还在继续迭代。
+> - 配方保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量仍然是 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`。
+
+- [x] **CMP-FUSION-PATH-RESNEXT-NOMIXER-512X16-E20-S123-MAIN**：fresh direct main-study `runs/optuna_main_manual/nomixer_seed123_20260421_151406`（trial `0`，`seed=123`，remove cross-view mixer while keeping shared calibrator）→ `val_acc=0.8191489361702128`, `val_auc=0.9050000000000000`, `val_f1=0.7848101265822784`, `peak_vram≈4.64 GiB`, `total_seconds≈6866.4` → **discard**（相较 matched `current learned` seed123 `0.8510638297872340 / 0.9109090909090910`，accuracy / AUC 分别回落 `0.0319148936170212 / 0.0059090909090910`；相较 matched `equal-weight` seed123 `0.8404255319148937 / 0.8663636363636364`，accuracy 也回落 `0.0212765957446809`。）
+- [x] **CMP-FUSION-PATH-RESNEXT-NOMIXER-512X16-E20-S456-MAIN**：fresh direct main-study `runs/optuna_main_manual/nomixer_seed456_20260421_151439`（trial `0`，`seed=456`，remove cross-view mixer while keeping shared calibrator）→ `val_acc=0.8297872340425532`, `val_auc=0.8795454545454546`, `val_f1=0.8048780487804879`, `peak_vram≈4.64 GiB`, `total_seconds≈6840.5` → **discard**（相较 matched `current learned` seed456 `0.8510638297872340 / 0.9209090909090910`，accuracy / AUC 分别回落 `0.0212765957446808 / 0.0413636363636364`；相较 matched `equal-weight` seed456 `0.8404255319148937 / 0.8890909090909092`，accuracy / AUC 也分别回落 `0.0106382978723405 / 0.0095454545454546`。）
+- **3-seed 收口结论（no-mixer + shared calibrator）**：补完 `seed=123/456` 后，这条 simpler learned path 的 canonical 3-seed mean 现为 `val_acc=0.8297872340425533`、`val_auc=0.8971212121212121`、`val_f1=0.7982943268525239`，`val_acc` population std 为 `0.0086861338396567`。相较 `current learned` 的 `0.8475177304964540 / 0.9063636363636364`，mean accuracy / AUC 分别回落 `0.0177304964539007 / 0.0092424242424243`；相较 `equal-weight` 的 `0.8546099290780141 / 0.8972727272727273`，mean accuracy 也回落 `0.0248226950354609`，AUC 仅近乎打平。
+- **模块分析总判断**：`seed=42` 上的 no-mixer keep 最终被证明是 **局部 seed low-point 修复**，不是可泛化的主线替代。到这里，模块贡献分析已经足够回答核心问题：`minimal learned` 不成立、`no-calibrator` 不成立、`no-mixer` 也没有跨 seed 站住。因此当前 canonical `512x16` 主线里，不能把“删掉 cross-view mixer”直接升格为新的 learned-path 默认解。
+- **推荐动作**：模块贡献分析到这里可以视为完成，后续不必继续沿 `richer reliability path` 做更多 matched ablation。下一步应回到人类批准顺序里的 **低容量 weighting-ratio 优化**，并恢复以 `current learned` 为 learned-path 参考；最优先的剩余问题是补 `seed=456` 上的 `temperature=1.5` 或其它单标量 shrinkage control，而不是继续拆模块。
+
+## 2026-04-21：ResNeXt Fusion-Path Ablation（remove cross-view mixer, keep shared calibrator，seed=42，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是在人类要求“先做 matched 模块贡献分析，再考虑 weighting ratio”之后，严格按上一轮 backlog 推荐动作执行的 **下一步单模块 richer reliability path 拆解**：不再扫 temperature，也不扩容 gating / weighting path，只测试 `current learned` 路径里 **cross-view mixer** 本身是否在制造 `seed=42` 的主指标方差。
+> - 为避免把“恢复 canonical current learned”与“本轮 ablation”混成两件事，实现侧在 commit `cf392fe` 中把默认 learned path 恢复成 **`cross-view mixer + shared low-rank calibrator`**，然后仅通过环境变量 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` 做本轮对照：**去掉 cross-view mixer、保留 shared calibrator**。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量是 reliability path 从 **`cross-view mixer + shared calibrator`** 改成 **`shared calibrator on pooled per-view features`**。
+> - 本轮运行 commit 为 `cf392fe`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0092_20260421_122116.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0092_20260421_122116`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；本轮仍只有 1 个 fixed trial，最终只消耗了其中 1 张卡的训练时长，其余卡保持空闲。
+
+- [x] **CMP-FUSION-PATH-RESNEXT-NOMIXER-512X16-E20-S42-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0092_20260421_122116` 的 best completed trial（trial `0`，`seed=42`，remove cross-view mixer while keeping shared calibrator via `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`）→ `val_acc=0.8404255319148937`, `val_auc=0.9068181818181819`, `val_f1=0.8051948051948052`, `peak_vram≈4.64 GiB`, `total_seconds≈2901.1` → **keep**（相较 matched `current learned` seed42 `0.8404255319148937 / 0.8863636363636364`，accuracy 持平但 AUC 提升 `0.0204545454545455`；相较上一轮 `no-calibrator` seed42 `0.7978723404255319 / 0.8781818181818182`，accuracy / AUC 分别反弹 `0.0425531914893618 / 0.0286363636363637`；虽然仍低于 matched `equal-weight` seed42 `0.8829787234042553 / 0.9363636363636364`，但在 learned-path family 内已经成为更强且更简单的参考。）
+- **本轮结论**：在 `seed=42` 这个 canonical 低点上，**cross-view mixer 比 shared calibrator 更像 richer reliability path 的主要坏因子**。把 mixer 去掉以后，主指标至少没有再掉，AUC 还明显高于 matched `current learned`；而上一轮单独去掉 calibrator 却让 accuracy 直接塌到 `0.7979`。这说明 calibrator 更像是在提供必要的温和 logit 校准，而 cross-view token interaction 本身才是当前更值得怀疑的方差来源。
+- **推荐动作**：在模块分析真正收口之前，不要恢复“自动优化 weighting 比例”作为默认下一步。既然 simpler learned path 在 `seed=42` 已经优于 matched `current learned`，后续若继续 canonical 主线，应先把 **`no-mixer + shared calibrator`** 当新的 learned-path 参考，优先补 **matched `seed=123/456`** 验证它是否稳定；`equal-weight` 继续保留为 accuracy 对照上界。
+
+## 2026-04-21：ResNeXt Fusion-Path Ablation（remove shared calibrator, keep cross-view mixer，seed=42，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是在人类要求“先做 matched 模块贡献分析，再考虑 weighting ratio”之后，沿着上一轮 backlog 推荐动作执行的 **单模块 richer reliability path 拆解**：不再扫 temperature，也不扩容 gating path，只测试 `current learned` 路径里 **shared low-rank reliability calibrator** 本身是否在制造 `seed=42` 的主指标方差。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量是把 decision-fusion reliability path 从 **`cross-view mixer + shared low-rank calibrator`** 改成 **`cross-view mixer + raw reliability heads`**，并把 fusion softmax 恢复到 matched baseline `temperature=1.0`。
+> - 本轮运行 commit 为 `24ac323`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0088_20260421_112327.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0088_20260421_112327`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；本轮仍只有 1 个 fixed trial，最终只消耗了其中 1 张卡的训练时长，其余卡保持空闲。
+
+- [x] **CMP-FUSION-PATH-RESNEXT-NOCALIB-512X16-E20-S42-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0088_20260421_112327` 的 best completed trial（trial `0`，`seed=42`，remove shared calibrator while keeping cross-view mixer）→ `val_acc=0.7978723404255319`, `val_auc=0.8781818181818182`, `val_f1=0.7397260273972602`, `peak_vram≈4.67 GiB`, `total_seconds≈2907.0` → **discard**（相较 matched `current learned` seed42 `0.8404255319148937 / 0.8863636363636364`，accuracy / AUC 分别回落 `0.0425531914893618 / 0.0081818181818182`；相较 matched `equal-weight` seed42 `0.8829787234042553 / 0.9363636363636364`，accuracy / AUC 分别回落 `0.0851063829787234 / 0.0581818181818182`；连先前 `25%` equal-prior probe 的 `0.8404255319148937 / 0.8781818181818182` 也没有超越。）
+- **本轮结论**：在 `seed=42` 这个 canonical 低点上，**shared low-rank calibrator 并不是主要的坏因子**。把它拿掉以后，AUC 只小幅变差，但 threshold accuracy 直接塌到 `0.7979`，说明 calibrator 至少承担了把 reliability logits 拉回可用决策面的作用；真正值得继续怀疑的，更像是 `cross-view mixer` 与 reliability path 的交互方式，而不是校准器本身。
+- **推荐动作**：不要把 `no-calibrator` simpler path 升格为新的 learned weighting 参考，也不要在模块结论未收口前重新回到自动化 weighting-ratio 优化。下一步若继续 matched 模块分析，应优先做 **保留 shared calibrator、去掉 cross-view mixer** 的单模块对照，确认 richer reliability path 里到底是 cross-view token interaction 本身在伤害 `seed=42`，还是必须保留两者组合。
+
+## 2026-04-21：ResNeXt Weighting-Ratio Probe（fusion temperature 1.75，seed=42，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是在 `temperature=1.5` 与 `2.0` 已经对 `seed=42/123` 给出交叉胜负之后，按 backlog 推荐动作执行的 **中间点折中验证**：不新增任何 gating / weighting 容量，只检查同一个全局 fusion-temperature `1.75` 能否在 matched `seed=42` 上同时保住 `2.0` 的 accuracy 修复和 `1.5` 的部分 AUC 回升。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量仍是 learned weighting 路径里的 `softmax(confidences / 1.75)`，本轮只固定 `seed=42`。
+> - 本轮运行 commit 为 `6b39d9b`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0018_20260421_090208.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0018_20260421_090208`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；本轮仍只有 1 个 fixed trial，最终只消耗了其中 1 张卡的训练时长，其余卡保持空闲。
+
+- [x] **CMP-FUSION-RATIO-RESNEXT-TEMP1P75-512X16-E20-S42-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0018_20260421_090208` 的 best completed trial（trial `0`，`seed=42`，current learned weighting + global fusion temperature `1.75`）→ `val_acc=0.8297872340425532`, `val_auc=0.8704545454545455`, `val_f1=0.8048780487804879`, `peak_vram≈4.67 GiB`, `total_seconds≈2908.1` → **discard**（相较 matched `current learned` seed42 `0.8404255319148937 / 0.8863636363636364`，accuracy / AUC 分别回落 `0.0106382978723405 / 0.0159090909090909`；相较 `temperature=2.0` seed42 `0.8510638297872340 / 0.8840909090909091`，accuracy / AUC 分别回落 `0.0212765957446808 / 0.0136363636363636`；与 `temperature=1.5` seed42 的 accuracy 持平，但 AUC 反而再低 `0.0381818181818182`，因此既没守住 `2.0` 的 accuracy 修复，也没保留 `1.5` 的 ranking 回升。）
+- **本轮结论**：`temperature=1.75` 不是 `seed=42` 上的平滑折中点。它在 accuracy 上直接跌回与 `1.5` 相同的低位，却在 AUC 上同时输给 `1.5` 和 `2.0`。这说明 **当前 learned weighting 的单个全局 temperature 并没有给出单调、平滑、可泛化的 trade-off 曲线**；至少在 `seed=42` 上，中间点比两侧邻居都更差。
+- **推荐动作**：不要继续把 `seed=42` 上的 global temperature 细扫当作默认主线。既然 `equal-weight` 仍是更强的 accuracy 参考，而 first-wave 模块分析已表明 richer reliability path 的复杂度主要来自 `cross-view mixer + shared low-rank calibrator`，下一步更合理的是回到 **一次只拆一个模块**：优先测试 **去掉 shared low-rank calibrator、保留 cross-view mixer** 的 matched control，看温和校准本身是否就是 `seed=42` 方差来源；`equal-weight` 继续作为主指标参考线，只有单模块 ablation 仍无净收益时才决定 learned weighting 是否值得保留。
+
+## 2026-04-21：ResNeXt Weighting-Ratio Probe（fusion temperature 1.5，seed=42，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是在 `temperature=1.5` 于 matched `seed=123` 明确给出 keep 之后，按 backlog 推荐动作执行的第二条 **matched seed validation**：不新增任何 gating / weighting 容量，只检查同一个全局 fusion-temperature `1.5` 在另一个 canonical seed 上是否也能成立。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量仍是 learned weighting 路径里的 `softmax(confidences / 1.5)`，本轮只把 matched trial seed 从 `123` 切到 `42`。
+> - 本轮运行 commit 为 `15ba788`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0017_20260421_080800.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0017_20260421_080800`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；由于这轮仍只有 1 个 fixed trial，最终只消耗了其中 1 张卡的训练时长，其余卡保持空闲。
+
+- [x] **CMP-FUSION-RATIO-RESNEXT-TEMP1P5-512X16-E20-S42-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0017_20260421_080800` 的 best completed trial（trial `0`，`seed=42`，current learned weighting + global fusion temperature `1.5`）→ `val_acc=0.8297872340425532`, `val_auc=0.9086363636363637`, `val_f1=0.8`, `peak_vram≈4.67 GiB`, `total_seconds≈2902.7` → **discard**（相较 matched `current learned` seed42 `0.8404255319148937 / 0.8863636363636364`，accuracy 回落 `0.0106382978723405`，虽然 AUC 反而提升 `0.0222727272727273`；相较 `temperature=2.0` seed42 `0.8510638297872340 / 0.8840909090909091`，accuracy 也继续回落 `0.0212765957446808`，只是在 AUC 上回升 `0.0245454545454546`；同时仍明显低于 matched `equal-weight` seed42 `0.8829787234042553 / 0.9363636363636364`。）
+- **本轮结论**：`temperature=1.5` 并不能作为跨 seed 的稳定默认值。它在 `seed=123` 上修复了 `temperature=2.0` 的过度 softening，但在 `seed=42` 上却把 threshold accuracy 再次压回到了 baseline 以下，只留下 AUC 提升。这说明 **单个全局 temperature 的最优点已经表现出明显的 seed-sensitive trade-off**：`1.5` 更像是在放大 ranking，而不是稳定提高当前主指标。
+- **推荐动作**：下一步仍保持 **单标量、低容量、可解释** 主线，不要扩容 gating / weighting path。既然 `seed=42` 更偏向 `2.0`、`seed=123` 更偏向 `1.5`，最优先的是补 **中间点 `temperature=1.75` on `seed=42`**，看能否在不丢掉 `seed42` accuracy 修复的前提下保留一部分 AUC 回升；只有当 `1.75` 在 `seed=42` 也至少站回 `0.8511` 档后，才值得扩到 `seed=123/456` 验证它是否能成为真正的折中默认值。
+
+## 2026-04-21：ResNeXt Weighting-Ratio Probe（fusion temperature 1.5，seed=123，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是在 `temperature=2.0` 于 matched `seed=123` 明确退化之后，按 backlog 推荐动作执行的 **lighter logit-level shrinkage 回退验证**：不新增任何 gating / weighting 容量，只把同一个全局 fusion-temperature 从 `2.0` 回退到 `1.5`。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量是 learned weighting 路径里的 `softmax(confidences / 1.5)`。
+> - 本轮运行 commit 为 `3d780b9`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0016_20260421_071219.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0016_20260421_071219`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2`：`GPU 0` 当时被外部任务占用（`used=5516 MiB`, `util=99%`），因此显式 `--gpu-ids 0,1,2` 启动被 workflow 的 idle-threshold 保护拒绝；随后按本轮单卡 fallback 规则切到 host `GPU 1` 继续执行，同一 fresh study_root 未变。
+
+- [x] **CMP-FUSION-RATIO-RESNEXT-TEMP1P5-512X16-E20-S123-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0016_20260421_071219` 的 best completed trial（trial `0`，`seed=123`，current learned weighting + global fusion temperature `1.5`）→ `val_acc=0.8723404255319149`, `val_auc=0.9036363636363638`, `val_f1=0.8536585365853658`, `peak_vram≈4.67 GiB`, `total_seconds≈2912.9` → **keep**（相较 matched `current learned` seed123 `0.8510638297872340 / 0.9109090909090910`，accuracy 提升 `0.0212765957446809`，AUC 只回落 `0.0072727272727272`；相较上一轮 `temperature=2.0` seed123 `0.8404255319148937 / 0.8759090909090910`，accuracy / AUC 分别反弹 `0.0319148936170212 / 0.0277272727272728`；同时也高于 matched `equal-weight` seed123 `0.8404255319148937 / 0.8663636363636364`。）
+- **本轮结论**：`temperature=1.5` 直接把 `seed=123` 从 `temperature=2.0` 的失败点拉回到了明显高于当前 learned baseline 的区间，而且只付出了很小的 AUC 回撤。这说明 **问题更像是 `2.0` 的 softening 过头，而不是 logit-level shrinkage 方向本身错误**；较轻的温度回退在不增容量的前提下，已经给出比 current learned、equal-weight、以及 `temperature=2.0` 都更强的主指标。
+- **推荐动作**：下一步仍保持 **单标量、低容量、可解释** 主线，不要扩容 gating / weighting path。最优先的是补 **matched `temperature=1.5` on `seed=42`**，确认它能否在上一轮 `2.0` 受益的低点上也守住或超过 `0.8511`；只有当 `seed=42` 也站住后，才值得把 `temperature=1.5` 扩到 `seed=456` 做三 seed 收口。
+
+## 2026-04-21：ResNeXt Weighting-Ratio Probe（fusion temperature 2.0，seed=123，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是沿着上一轮 `temperature=2.0` seed42 keep 继续做的第一条 **matched seed validation**：不新增任何 gating / weighting 容量，只检查同一个全局 fusion-temperature 标量在另一个 canonical seed 上是否还能成立。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量仍是 learned weighting 路径里的 `softmax(confidences / 2.0)`，本轮只把 matched trial seed 从 `42` 切到 `123`。
+> - 本轮运行 commit 为 `73d68b9`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0005_20260421_054501.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0005_20260421_054501`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；由于这轮仍只有 1 个 fixed trial，最终只消耗了其中 1 张卡的训练时长，其余卡保持空闲。
+
+- [x] **CMP-FUSION-RATIO-RESNEXT-TEMP2P0-512X16-E20-S123-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0005_20260421_054501` 的 best completed trial（trial `0`，`seed=123`，current learned weighting + global fusion temperature `2.0`）→ `val_acc=0.8404255319148937`, `val_auc=0.875909090909091`, `val_f1=0.8148148148148148`, `peak_vram≈4.67 GiB`, `total_seconds≈2906.2` → **discard**（相较 matched `current learned` seed123 `0.8510638297872340 / 0.9109090909090910`，temperature `2.0` 的 accuracy / AUC 分别回落 `0.0106382978723403 / 0.0350000000000000`；虽然它与 matched `equal-weight` seed123 的 `0.8404255319148937 / 0.8663636363636364` 在 accuracy 上打平，并把 AUC 微幅抬高 `0.0095454545454546`，但按主指标仍不能保留。）
+- **本轮结论**：`temperature=2.0` 对 seed42 的修复并没有稳定泛化到另一个 matched seed。它在 seed123 上没有把 learned weighting 拉回 `0.8511` 档，反而把 accuracy 压回了 equal-weight 水平，同时让 AUC 明显低于当前 learned baseline，说明 **这个 softening 强度已经偏大，更像是在修 seed42 低点时顺便过度收缩了 seed123 的可靠度差异**。
+- **推荐动作**：不要把 `temperature=2.0` 升格为新的 learned-path 默认参考，也不要继续扩容 weighting path。既然 backlog 已经预设“其余 seed 若退化则回退更轻的 temperature”，下一步应优先测试 **更轻的 `temperature=1.5`**，先在 `seed=123` 这个失败点上看能否保住 baseline `val_acc`，再决定是否值得扩到 `seed=456`。
+
+## 2026-04-21：ResNeXt Weighting-Ratio Probe（fusion temperature 2.0，seed=42，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是在 `25%` equal-prior interpolation 明确失败之后，按 backlog 推荐动作切换到的第一轮 **logit-level shrinkage** probe：不再做 post-softmax convex blend，而是在当前 canonical `current learned` decision-fusion 上只引入 **1 个全局 fusion-temperature 标量**。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量是在 learned weighting 路径里把 `softmax(confidences)` 改成 `softmax(confidences / 2.0)`。
+> - 本轮运行 commit 为 `4b599a8`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0004_20260421_045018.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0004_20260421_045018`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；由于这轮仍只有 1 个 fixed trial，最终只消耗了其中 1 张卡的训练时长，其余卡保持空闲。
+
+- [x] **CMP-FUSION-RATIO-RESNEXT-TEMP2P0-512X16-E20-S42-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0004_20260421_045018` 的 best completed trial（trial `0`，`seed=42`，current learned weighting + global fusion temperature `2.0`）→ `val_acc=0.851063829787234`, `val_auc=0.8840909090909091`, `val_f1=0.825`, `peak_vram≈4.67 GiB`, `total_seconds≈2908.2` → **keep**（相较 matched `current learned` seed42 `0.8404255319148937 / 0.8872727272727273`，temperature `2.0` 把 accuracy 提升了 `0.0106382978723403`，AUC 只小幅回落 `0.0031818181818182`；相较上一轮 `25%` equal-prior probe `0.8404255319148937 / 0.8781818181818182`，accuracy 同样提升 `0.0106382978723403`，AUC 也反弹 `0.0059090909090909`。但它仍明显低于 matched `equal-weight` seed42 的 `0.8829787234042553 / 0.9363636363636364`。）
+- **本轮结论**：`global fusion-temperature` 是当前 low-capacity weighting-ratio 线上第一个对已知 `seed=42` accuracy low point 给出正收益的单标量改动。它把 learned path 的 `val_acc` 从 `0.8404` 拉到了 `0.8511`，同时避免了 `25%` prior blend 那种更明显的 AUC 伤害，说明 **logit-level softening 比 post-softmax prior mixing 更接近这条线真正需要的收缩方向**。
+- **推荐动作**：先不要继续扩容 gating / weighting path，也不要立刻跳到更复杂的 ratio 组合。下一步应把 `temperature=2.0` 当成新的 learned-path 候选参考，优先补 **matched `seed=123/456` 验证**，确认它是在系统性降低 learned weighting 方差，还是只是在 `seed=42` 这一个低点上起作用；只有如果它在其余 seed 上退化，才回退测试更轻的 `temperature=1.5`。
+
+## 2026-04-21：ResNeXt Weighting-Ratio Probe（equal-prior interpolation 25%，seed=42，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是在 **first-wave 模块贡献分析完成后** 启动的第一轮低容量 weighting ratio 优化：不再扩容 gating path，也不回到 `minimal` 对照，而是在当前 canonical `current learned` decision-fusion 上只引入 **1 个标量级 equal-prior interpolation**。
+> - 配方继续保持严格 matched：`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`；唯一实验变量是在 learned weighting 路径里把 `softmax(confidences)` 改成 `0.75 * learned + 0.25 * uniform(1/3)`。
+> - 本轮运行 commit 为 `ab73d77`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0003_20260421_035452.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0003_20260421_035452`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；由于这轮仍只有 1 个 fixed trial，最终只消耗了其中 1 张卡的训练时长，其余卡保持空闲。
+
+- [x] **CMP-FUSION-RATIO-RESNEXT-EQPRIOR025-512X16-E20-S42-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0003_20260421_035452` 的 best completed trial（trial `0`，`seed=42`，current learned weighting + `25%` equal-prior interpolation）→ `val_acc=0.8404255319148937`, `val_auc=0.8781818181818182`, `val_f1=0.8051948051948052`, `peak_vram≈4.67 GiB`, `total_seconds≈2902.2` → **discard**（与 matched `current learned` seed42 `0.8404255319148937 / 0.8872727272727273` 在 accuracy 上完全打平，但 AUC 反而回落 `0.0090909090909091`；同时依旧明显低于 matched `equal-weight` seed42 的 `0.8829787234042553 / 0.9363636363636364`，accuracy / AUC 分别落后 `0.0425531914893616 / 0.0581818181818182`。）
+- **本轮结论**：直接做 post-softmax `25%` equal-prior shrinkage 并没有修复 seed42 这个 learned weighting 的已知 accuracy 低点，反而把 ranking quality 再往下压了一档。换句话说，**“向 equal-weight 做固定 convex blend” 本身不是当前这条线最有希望的 ratio knob**。
+- **推荐动作**：下一步仍留在人类批准的 **单标量 weighting ratio** 轨道里，但不要继续增大 equal-prior blend；更合理的是测试 **global fusion-temperature** 这类更软的 logit-level shrinkage，或者把 equal-prior 改成更轻的 `10%` 级别，而不是直接往 `50%` / 更复杂 gating path 推进。
+
+## 2026-04-21：ResNeXt Fusion-Path Ablation（minimal learned，seed=456，adaptive main-study fixed trial）
+
+> **独立 campaign 说明**
+> - 这是按当前 canonical 主线补齐的 **matched 模块贡献分析收口轮**：在已有 `equal-weight vs current learned` 三 seed 控制变量，以及 `minimal learned` 的 `seed=42/123` 结果基础上，补跑 `minimal learned` 的最后一个 matched seed `456`。
+> - 为继续遵守“优先 fresh main-study”且不把超参搜索和模块对照混在一起，本轮仍把 `configs/optuna_main_search.yaml` 保持为 **单 trial fixed-config study**：`study.n_trials=1`，并通过 `fixed_overrides` 锁定 canonical recipe（`backbone=resnext`、`fusion_type=decision`、`image_size=512`、`num_slices_per_view=16`、`trim_edge_slices=2`、`batch_size=2`、`num_workers=4`、`epochs=20`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.3`、`gradient_clip_norm=1.0`），只让 trial 参数显式记录 `seed=456` 和 `model.minimal_fusion_baseline=true`。
+> - 本轮运行 commit 为 `4af320c`；fresh search-config copy 为 `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0002_20260421_025952.yaml`，fresh study_root 为 `runs/optuna_main_autoloop/iter_0002_20260421_025952`。
+> - 运行前按 adaptive GPU policy 检查了 `GPU 0/1/2` 的 idle 状态，三张 `Tesla V100-PCIE-32GB` 都满足 `used<=1024 MiB`、`util<=20%`；由于这轮仍只有 1 个 fixed trial，最终只消耗了其中 1 张卡的训练时长，其余卡保持空闲。
+
+- [x] **CMP-FUSION-PATH-RESNEXT-MINIMAL-512X16-E20-S456-MAIN**：fresh adaptive main-study `runs/optuna_main_autoloop/iter_0002_20260421_025952` 的 best completed trial（trial `0`，`seed=456`, `minimal_fusion_baseline=true`）→ `val_acc=0.8085106382978723`, `val_auc=0.8636363636363638`, `val_f1=0.7857142857142857`, `peak_vram≈4.64 GiB`, `total_seconds≈2903.1` → **discard**（相较 matched `current learned` seed456 `0.8510638297872340 / 0.9209090909090910`，minimal 的 accuracy / AUC 分别回落 `0.0425531914893617 / 0.0572727272727272`；同时也低于 matched `equal-weight` seed456 的 `0.8404255319148937 / 0.8890909090909092`，因此这轮不只是主指标失败，连辅助排序质量也没有守住。）
+- **三 seed 模块分析结论（minimal vs current learned vs equal-weight）**：`minimal learned` 的 canonical 3-seed mean 现为 `val_acc=0.8191489361702127`、`val_auc=0.9059090909090909`；对应 `current learned` 为 `0.8475177304964540 / 0.9063636363636364`，`equal-weight` 为 `0.8546099290780141 / 0.8972727272727273`。这意味着 minimal 虽然在 `seed=42/123` 两次给出更高 AUC，但平均 AUC 也只与 current learned 基本打平，而平均 accuracy 反而低了 `0.0283687943262413`。
+- **稳定性结论**：`minimal learned` 的 `val_acc` population std 为 `0.0150448251316287`，明显高于 `current learned` 的 `0.0050149417105429`；它在 `seed=123/456` 都掉到了同一个 `0.8085` accuracy floor。换句话说，first-wave 模块贡献分析已经足够说明：**“去掉 `cross-view mixer + shared low-rank calibrator` 的 minimal path” 不能作为当前 canonical learned weighting 的默认替代。**
+- **推荐动作**：first-wave 模块贡献分析至此可以视为完成。下一步不要回到“再补一个 minimal seed”的循环，也不要扩容 gating path；应转入人类已批准顺序里的 **低容量 weighting ratio 优化**，并以 `current learned` 作为 learned-path 参考、`equal-weight` 作为 accuracy 对照，优先测试 **1 个全局 fusion-temperature / equal-prior interpolation** 这类不增容量的标量改动，看看能否向 equal-weight 的 mean accuracy 靠拢，同时尽量保住 current learned 的 AUC 与稳定性。
+
 ## 2026-04-21：ResNeXt Fusion-Path Ablation（minimal learned，seed=123，adaptive main-study fixed trial）
 
 > **独立 campaign 说明**
@@ -129,11 +253,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | CMP-FUSION-PATH-RESNEXT-MINIMAL-512X16-E20-S123-MAIN（commit `cc6ebb8`；fresh adaptive main-study `runs/optuna_main_autoloop/iter_0001_20260421_020353`；search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260421_020353.yaml`；通过单 trial fixed-config study 在 canonical `resnext + decision + 512x16 + 20 epochs` recipe 下补跑 `minimal learned` 的 `seed=123` matched 控制变量。） |
-| 上次结果 | discard（best completed trial `0.808511 / 0.932273 / 0.742857`；相较 matched `current learned` seed123 的 `0.851064 / 0.910909 / 0.844444`，accuracy 回落 `0.042553`，虽然 AUC 提升 `0.021364`；说明 simpler path 目前不是稳定主胜方。） |
-| 下一步 | 继续 canonical **模块贡献分析**，优先补 `minimal learned` 的 `seed=456` matched run，把 `equal-weight / current learned / minimal learned` 的 canonical 三 seed 证据补齐；在此之前不要把“自动优化 weighting 比例”升格为默认主线。legacy `7ae19a0` 若再被引用，仍默认使用 equal-weight 3-seed mean `0.936170 / 0.965606`。 |
+| 上次实验 | CMP-FUSION-PATH-RESNEXT-NOMIXER-512X16-E20-S123-MAIN / S456-MAIN（commits `2cf4602` 与 `e3cc52b`；fresh direct main-study `runs/optuna_main_manual/nomixer_seed123_20260421_151406` 与 `runs/optuna_main_manual/nomixer_seed456_20260421_151439`；search-config copies `autoresearch_logs/generated_search_configs/optuna_main_search_nomixer_seed123_20260421_151406.yaml` 与 `autoresearch_logs/generated_search_configs/optuna_main_search_nomixer_seed456_20260421_151439.yaml`；通过两个单 trial `scripts/optuna_main.py --sequential` 作业把“去掉 cross-view mixer、保留 shared low-rank reliability calibrator”的 matched no-mixer 对照补到剩余的 `seed=123/456`。） |
+| 上次结果 | discard / discard（seed123 `0.819149 / 0.905000 / 0.784810`；seed456 `0.829787 / 0.879545 / 0.804878`；补完后 no-mixer + calibrator 的 3-seed mean 为 `0.829787 / 0.897121 / 0.798294`，相较 `current learned` 的 `0.847518 / 0.906364` 在 mean accuracy / AUC 上分别回落 `0.017730 / 0.009242`，说明 seed42 的局部收益没有跨 seed 成立。） |
+| 下一步 | 模块贡献分析已基本收口：`minimal`、`no-calibrator`、`no-mixer` 都没有成为稳定的新主线。后续应按人类批准顺序回到 **低容量 weighting-ratio 优化**，恢复以 `current learned` 为 learned-path 参考；最优先的是补 `seed=456` 上的单标量 shrinkage control（如 `temperature=1.5`），而不是继续做更多 fusion-path 拆模块。legacy `7ae19a0` 若再被引用，仍默认使用 equal-weight 3-seed mean `0.936170 / 0.965606`。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 17（按 canonical `512x16 / 当前主线` 口径递增；本轮 `minimal learned` seed123 是主线模块贡献分析实验，主指标未超过 matched `current learned` / `equal-weight` 对照，因此继续记作 discard。） |
+| 连续 discard 计数 | 2（本轮补完的 `no-mixer + shared calibrator` `seed=123/456` 两次 matched 验证都记为 discard；当前 discard streak 重新从这两轮累计。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
