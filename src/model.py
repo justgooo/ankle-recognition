@@ -40,7 +40,9 @@ from .attention_pooling import AttentionPooling  # 可学习注意力池化模�
 # 设为 0 表示不冻结（原始行为），设为 3 表示只训练 layer4 + 分类头。
 # autoresearch Agent 通过修改此常量来实验不同冻结策略。
 DEFAULT_FREEZE_LAYERS = 3  # Stage 10C VR-MS：冻结 conv1+layer1+layer2+layer3，只训练 layer4+head
-LEARNED_FUSION_TEMPERATURE = 1.75
+# Keep the learned-weighting softmax untempered while isolating reliability-path
+# module ablations. Ratio probes can override this constant in dedicated runs.
+LEARNED_FUSION_TEMPERATURE = 1.0
 
 
 def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:
@@ -745,7 +747,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         1. 用父类 MultiViewEncoder 提取 3 个视角的特征
         2. 每个视角先经过 baseline plain classifier，避免继续扰动 classifier path
         3. reliability estimation 分支保留轻量 residual cross-view attention，
-           再用共享、低秩、identity-init 的 residual calibrator 对 raw reliability logit 做小幅校准
+           然后直接用 raw reliability head 读出 logits，单独检验 calibrator 是否在制造额外方差
         4. 3 个 reliability logits 经 softmax 归一化后作为融合权重
         5. 用动态权重对 3 个视角的分类结果加权平均
     """
@@ -810,7 +812,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             if not self.equal_weight_fusion:
                 # 仅在 reliability estimation 分支注入极弱的 full-rank cross-view token interaction：
                 # per-view classifier 保持 baseline pooled-feature 路径；
-                # richer cross-view context 只用于 fusion weighting，测试瓶颈是否主要在 reliability head。
+                # richer cross-view context 只用于 fusion weighting，单独检验
+                # shared low-rank calibrator 是否才是 variance 来源。
                 from .cross_view_attention import CrossViewAttention
 
                 self.cross_view_mixer = CrossViewAttention(
@@ -821,8 +824,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     residual_scale=0.125,
                 )
                 # 视角可靠度门控：每个视角保留一个 baseline raw-logit head，
-                # 再叠加共享的低秩 residual calibrator，在保留 identity init 的同时
-                # 允许温和的 scale+bias 校准，以测试“更有表达力但低方差”的 reliability path。
+                # 但不再叠加共享 calibrator，只测试 cross-view mixed context
+                # 对 reliability weighting 本身是否已经足够。
                 self.confidence_heads = nn.ModuleList(
                     [
                         nn.Sequential(
@@ -832,14 +835,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         for _ in range(3)
                     ]
                 )
-                self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
-                    feature_dim=self.feature_dim,
-                    bottleneck_dim=32,
-                    scale_limit=0.25,
-                    bias_limit=0.15,
-                )
-                # Scalar-only ratio probe: soften learned reliability logits with a
-                # single global temperature, without adding any new gating capacity.
+                # Keep softmax scaling at the matched baseline so this round only
+                # changes the presence/absence of the shared calibrator.
                 self.fusion_temperature = LEARNED_FUSION_TEMPERATURE
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
@@ -877,13 +874,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 dim=1,
             )  # (B, 3, 1)
         else:
-            # 第 4 步：baseline raw-logit VRG 头上叠加共享的低秩 residual calibration，
-            # 让 reliability 分支获得温和的 scale+bias 表达力，同时避免每个视角各自扩参。
+            # 第 4 步：保留 cross-view mixed reliability context，但直接读取 raw logits，
+            # 单独隔离 shared low-rank calibrator 的净贡献。
             stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
             gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
             confidences = torch.stack(
                 [
-                    self.confidence_calibrator(feature, head(feature))
+                    head(feature)
                     for head, feature in zip(self.confidence_heads, gating_features)
                 ],
                 dim=1,
