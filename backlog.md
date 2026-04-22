@@ -38,9 +38,21 @@
 > - feature-fusion 既有实现与历史 keep（尤其 `15b1ef6` 的 `per-view recalibration + light cross-view mixer + gated head`）只作为**模块参考**，允许把其中局部结构迁入 decision-fusion 的 `per-view classifier` 或 `reliability` 路径，但**不允许**把整条主线改成 `fusion_type=feature`。
 > - 因此，新的结构性修复优先级改成：先修 **per-view logits 的上下文建模能力**，再补 **auxiliary per-view supervision**，最后补 **train-time 视角鲁棒性**；三步都必须保持最终输出仍是“3 个视角 logits 经 late fusion 合成”。
 
-- [ ] **DFR-01 contextual per-view classifier path on top of decision late fusion**：基于当前 strongest decision branch `256x8 ResNeXt + L3-no-mixer`，把 feature-fusion 里已验证过的轻量 `per-view recalibration + cross-view mixer` 迁到 `view_classifiers` 之前，但保留最终 `view_logits -> fusion_weights -> fused logits` 语义不变；先做 `seed=42` formal，验证这条结构修复是否至少不再明显弱于当前 `L3-no-mixer` anchor。
+- [x] **DFR-01 contextual per-view classifier path on top of decision late fusion**：已在 `node19` 上完成 `seed=42` formal（job `433578`，commit `942b1e9`，config `configs/cmp_resnext_decision_256x8_dfr01_classifier_context_formal_s42.yaml`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_ENABLE_CLASSIFIER_VIEW_CONTEXT=1`）→ best `val_acc=0.8723404255319149`, `val_auc=0.9350000000000000`, `val_f1=0.8604651162790697`，明显低于当前 `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，因此 **discard**。
 - [ ] **DFR-02 auxiliary per-view supervision for decision fusion**：若 `DFR-01` 不崩，再利用现有 `train.py` 的 `_view_logits/_log_vars` 钩子，把 per-view classifiers 拉回显式监督，检验 coronal / sagittal 是否能在不改最终 late fusion 语义的前提下恢复有效判别力。
 - [ ] **DFR-03 train-time view robustness for decision fusion**：若前两步成立，再在训练时加入 `view dropout / axial perturbation`，专门针对 `FWR-03` 暴露出的 axial hard-selection 问题，检验 late-fusion 权重是否开始出现真实迁移。
+
+## 2026-04-22：Decision-Fusion Repair（DFR-01 contextual per-view classifier path，formal，node19）
+
+> **实验说明**
+> - 人类已更正主线：后续修复必须保持 `decision fusion`，不能切到 `feature fusion`；因此本轮只把 feature-fusion 里已验证过的轻量 `per-view recalibration + cross-view mixer` 借到 `view_classifiers` 之前，最终输出仍保持 `view_logits -> fusion_weights -> fused logits`。
+> - 代码落点是 commit `942b1e9`：在 `src/model.py` 里新增 `ANKLE_DECISION_ENABLE_CLASSIFIER_VIEW_CONTEXT`，只上下文化 per-view classifier path；reliability path 仍保留 `L3-no-mixer` 语义（通过 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` 关闭 reliability mixer）。
+> - 运行使用隔离 formal config `configs/cmp_resnext_decision_256x8_dfr01_classifier_context_formal_s42.yaml` 与 Slurm job `433578`（`V100q / node19 / 1xV100 32GB / 24 CPU / 96G`），输出目录 `runs/resnext_decision_256x8_mainline/dfr01_classifier_context_formal_s42`。
+
+- [x] **DFR-01-RESNEXT-DECISION-256X8-CLASSIFIER-CONTEXT-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr01_classifier_context_formal_s42`（commit `942b1e9`）→ `val_acc=0.8723404255319149`, `val_auc=0.9350000000000000`, `val_f1=0.8604651162790697`, `peak_vram≈2.21 GiB`, `total_seconds≈828.4` → **discard**（相较当前 retained `L3-no-mixer` seed42 anchor `27b557c` 的 `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，accuracy / AUC / F1 分别回落 `0.0531914893617021 / 0.0427272727272727 / 0.0608831983276719`，因此没有主线保留价值。）
+- **训练轨迹观察**：首轮验证直接掉到 `val_acc=0.4681 / val_auc=0.7005`，之后虽回升到 `epoch 3` 的 `0.8404 / 0.8791`，最终 best 也只到 `0.8723 / 0.9350`；中后期还出现多次明显震荡，例如 `epoch 11` 一度掉到 `val_acc=0.5106`、`val_loss=1.8744`。这说明“仅在 classifier path 引入 cross-view context”并没有修复当前 decision-fusion 的 axial-dominant failure mode，反而带来了更强的不稳定性。
+- **当前判断**：`DFR-01` 给出的结论是负面的。feature-fusion 里有效的轻量 cross-view context，直接迁到 decision path 并不能自然转化为更强的 late fusion；至少在当前 `256x8 ResNeXt` 几何与 `seed=42` formal 语义下，这条修复方向会明显伤害主指标。
+- **推荐动作**：下一步进入 **`DFR-02 auxiliary per-view supervision`**，但不要再保留本轮的 classifier-context 结构。更合理的下一轮是回到当前 strongest `L3-no-mixer` anchor，在不引入 classifier-path cross-view mixing 的前提下，只给 per-view logits 加显式辅助监督，先测试 coronal / sagittal 是否能被拉回有效判别。
 
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
@@ -423,11 +435,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `FWR-03`：对 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000` 的 `256x8 ResNeXt decision + L3-no-mixer` checkpoint 做 perturbation-based weight migration 分析（代码 commit `27219b2`；分析产物位于 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/run/perturbation_summary.json`；离线推理运行在 `node19` 的 `CUDA_VISIBLE_DEVICES=0` 上完成；扰动为 `axial Gaussian blur kernel=17 sigma=4.0`）。 |
+| 上次实验 | `DFR-01`：在 `256x8 ResNeXt decision + L3-no-mixer` anchor 上，仅把轻量 `per-view recalibration + cross-view mixer` 迁到 classifier path（commit `942b1e9`；Slurm job `433578`；输出目录 `runs/resnext_decision_256x8_mainline/dfr01_classifier_context_formal_s42`；runtime env 为 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_ENABLE_CLASSIFIER_VIEW_CONTEXT=1`）。 |
 | 上次结果 | **discard**。底层 checkpoint 指标仍是 `val_acc=0.925532`, `val_auc=0.975000`, `val_f1=0.921348`，不能替换历史 retained `L3-no-mixer` seed42 keep。机制上，本轮把当前 winner 的 learned fusion 进一步钉死为 **静态 axial selector**：axial blur 之后 full-fusion 指标跌到 `0.617021 / 0.840455 / 0.333333`，共有 `37/94` 个样本翻转、其中 `33` 个是 regressed；但 `top-weight axial` 依旧 `94/94`，平均权重甚至从 `0.997426` 微升到 `0.997567`。更关键的是，`66` 个 axial `pred_margin` 下降样本里有 `25` 个 axial weight 反而上升，`33` 个 regressed 样本里也有 `18` 个 axial weight 上升，说明证据退化并没有触发任何有效的权重迁移。 |
-| 下一步 | 本 bounded `fusion-weight rationality` side campaign 已完成 `3/3`，默认把控制权交回外层 loop，不再继续 `FWR-01~03`。如果后续还要追问 learned fusion 的合理性，优先级不再是 telemetry/control，而是**结构性 repair**：显式削弱 axial prior 或强制权重竞争/迁移；在此之前，继续避免与独立运行中的 `432763` / `L6` 冲突。 |
+| 下一步 | 继续 **decision-fusion-only** 主线，进入 `DFR-02`：回到当前 strongest `L3-no-mixer` anchor，不保留 `DFR-01` 的 classifier-path cross-view context，只尝试给 per-view logits 加显式 auxiliary supervision，先验证 coronal / sagittal 能否在不改 late-fusion 语义的前提下恢复有效判别。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 7（`FWR-03` 同样属于 mechanism-only discard，因此在 `FWR-02` 的基础上再加 1。由于本轮是人类限定的 bounded `3/3` side campaign 收口，当前动作不是继续盲跑，而是把控制权交回外层 loop；后续若没有新的结构性思路，则应由人类或 backlog 主线优先级决定是否继续该问题。） |
+| 连续 discard 计数 | 8（`DFR-01` 是新的结构修复 formal，但 best `val_acc=0.8723404255319149` 明显低于 retained `L3-no-mixer` seed42 anchor `0.9255319148936170`，因此在 `FWR-03` 的基础上再加 1；当前仍有明确的新思路 `DFR-02`，不触发“连续 5 个以上 discard 且没有新思路”的停问条件。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
