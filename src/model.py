@@ -938,6 +938,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR",
             0.0,
         )
+        self.train_axial_dominance_threshold = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_AXIAL_DOMINANCE_THRESHOLD",
+            0.0,
+        )
         self.forced_active_view_mask = _env_view_mask(
             "ANKLE_DECISION_FORCE_ACTIVE_VIEW_MASK"
         )
@@ -1140,7 +1144,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self,
         fusion_weights: torch.Tensor,
     ) -> torch.Tensor:
-        """During training, reserve a small mass for non-dominant views so their experts keep learning."""
+        """During training, reserve a small mass for weak views so their experts keep learning."""
         if not self.training or self.train_non_dominant_weight_floor <= 0.0:
             return fusion_weights
 
@@ -1160,13 +1164,31 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dominant_view,
             num_classes=num_views,
         ).to(dtype=flat_weights.dtype, device=flat_weights.device)
+        dominant_weight = (flat_weights * dominant_mask).sum(dim=1, keepdim=True)
+        if self.train_axial_dominance_threshold > 0.0:
+            # Only rescue the residual axial lock-in regime so migrated samples keep
+            # their learned routing freedom instead of receiving a blanket floor.
+            apply_mask = (
+                dominant_view.eq(0)
+                & dominant_weight.squeeze(1).ge(self.train_axial_dominance_threshold)
+            ).to(dtype=flat_weights.dtype, device=flat_weights.device).unsqueeze(1)
+            if not torch.any(apply_mask.bool()):
+                return fusion_weights
+        else:
+            apply_mask = torch.ones(
+                batch_size,
+                1,
+                device=flat_weights.device,
+                dtype=flat_weights.dtype,
+            )
         non_dominant_mask = 1.0 - dominant_mask
         adjusted = (
             flat_weights * (1.0 - reserved_mass)
             + non_dominant_mask * self.train_non_dominant_weight_floor
         )
         adjusted = adjusted / adjusted.sum(dim=1, keepdim=True).clamp_min(1e-12)
-        return adjusted.unsqueeze(-1)
+        blended = flat_weights * (1.0 - apply_mask) + adjusted * apply_mask
+        return blended.unsqueeze(-1)
 
     def _compute_decision_outputs(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         """Return per-view logits plus learned fusion weights for analysis/control runs."""
