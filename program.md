@@ -35,6 +35,13 @@
 保留或丢弃实验时，使用 val_acc 做主决策，AUC 做辅助参考。
 **绝对不要**用测试集指标来做模型选择。
 
+> [!IMPORTANT]
+> **2026-04-23 人类主线锁定**
+> - 当前 autoresearch 的唯一主方向是：**摆脱当前 decision-fusion learned branch 的单视角依赖，并让真正的 multi-view full-fusion learned `val_acc` 明确超过 matched `equal-weight` control**。
+> - 在达成这个目标之前，**不得切换到其他方向**：不要切 backbone family、不要切到 feature fusion、不要把无关的 side campaign 或泛化 cleanup 当主线。
+> - 完成标准必须是同一 geometry / budget / seed protocol 下，**full-fusion learned** 在主指标 `val_acc` 上明确高于 matched `equal-weight`；单 seed spike、只提升 AUC/F1、或只改善 single-view 结果都不算完成。
+> - 每轮行动前必须先自检：这项改动是否直接减弱单视角依赖，以及它为什么有机会把 full-fusion learned accuracy 推到 `equal-weight` 之上；如果不能明确回答，这轮改动就不应执行。
+
 ## 研究策略
 
 **当前阶段**：主线校准 + 可复现实验 workflow 对齐

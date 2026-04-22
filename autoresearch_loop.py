@@ -203,6 +203,9 @@ def build_prompt(
 - 本轮 proxy search 模板：`{proxy_search_template}`
 - 本轮 direct formal 配置：`{formal_config}`
 - 本轮 direct proxy 配置：`{proxy_config}`
+- 当前唯一主方向：摆脱当前 decision-fusion learned branch 的单视角依赖，尤其是 `axial dominance` / `weak-view starvation`，并让真正的 multi-view full-fusion learned `val_acc` 明确超过 matched `equal-weight` control
+- 在 full-fusion learned `val_acc` 尚未明确超过 matched `equal-weight` 之前，禁止切换到其他方向；不要切 backbone/geometry family，不要切到 feature fusion，不要把无关 side campaign 或泛化 cleanup 当主线
+- 单 seed spike、只提升 `val_auc` / `val_f1`、只改善 single-view 或 leave-one-view-out 结果，都不算完成上述主方向
 - fresh run 默认必须使用新的 `study_root`；只有你明确想续跑同一个 study 时才允许 `--resume`
 - 不要修改 train.py、src/dataset.py、src/utils.py、tools/、任何数据文件或数据集划分
 - 不要使用测试集指标做模型选择
@@ -221,24 +224,28 @@ def build_prompt(
 
 本轮任务（exactly one research iteration）：
 1. 阅读 backlog.md 和 program.md，理解当前主线、最新 best record、允许修改范围和实验协议。
-2. 自主判断这一轮最值得做的一项实验性改动。backlog 不是严格 machine-readable 队列，你可以根据当前仓库状态自行判断，但必须对齐文档主线。
-3. 只做一项离散、可解释的研究改动；不要把多个独立想法混在同一轮。
-4. 在训练或调参前 git commit 本轮改动。
+2. 自主判断这一轮最值得做的一项实验性改动。backlog 不是严格 machine-readable 队列，你可以根据当前仓库状态自行判断，但必须对齐文档主线，并且必须直接服务于“摆脱单视角依赖、让 learned full-fusion 超过 equal-weight”这一唯一目标。
+3. 在真正行动前，先做两轮自检：
+   - 这项改动是否直接减弱 single-view dependence，或直接增强弱视角在 full-fusion 中的有效贡献？
+   - 如果它成功，为什么它有机会把 multi-view full-fusion learned `val_acc` 推到 matched `equal-weight` 之上，而不是只改善单视角表现、稳定性或局部 calibration？
+   如果这两问任意一问不能给出具体机制链路，就不要执行该改动，换一个更直接的方向。
+4. 只做一项离散、可解释的研究改动；不要把多个独立想法混在同一轮。
+5. 在训练或调参前 git commit 本轮改动。
 {primary_lane_instructions}
-5. 只有在低显存、快速 smoke、训练 bug 定位或更便宜的诊断场景下，才允许改走 proxy：
+6. 只有在低显存、快速 smoke、训练 bug 定位或更便宜的诊断场景下，才允许改走 proxy：
    {proxy_command}
    或 fresh proxy study：
    {proxy_study_command} > optuna_proxy.log 2>&1
    然后运行：
    {proxy_monitor_command}
-6. fresh study 如果因为已有 sqlite / storage 报错，优先理解为你忘了给本轮 fresh study 使用新的 `study_root`；先修正这个问题，不要直接把这种错误记成 crash。
-7. 训练或 study 失败时，只读最后 30 行日志，按 OOM / timeout / code bug / data issue 分类处理。
+7. fresh study 如果因为已有 sqlite / storage 报错，优先理解为你忘了给本轮 fresh study 使用新的 `study_root`；先修正这个问题，不要直接把这种错误记成 crash。
+8. 训练或 study 失败时，只读最后 30 行日志，按 OOM / timeout / code bug / data issue 分类处理。
    - data issue：停止本轮并输出阻塞原因
    - code bug：可以修复后重跑 1 次
    - 其他失败：按 crash 记录
-8. 更新 results.tsv（只追加；并行风险下使用 `flock -x /tmp/ankle_results.lock`）和 backlog.md，包括 Agent 状态、上次实验、上次结果、下一步。
-9. `results.tsv` 的 config 列仍保持 `formal` / `proxy` 语义：main-study 或 direct formal 记为 `formal`；proxy-study 或 direct proxy 记为 `proxy`。
-10. 最后输出一行机器可读总结，格式必须是：
+9. 更新 results.tsv（只追加；并行风险下使用 `flock -x /tmp/ankle_results.lock`）和 backlog.md，包括 Agent 状态、上次实验、上次结果、下一步。
+10. `results.tsv` 的 config 列仍保持 `formal` / `proxy` 语义：main-study 或 direct formal 记为 `formal`；proxy-study 或 direct proxy 记为 `proxy`。
+11. 最后输出一行机器可读总结，格式必须是：
     EXPERIMENT_DONE: <keep|discard|crash> | lane=<main-study|proxy-study|formal|proxy> | description=<...> | val_acc=<...> | val_auc=<...> | commit=<...>
 
 如果你遇到真正需要人类拍板的阻塞，不要继续盲跑；只输出一行：

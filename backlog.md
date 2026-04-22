@@ -12,6 +12,30 @@
 
 ---
 
+## 2026-04-23：人类最新主线锁定（最高优先级，覆盖旧规则）
+
+> **主方向硬约束**
+> - 当前 autoresearch 的唯一主方向，改为：**摆脱目前 decision fusion 除 `equal-weight` 外最佳 learned 方案的单视角依赖**，尤其是 `axial dominance` / `weak-view starvation`，并把真正的 **multi-view full-fusion learned accuracy** 做到明确高于 matched `equal-weight` control。
+> - 在完成上面这个目标之前，**不允许切换到其他方向**。禁止把 backbone/geometry family 切换、feature fusion、无关 side campaign、泛化清理、与单视角依赖无直接关系的 calibration 小修小补，当成新的主线。
+> - 本主线的完成标准不是单个 seed spike，也不是只提升 `val_auc` / `val_f1`。只有当 **同一 geometry / budget / seed protocol 下的 multi-view full-fusion learned 分支**，在主指标 `val_acc` 上明确高于 matched `equal-weight` control，才算完成，才允许切换方向。
+> - 任何只证明“single-view expert 更强”“equal-weight 更强”“leave-one-view-out 结果更稳定”“AUC/F1 更好但 accuracy 没过 equal”的实验，都**不算**完成这个主方向。
+>
+> **inner agent 行动前自检要求**
+> - 每一轮在决定改动前，必须至少做两轮自检：
+>   1. 这项改动是否**直接**作用于摆脱单视角依赖，例如减弱 axial dominance、增强 coronal/sagittal 在 full-fusion 中的有效贡献、修复 learned routing 不迁移的问题？
+>   2. 如果它成功，为什么它有机会把 **multi-view full-fusion learned `val_acc`** 推到 `equal-weight` 之上，而不是只改善单视角表现、训练稳定性、或局部 calibration？
+> - 如果这两问里任意一问不能给出具体机制链路，则该改动视为**不合格方向**，本轮不得执行。
+>
+> **允许优先探索的修复类型**
+> - 直接改变 evidence routing 的修复
+> - 直接缓解弱视角 starvation 的修复
+> - 能让 stronger per-view experts 在 full-fusion 下真正形成超过 `equal-weight` 的净收益的对齐/训练修复
+>
+> **解释优先级**
+> - 本节与 backlog 中任何旧表述冲突时，一律以本节为准。
+
+---
+
 ## 2026-04-22：人类追加任务（融合权重合理性 side campaign，限定 3 轮 autoresearch）
 
 > **高优先级 side campaign 说明**
