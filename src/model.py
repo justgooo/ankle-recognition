@@ -841,6 +841,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_AUX_VIEW_LOSS_WEIGHT",
             0.5,
         )
+        self.fusion_weight_floor = _env_unit_float(
+            "ANKLE_DECISION_FUSION_WEIGHT_FLOOR",
+            0.0,
+        )
         self.train_view_dropout_prob = _env_unit_float(
             "ANKLE_DECISION_TRAIN_VIEW_DROPOUT_PROB",
             0.0,
@@ -859,6 +863,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_LEARNED_FUSION_TEMPERATURE",
             LEARNED_FUSION_TEMPERATURE,
         )
+        if self.fusion_weight_floor * 3.0 >= 1.0:
+            raise ValueError(
+                "ANKLE_DECISION_FUSION_WEIGHT_FLOOR must keep positive residual mass for 3 views."
+            )
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
                 "minimal_fusion_baseline and equal_weight_fusion are mutually exclusive."
@@ -1053,11 +1061,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
 
         scaled_confidences = confidences / self.fusion_temperature
-        fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
+        raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
+        fusion_weights = self._apply_fusion_weight_floor(raw_fusion_weights)
         return {
             "view_logits": view_logits,
             "confidences": confidences,
             "scaled_confidences": scaled_confidences,
+            "raw_fusion_weights": raw_fusion_weights,
             "fusion_weights": fusion_weights,
         }
 
@@ -1075,6 +1085,29 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         else:
             self._view_logits = None
             self._log_vars = None
+
+    def _apply_fusion_weight_floor(
+        self,
+        fusion_weights: torch.Tensor,
+        active_view_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Bound late-fusion collapse by reserving a minimum mass for every active view."""
+        if self.fusion_weight_floor <= 0.0:
+            return fusion_weights
+        if active_view_mask is None:
+            active_mask = torch.ones_like(fusion_weights)
+        else:
+            active_mask = active_view_mask.to(
+                device=fusion_weights.device,
+                dtype=fusion_weights.dtype,
+            ).unsqueeze(-1)
+        active_count = active_mask.sum(dim=1, keepdim=True)
+        residual_mass = 1.0 - self.fusion_weight_floor * active_count
+        if torch.any(residual_mass <= 0):
+            raise ValueError(
+                "ANKLE_DECISION_FUSION_WEIGHT_FLOOR leaves no residual mass for active views."
+            )
+        return fusion_weights * residual_mass + active_mask * self.fusion_weight_floor
 
     def fuse_decisions(
         self,
@@ -1105,6 +1138,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 raise ValueError("active_view_mask must keep at least one view per sample.")
             fusion_weights = masked_weights / normalizer
 
+        if active_view_mask is not None:
+            fusion_weights = self._apply_fusion_weight_floor(fusion_weights, active_view_mask)
         return (view_logits * fusion_weights).sum(dim=1)
 
     def forward_with_decision_info(self, images: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
