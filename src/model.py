@@ -67,6 +67,36 @@ def _env_positive_float(name: str, default: float) -> float:
     return value
 
 
+def _env_unit_float(name: str, default: float) -> float:
+    if not math.isfinite(default) or not (0.0 <= default <= 1.0):
+        raise ValueError(f"Default value for {name} must be finite and in [0, 1], got {default}.")
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a finite float in [0, 1], got {raw!r}.") from exc
+    if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+        raise ValueError(f"{name} must be a finite float in [0, 1], got {raw!r}.")
+    return value
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    if default <= 0:
+        raise ValueError(f"Default value for {name} must be > 0, got {default}.")
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}.") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}.")
+    return value
+
+
 def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:
     """
     构建一个 ResNet18 特征提取器（编码器）。
@@ -811,6 +841,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_AUX_VIEW_LOSS_WEIGHT",
             0.5,
         )
+        self.train_view_dropout_prob = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_VIEW_DROPOUT_PROB",
+            0.0,
+        )
+        self.train_axial_blur_prob = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_AXIAL_BLUR_PROB",
+            0.0,
+        )
+        self.train_axial_blur_kernel = _env_positive_int(
+            "ANKLE_DECISION_TRAIN_AXIAL_BLUR_KERNEL",
+            9,
+        )
+        if self.train_axial_blur_kernel % 2 == 0:
+            raise ValueError("ANKLE_DECISION_TRAIN_AXIAL_BLUR_KERNEL must be odd.")
         self.fusion_temperature = _env_positive_float(
             "ANKLE_LEARNED_FUSION_TEMPERATURE",
             LEARNED_FUSION_TEMPERATURE,
@@ -910,8 +954,51 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         contextualized = self.classifier_cross_view_mixer(stacked_features)
         return list(contextualized.unbind(dim=1))
 
+    def _apply_train_view_robustness(self, images: torch.Tensor) -> torch.Tensor:
+        """Apply lightweight train-time view corruptions without changing late-fusion semantics."""
+        if not self.training:
+            return images
+        if self.train_view_dropout_prob <= 0.0 and self.train_axial_blur_prob <= 0.0:
+            return images
+
+        augmented = images.clone()
+        batch_size, num_views, num_slices, height, width = augmented.shape
+
+        if self.train_view_dropout_prob > 0.0:
+            drop_mask = torch.rand(batch_size, device=augmented.device) < self.train_view_dropout_prob
+            if torch.any(drop_mask):
+                view_indices = torch.randint(
+                    low=0,
+                    high=num_views,
+                    size=(batch_size,),
+                    device=augmented.device,
+                )
+                sample_indices = drop_mask.nonzero(as_tuple=False).squeeze(1)
+                augmented[sample_indices, view_indices[sample_indices]] = 0.0
+
+        if self.train_axial_blur_prob > 0.0:
+            blur_mask = torch.rand(batch_size, device=augmented.device) < self.train_axial_blur_prob
+            if torch.any(blur_mask):
+                sample_indices = blur_mask.nonzero(as_tuple=False).squeeze(1)
+                axial_tensor = augmented[sample_indices, 0].reshape(-1, 1, height, width)
+                blurred_axial = nn.functional.avg_pool2d(
+                    axial_tensor,
+                    kernel_size=self.train_axial_blur_kernel,
+                    stride=1,
+                    padding=self.train_axial_blur_kernel // 2,
+                )
+                augmented[sample_indices, 0] = blurred_axial.reshape(
+                    sample_indices.shape[0],
+                    num_slices,
+                    height,
+                    width,
+                )
+
+        return augmented
+
     def _compute_decision_outputs(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         """Return per-view logits plus learned fusion weights for analysis/control runs."""
+        images = self._apply_train_view_robustness(images)
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
         classifier_features = self._compute_classifier_features(view_features)
 
