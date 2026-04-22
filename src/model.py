@@ -560,6 +560,41 @@ class SharedLowRankReliabilityCalibrator(nn.Module):
         return raw_logit * scale + bias
 
 
+class PerViewLogitTemperatureCalibrator(nn.Module):
+    """Global per-view temperature scaling on classifier logits."""
+
+    def __init__(
+        self,
+        num_views: int = 3,
+        min_temperature: float = 0.5,
+        max_temperature: float = 2.0,
+    ) -> None:
+        super().__init__()
+        if min_temperature <= 0.0 or max_temperature <= 0.0:
+            raise ValueError("Per-view temperatures must be > 0.")
+        if min_temperature > max_temperature:
+            raise ValueError("min_temperature must be <= max_temperature.")
+        self.log_temperature = nn.Parameter(torch.zeros(num_views))
+        self.min_log_temperature = float(math.log(min_temperature))
+        self.max_log_temperature = float(math.log(max_temperature))
+
+    def temperatures(self) -> torch.Tensor:
+        return torch.exp(
+            self.log_temperature.clamp(
+                min=self.min_log_temperature,
+                max=self.max_log_temperature,
+            )
+        )
+
+    def forward(self, view_logits: torch.Tensor) -> torch.Tensor:
+        temperatures = self.temperatures().to(
+            device=view_logits.device,
+            dtype=view_logits.dtype,
+        ).view(1, -1, 1)
+        centered_logits = view_logits - view_logits.mean(dim=-1, keepdim=True)
+        return centered_logits / temperatures + view_logits.mean(dim=-1, keepdim=True)
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -841,6 +876,17 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_AUX_VIEW_LOSS_WEIGHT",
             0.5,
         )
+        self.enable_view_logit_temperature = _env_flag(
+            "ANKLE_DECISION_ENABLE_VIEW_LOGIT_TEMPERATURE"
+        )
+        self.gate_teacher_blend = _env_unit_float(
+            "ANKLE_DECISION_GATE_TEACHER_BLEND",
+            0.0,
+        )
+        self.gate_teacher_temperature = _env_positive_float(
+            "ANKLE_DECISION_GATE_TEACHER_TEMPERATURE",
+            1.0,
+        )
         self.fusion_weight_floor = _env_unit_float(
             "ANKLE_DECISION_FUSION_WEIGHT_FLOOR",
             0.0,
@@ -946,6 +992,25 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         scale_limit=0.25,
                         bias_limit=0.15,
                     )
+        if self.enable_view_logit_temperature:
+            self.view_logit_temperature_calibrator = PerViewLogitTemperatureCalibrator(
+                num_views=3,
+                min_temperature=0.5,
+                max_temperature=2.0,
+            )
+
+    def _maybe_calibrate_view_logits(self, view_logits: torch.Tensor) -> torch.Tensor:
+        if not self.enable_view_logit_temperature:
+            return view_logits
+        return self.view_logit_temperature_calibrator(view_logits)
+
+    def _compute_gate_teacher_weights(self, view_logits: torch.Tensor) -> torch.Tensor:
+        teacher_scores = view_logits.detach().amax(dim=-1) - view_logits.detach().amin(dim=-1)
+        teacher_weights = torch.softmax(
+            teacher_scores / self.gate_teacher_temperature,
+            dim=1,
+        )
+        return teacher_weights.unsqueeze(-1)
 
     def _compute_classifier_features(
         self,
@@ -1017,6 +1082,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             ],
             dim=1,
         )  # (B, 3, 2)
+        view_logits = self._maybe_calibrate_view_logits(view_logits)
 
         if self.equal_weight_fusion:
             batch_size = view_logits.shape[0]
@@ -1062,13 +1128,31 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
-        fusion_weights = self._apply_fusion_weight_floor(raw_fusion_weights)
+        teacher_fusion_weights = None
+        blended_fusion_weights = raw_fusion_weights
+        if self.gate_teacher_blend > 0.0:
+            teacher_fusion_weights = self._compute_gate_teacher_weights(view_logits)
+            blended_fusion_weights = (
+                (1.0 - self.gate_teacher_blend) * raw_fusion_weights
+                + self.gate_teacher_blend * teacher_fusion_weights
+            )
+            blended_fusion_weights = blended_fusion_weights / blended_fusion_weights.sum(
+                dim=1,
+                keepdim=True,
+            )
+        fusion_weights = self._apply_fusion_weight_floor(blended_fusion_weights)
+        view_logit_temperatures = None
+        if self.enable_view_logit_temperature:
+            view_logit_temperatures = self.view_logit_temperature_calibrator.temperatures().detach()
         return {
             "view_logits": view_logits,
             "confidences": confidences,
             "scaled_confidences": scaled_confidences,
             "raw_fusion_weights": raw_fusion_weights,
+            "teacher_fusion_weights": teacher_fusion_weights,
+            "blended_fusion_weights": blended_fusion_weights,
             "fusion_weights": fusion_weights,
+            "view_logit_temperatures": view_logit_temperatures,
         }
 
     def _set_aux_view_loss_state(self, view_logits: torch.Tensor) -> None:
