@@ -178,7 +178,19 @@
 - [x] **DFR-18-RESNEXT-DECISION-256X8-SINGLE-VIEW-SAGITTAL-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr18_single_view_sagittal_formal_s42`（commit `80e0557`）→ `val_acc=0.8617021276595744`, `val_auc=0.9040909090909091`, `val_f1=0.8354430379746836`, `peak_vram≈2.15 GiB`, `total_seconds≈840.9` → **keep**（相较 `FWR-01` 里同 seed 的 `single_view_sagittal` control `0.4680851063829787 / 0.6295454545454545 / 0.1071428571428571`，也出现了显著恢复，说明 sagittal 的问题更像 starvation，而不是“这个视角没有信息”。）
 - **训练轨迹观察**：三条 single-view experts 都不是靠“偶然 spike”赢的。`axial` 最终站上 `0.9255 / 0.9782`；`coronal` 在 `epoch 13` 达到 `0.8936 / 0.9373`；`sagittal` 最终在 `epoch 15` 回到 `0.8617 / 0.9041`。虽然 `coronal/sagittal` 仍然落后于 axial，但它们与 `FWR-01` control 相比的提升幅度已经足够说明：过去的问题不是视角本身没判别力，而是多视角 joint 训练把弱视角饿死了。
 - **当前判断**：这一轮是关键正结果。它直接把“是否值得继续修 single-view dependence”从不确定变成了明确的 **值得**。因为现在已经有证据表明：`coronal` 和 `sagittal` 在 direct expert training 下都能学成有信息量的独立专家，而当前 late-fusion 主线没有把这两个视角的潜力转化出来。
-- **推荐动作**：下一步不再做新的单视角扫参，而是进入真正的 **two-stage decision fusion**：把 `DFR-16/17/18` 的三个 expert checkpoint 按视角回填到同一个 3-view decision model 里，先冻结 per-view experts、只训练 `confidence_heads / confidence_calibrator` 做 gate warmup，再小学习率 joint finetune。只有这一步能回答“当三个视角都先被训成像样 expert 后，late fusion 还能不能摆脱 axial dominance”。 
+- **推荐动作**：下一步不再做新的单视角扫参，而是进入真正的 **two-stage decision fusion**：把 `DFR-16/17/18` 的三个 expert checkpoint 按视角回填到同一个 3-view decision model 里，先冻结 per-view experts、只训练 `confidence_heads / confidence_calibrator` 做 gate warmup，再小学习率 joint finetune。只有这一步能回答“当三个视角都先被训成像样 expert 后，late fusion 还能不能摆脱 axial dominance”。
+
+## 2026-04-22：Decision-Fusion Follow-up（DFR-19 merged single-view experts + gate warmup，formal，node20）
+
+> **实验说明**
+> - 这是 `DFR-16/17/18` 之后的第一条真正 two-stage decision-fusion 验证。先在 commit `77cb402` 上新增 `scripts/merge_single_view_experts.py`，用 retained `L3-no-mixer` seed42 checkpoint 作为 gate / 非视角专属模块底座，再把 `DFR-16/17/18` 各自训练好的 `view_encoders.{i}` 与 `view_classifiers.{i}` 回填到对应视角，生成 merged init checkpoint `runs/resnext_decision_256x8_mainline/artifacts/dfr19_merged_single_view_experts_s42.pt`。
+> - 随后复用 `scripts/train_decision_stagewise.py`，只解冻 `confidence_heads` 与 `confidence_calibrator`，做一轮 gate warmup formal；对应 config 是 `configs/cmp_resnext_decision_256x8_dfr19_merged_experts_gate_warmup_formal_s42.yaml`，Slurm job `435551` 跑在 `node20` 的单卡 `V100q 32GB` 上。
+> - merge 脚本成功从三个 single-view checkpoints 各拷回 `326` 个视角专属参数键，说明 expert transplant 本身没有漏拷主要分支。
+
+- [x] **DFR-19-RESNEXT-DECISION-256X8-MERGED-EXPERTS-GATE-WARMUP-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr19_merged_experts_gate_warmup_formal_s42`（commit `77cb402`）→ `init_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`，`best_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`, `peak_vram≈1.22 GiB`, `total_seconds≈248.2` → **discard**（merged init 本身就低于当前 retained `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，而 gate warmup 后也没有任何 epoch 超过 init。）
+- **训练轨迹观察**：这条线的 pattern 很明确：`epoch 0` 的 merged init 是全程最好点，后面 gate warmup 只会更差。验证准确率依次走成 `epoch1=0.8617`、`epoch2=0.8617`、`epoch3=0.8723`、`epoch4=0.8830`，随后因连续 `4` 轮无提升触发 early stop。也就是说，把三条 expert 直接拼回一个 3-view model 后，单独重训 gate 并不能把它们重新协调起来。
+- **当前判断**：`DFR-19` 否定了“merged experts + gate-only warmup”这条最保守的 two-stage 变体。问题不是 merge 失败，而是 merged experts 的相对 logit / feature geometry 与旧 gate 不匹配，且这种不匹配不能只靠 `confidence_heads / confidence_calibrator` 重新拟合。
+- **推荐动作**：下一步不要再重复 gate-only warmup；应该直接试 **merged-expert joint finetune**，至少把 `view_classifiers` 一并解冻，必要时连 `view_encoders` 也低学习率共同调整。当前更合理的问题是“如何把三个已经各自变强的 experts 重新对齐到一个共同 late-fusion 空间”，而不是继续把责任全部压给 gate。 
 
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
