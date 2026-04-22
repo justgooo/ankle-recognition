@@ -152,6 +152,20 @@
 - **当前判断**：`DFR-11/12` 都没能替换 `L3-no-mixer` seed42 anchor。更细一点说，`DFR-11` 可以记为 **promising discard**，因为它在同一 `val_acc` 下至少比 `DFR-12` 更稳、`val_auc / val_f1` 也更好；`DFR-12` 则基本否定了“在当前 decision-only 语义下，直接给 gate 混入 detached teacher weight”这条修复方向。
 - **推荐动作**：如果继续沿这条主线推进，下一步优先做 **`DFR-13 = DFR-11 calibration + DFR-05 floor=0.05`** 的组合验证，而不是继续单独扩 teacher-guided gate。原因很直接：`DFR-11` 至少证明“保持 late fusion 语义不变时，加一点 calibration 自由度不会伤太多”；而 `floor=0.05` 已经有清晰的机制证据能缓解 axial 独占，把两者合起来比继续押 `DFR-12` 更合理。
 
+## 2026-04-22：Decision-Fusion Follow-up（DFR-13/14/15 stagewise gate-only fine-tuning，formal，node20）
+
+> **实验说明**
+> - 这是在人类确认“继续按一般多视角论文步骤推进”之后补的三条 matched formal，但仍严格保持 `decision fusion only`。目标不是再引入新的 feature 交互，而是测试：在当前最强 `L3-no-mixer` checkpoint 已经给定的前提下，只解冻 late-fusion gate 相关参数，是否能把权重从 axial dominance 进一步修到更合理的 routing。
+> - 三条实验基于新增脚本 `scripts/train_decision_stagewise.py`。`DFR-13` 使用 commit `747c1c9`，从 `runs/resnext_decision_256x8_matrix/formal/l3_no_mixer/s42/best.pt` 初始化，并且只训练 `confidence_heads` 与 `confidence_calibrator`；`DFR-14/15` 在 commit `06fe604` 上分别叠加 `DFR-03` 风格的 train-time robustness 和 `DFR-05` 风格的 `floor=0.05`，但仍保持“冻结 experts、只调 gate”的 stagewise 语义。
+> - 三条作业都在 `node20` 上用单卡 `V100q 32GB` 完成：`DFR-13`=`435192`、`DFR-14`=`435198`、`DFR-15`=`435199`。三条都会先对 init checkpoint 做 `epoch 0` 基线评估，再进入最多 `4` 个 fine-tune epoch；因此如果后续训练只会变差，best checkpoint 会停在初始化点。
+
+- [x] **DFR-13-RESNEXT-DECISION-256X8-STAGEWISE-GATE-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr13_stagewise_gate_formal_s42`（commit `747c1c9`）→ `val_acc=0.9255319148936170`, `val_auc=0.9777272727272727`, `val_f1=0.9213483146067416`, `peak_vram≈1.22 GiB`, `total_seconds≈256.9` → **discard**（best 完全等于 init checkpoint；既没有超过当前 retained `L3-no-mixer` seed42 anchor，也额外引入了 stagewise fine-tune 路径。）
+- [x] **DFR-14-RESNEXT-DECISION-256X8-STAGEWISE-GATE-ROBUSTNESS-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr14_stagewise_gate_robustness_formal_s42`（commit `06fe604`）→ `val_acc=0.9255319148936170`, `val_auc=0.9777272727272727`, `val_f1=0.9213483146067416`, `peak_vram≈1.26 GiB`, `total_seconds≈262.7` → **discard**（同样 best 停在 init checkpoint；把 robustness 叠到“只调 gate”的 regime 里并没有产生任何超越 init 的新收益。）
+- [x] **DFR-15-RESNEXT-DECISION-256X8-STAGEWISE-GATE-FLOOR05-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr15_stagewise_gate_floor05_formal_s42`（commit `06fe604`）→ `val_acc=0.9255319148936170`, `val_auc=0.9777272727272727`, `val_f1=0.9213483146067416`, `peak_vram≈1.22 GiB`, `total_seconds≈261.8` → **discard**（即便把 `floor=0.05` 搬进 stagewise gate-only setting，best 也仍然只是 init checkpoint，本身没有新增主线价值。）
+- **训练轨迹观察**：三条线的 pattern 完全一致，都是 `epoch 0` 最好，后面一训练就开始退化并在 `epoch 4` 触发 early stop。最终验证准确率分别回落到 `DFR-13=0.8297872340425532`、`DFR-14=0.7446808510638298`、`DFR-15=0.8191489361702128`。这说明当前 `L3-no-mixer` checkpoint 里的 gate 已经处在一个局部稳定点，单独继续推 gate，并不能从既有 biased experts 里再榨出额外多视角收益。
+- **当前判断**：这三条结果基本否定了“只修 gate 就能修好单视角依赖”这条线。更准确地说，当前瓶颈已经不再是 gate 参数没调够，而是 experts 本身就带着明显的 axial bias；在这种前提下，无论是 stagewise、robustness 还是 bounded-gating，单独作用在 gate 上都只能维持初始化点，或者训练后更差。
+- **推荐动作**：后续主线应改成先做 **`single-view expert strengthening`**，也就是先把 `axial / coronal / sagittal` 三个 masked single-view expert 单独训练出来，确认弱视角的 standalone ceiling 是否能显著高于当前 FWR-control 里的“从多视角 checkpoint 裁出来的单视角表现”；只有在这一步确认 `coronal/sagittal` 具备可用专家能力后，再回到真正的两阶段 `decision fusion`。
+
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
 > **独立 side campaign 说明**
