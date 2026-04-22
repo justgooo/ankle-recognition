@@ -938,6 +938,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR",
             0.0,
         )
+        self.train_non_dominant_rescue_scale = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_NONDOMINANT_RESCUE_SCALE",
+            1.0,
+        )
         self.train_axial_dominance_threshold = _env_unit_float(
             "ANKLE_DECISION_TRAIN_AXIAL_DOMINANCE_THRESHOLD",
             0.0,
@@ -1145,7 +1149,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         fusion_weights: torch.Tensor,
     ) -> torch.Tensor:
         """During training, reserve a small mass for weak views so their experts keep learning."""
-        if not self.training or self.train_non_dominant_weight_floor <= 0.0:
+        if (
+            not self.training
+            or self.train_non_dominant_weight_floor <= 0.0
+            or self.train_non_dominant_rescue_scale <= 0.0
+        ):
             return fusion_weights
 
         batch_size, num_views, _ = fusion_weights.shape
@@ -1188,6 +1196,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 device=flat_weights.device,
                 dtype=flat_weights.dtype,
             )
+        apply_mask = apply_mask * self.train_non_dominant_rescue_scale
         non_dominant_mask = 1.0 - dominant_mask
         adjusted = (
             flat_weights * (1.0 - reserved_mass)
