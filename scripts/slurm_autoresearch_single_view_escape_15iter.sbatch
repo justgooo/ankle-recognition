@@ -2,9 +2,10 @@
 #SBATCH --job-name=ankle-sv-escape
 #SBATCH --partition=RTXA6Kq
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:3
-#SBATCH --cpus-per-task=24
-#SBATCH --mem=96G
+#SBATCH --nodelist=node15
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --output=autoresearch_logs/slurm_%x_%j.out
 
@@ -25,7 +26,6 @@ if [ -z "$GPU_IDS_RAW" ]; then
 fi
 
 IFS=',' read -r -a GPU_ID_ARRAY <<< "$GPU_IDS_RAW"
-FIRST_GPU="${GPU_ID_ARRAY[0]}"
 
 echo "hostname=$(hostname)"
 echo "SLURM_JOB_ID=${SLURM_JOB_ID}"
@@ -41,7 +41,7 @@ nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --for
 .venv/bin/python -c "import torch; print('torch_cuda_available', torch.cuda.is_available()); print('torch_cuda_device_count', torch.cuda.device_count()); [print('torch_device', i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]"
 
 check_allocated_gpu_idle() {
-  local idle=0
+  IDLE_GPU_ID_ARRAY=()
   while IFS=, read -r raw_idx _ raw_used _ raw_util; do
     local idx="${raw_idx//[[:space:]]/}"
     local used="${raw_used//[^0-9]/}"
@@ -57,17 +57,17 @@ check_allocated_gpu_idle() {
       continue
     fi
     if [ "${used:-0}" -le 1024 ] && [ "${util:-0}" -le 20 ]; then
-      idle=$((idle + 1))
+      IDLE_GPU_ID_ARRAY+=("${idx}")
     else
       echo "allocated_gpu_busy index=${idx} used_mb=${used:-0} util=${util:-0}"
     fi
   done < <(nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader)
-  [ "$idle" -eq "${#GPU_ID_ARRAY[@]}" ]
+  [ "${#IDLE_GPU_ID_ARRAY[@]}" -ge 3 ]
 }
 
 for attempt in $(seq 1 20); do
   if check_allocated_gpu_idle; then
-    echo "allocated GPUs are idle enough for autoresearch on attempt ${attempt}."
+    echo "allocated GPUs are idle enough for autoresearch on attempt ${attempt}: ${IDLE_GPU_ID_ARRAY[*]}"
     break
   fi
   if [ "$attempt" -eq 20 ]; then
@@ -77,6 +77,15 @@ for attempt in $(seq 1 20); do
   fi
   sleep 30
 done
+
+if [ "${#IDLE_GPU_ID_ARRAY[@]}" -gt 4 ]; then
+  IDLE_GPU_ID_ARRAY=("${IDLE_GPU_ID_ARRAY[@]:0:4}")
+fi
+
+GPU_IDS_RAW="$(IFS=,; echo "${IDLE_GPU_ID_ARRAY[*]}")"
+IFS=',' read -r -a SELECTED_GPU_ID_ARRAY <<< "$GPU_IDS_RAW"
+FIRST_GPU="${SELECTED_GPU_ID_ARRAY[0]}"
+MAX_WORKERS="${#SELECTED_GPU_ID_ARRAY[@]}"
 
 CAMPAIGN_NOTE=$(cat <<'EOF'
 - 当前 autoresearch 的唯一主方向是：摆脱目前 decision fusion 除 `equal-weight` 外最佳 learned 方案的单视角依赖，尤其是 `axial dominance` / `weak-view starvation`，并把真正的 multi-view full-fusion learned `val_acc` 做到明确高于 matched `equal-weight` control。
@@ -96,7 +105,7 @@ timeout 85800 .venv/bin/python autoresearch_loop.py \
   --gpu-id "${FIRST_GPU}" \
   --default-lane main-study \
   --gpu-ids "${GPU_IDS_RAW}" \
-  --max-workers 3 \
+  --max-workers "${MAX_WORKERS}" \
   --max-used-memory-mb 1024 \
   --max-utilization 20 \
   --main-search-template configs/optuna_main_search_resnext_decision_256x8.yaml \
