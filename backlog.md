@@ -41,6 +41,7 @@
 - [x] **DFR-01 contextual per-view classifier path on top of decision late fusion**：已在 `node19` 上完成 `seed=42` formal（job `433578`，commit `942b1e9`，config `configs/cmp_resnext_decision_256x8_dfr01_classifier_context_formal_s42.yaml`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_ENABLE_CLASSIFIER_VIEW_CONTEXT=1`）→ best `val_acc=0.8723404255319149`, `val_auc=0.9350000000000000`, `val_f1=0.8604651162790697`，明显低于当前 `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，因此 **discard**。
 - [x] **DFR-02 auxiliary per-view supervision for decision fusion**：已在 `node19` 上完成 `seed=42` formal（job `433581`，commit `feba55e`，config `configs/cmp_resnext_decision_256x8_dfr02_aux_view_loss_formal_s42.yaml`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS=1` + `ANKLE_DECISION_AUX_VIEW_LOSS_WEIGHT=0.5`）→ best `val_acc=0.8723404255319149`, `val_auc=0.9468181818181818`, `val_f1=0.8723404255319149`，同样明显低于当前 `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，因此 **discard**。
 - [x] **DFR-03 train-time view robustness for decision fusion**：已在 `node19` 上完成 `seed=42` formal（job `433591`，commit `ecf7d47`，config `configs/cmp_resnext_decision_256x8_dfr03_view_robustness_formal_s42.yaml`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_VIEW_DROPOUT_PROB=0.15` + `ANKLE_DECISION_TRAIN_AXIAL_BLUR_PROB=0.30` + `ANKLE_DECISION_TRAIN_AXIAL_BLUR_KERNEL=9`）→ best `val_acc=0.9042553191489362`, `val_auc=0.9600000000000001`, `val_f1=0.8988764044943820`，优于 `DFR-01/02`，但仍低于当前 `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，因此 **discard**。
+- [x] **DFR-04 bounded late-fusion gating for decision fusion**：已在 `node19` 上完成 `seed=42` formal（job `433646`，commit `70d22ac`，config `configs/cmp_resnext_decision_256x8_dfr04_bounded_gating_formal_s42.yaml`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_FUSION_WEIGHT_FLOOR=0.10`）→ best `val_acc=0.9255319148936170`, `val_auc=0.9777272727272727`, `val_f1=0.9156626506024096`，在 accuracy / AUC 上追平当前 `L3-no-mixer` seed42 anchor，但 `val_f1` 仍低 `0.0056856640043320`，且代码更复杂，因此 **discard**。
 
 ## 2026-04-22：Decision-Fusion Repair（DFR-01 contextual per-view classifier path，formal，node19）
 
@@ -77,6 +78,18 @@
 - **训练轨迹观察**：这条线是三轮 DFR 里唯一把 val_acc 拉回 `0.90+` 的修复。早期 `epoch 1-2` 先明显退化到 `0.4681`，但中后期逐步回升，在 `epoch 10` 左右达到 best `val_acc=0.9043 / val_auc=0.9600`；之后还有较大波动，末段重新回落到 `0.89` 左右，说明训练期鲁棒扰动确实能缓解一部分 axial 依赖，但稳定性仍不够。
 - **当前判断**：`DFR-03` 是目前三条 decision-only 修复里最有信息量的一条。它表明“训练时强迫模型见到 axial 退化样本”比单纯做 classifier-context 或 auxiliary CE 更接近问题根因；但按当前这组扰动强度（`view_dropout=0.15`, `axial_blur_prob=0.30`, `kernel=9`），提升还不足以超过原始 `L3-no-mixer` anchor。
 - **推荐动作**：本轮 `DFR-01~03` 已全部完成。若后续继续沿 decision-only 主线优化，优先级应落在 **以 `DFR-03` 为起点做小范围强度搜索**，而不是回退到 `DFR-01/02`：只调 `view_dropout_prob / axial_blur_prob / blur kernel`，并补一轮 matched `FWR-03` 式后验分析，确认 robustness training 是否真的让权重迁移而不仅是局部 accuracy repair。
+
+## 2026-04-22：Decision-Fusion Repair（DFR-04 bounded late-fusion gating，formal，node19）
+
+> **实验说明**
+> - 本轮继续保持 strongest decision anchor `256x8 ResNeXt + L3-no-mixer` 不变，不叠加 `DFR-01~03` 的结构或训练扰动，只在最终 late-fusion 权重上加入一个轻量的 **minimum-weight floor**，直接约束 `fusion_weights` 不再塌到近似 `1.0 / 0.0 / 0.0`。
+> - 代码落点是 commit `70d22ac`：在 `src/model.py` 里新增 `ANKLE_DECISION_FUSION_WEIGHT_FLOOR`，把 raw softmax 权重映射到“每个 active view 至少保留固定最小质量”的 bounded-gating 语义；同时对 `active_view_mask` 控制路径做了兼容，保证 leave-one-view-out 分析不会把被屏蔽视角重新加回来。
+> - 运行使用隔离 formal config `configs/cmp_resnext_decision_256x8_dfr04_bounded_gating_formal_s42.yaml` 与 Slurm job `433646`（`V100q / node19 / 1xV100 32GB / 24 CPU / 96G`），输出目录 `runs/resnext_decision_256x8_mainline/dfr04_bounded_gating_formal_s42`；runtime env 为 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_FUSION_WEIGHT_FLOOR=0.10`。
+
+- [x] **DFR-04-RESNEXT-DECISION-256X8-BOUNDED-GATING-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr04_bounded_gating_formal_s42`（commit `70d22ac`）→ `val_acc=0.9255319148936170`, `val_auc=0.9777272727272727`, `val_f1=0.9156626506024096`, `peak_vram≈2.15 GiB`, `total_seconds≈822.3` → **discard**（与当前 retained `L3-no-mixer` seed42 anchor `27b557c` 在 `val_acc` 与 `val_auc` 上完全打平，但 `val_f1` 仍低 `0.0056856640043320`，且 bounded-gating 比 anchor 多了一层 late-fusion 特殊逻辑，因此按 tie-break 不能保留。）
+- **训练轨迹观察**：这条线的前期收敛明显更慢，`epoch 1/2` 只有 `0.5213 / 0.6918` 与 `0.4787 / 0.8936`；但中段开始快速回升，`epoch 7` 达到 `val_acc=0.9043 / val_auc=0.9736`，`epoch 11` 进一步冲到本轮 best `0.9255 / 0.9777`。后半程依然有明显波动，`epoch 13` 还一度掉到 `val_acc=0.6915`，说明 bounded-gating 的确能压住极端权重塌缩，但训练稳定性并没有根本解决。
+- **当前判断**：`DFR-04` 是当前 decision-only 修复里第一条 **真正追平 anchor accuracy / AUC** 的路线，因此它比 `DFR-01~03` 更接近有效修复；但它仍没有把主指标抬过 anchor，也没有把 F1 拉平，按当前模型选择规则只能记为 **promising discard**，不能晋升主线。
+- **推荐动作**：下一步不要立刻把 bounded-gating 和更多结构/损失叠在一起。更合理的是先在同一语义下做一个 **更温和的 floor 强度搜索**，优先测试 `ANKLE_DECISION_FUSION_WEIGHT_FLOOR=0.05` 这类更小的 bounded-gating；如果更温和的边界仍然只能打平 anchor，再考虑把 bounded-gating 作为 `DFR-03` robustness training 的配套约束，而不是单独扩张 late-fusion 逻辑。
 
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
