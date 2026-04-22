@@ -190,7 +190,18 @@
 - [x] **DFR-19-RESNEXT-DECISION-256X8-MERGED-EXPERTS-GATE-WARMUP-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr19_merged_experts_gate_warmup_formal_s42`（commit `77cb402`）→ `init_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`，`best_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`, `peak_vram≈1.22 GiB`, `total_seconds≈248.2` → **discard**（merged init 本身就低于当前 retained `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，而 gate warmup 后也没有任何 epoch 超过 init。）
 - **训练轨迹观察**：这条线的 pattern 很明确：`epoch 0` 的 merged init 是全程最好点，后面 gate warmup 只会更差。验证准确率依次走成 `epoch1=0.8617`、`epoch2=0.8617`、`epoch3=0.8723`、`epoch4=0.8830`，随后因连续 `4` 轮无提升触发 early stop。也就是说，把三条 expert 直接拼回一个 3-view model 后，单独重训 gate 并不能把它们重新协调起来。
 - **当前判断**：`DFR-19` 否定了“merged experts + gate-only warmup”这条最保守的 two-stage 变体。问题不是 merge 失败，而是 merged experts 的相对 logit / feature geometry 与旧 gate 不匹配，且这种不匹配不能只靠 `confidence_heads / confidence_calibrator` 重新拟合。
-- **推荐动作**：下一步不要再重复 gate-only warmup；应该直接试 **merged-expert joint finetune**，至少把 `view_classifiers` 一并解冻，必要时连 `view_encoders` 也低学习率共同调整。当前更合理的问题是“如何把三个已经各自变强的 experts 重新对齐到一个共同 late-fusion 空间”，而不是继续把责任全部压给 gate。 
+- **推荐动作**：下一步不要再重复 gate-only warmup；应该直接试 **merged-expert joint finetune**，至少把 `view_classifiers` 一并解冻，必要时连 `view_encoders` 也低学习率共同调整。当前更合理的问题是“如何把三个已经各自变强的 experts 重新对齐到一个共同 late-fusion 空间”，而不是继续把责任全部压给 gate。
+
+## 2026-04-22：Decision-Fusion Follow-up（DFR-20 merged single-view experts + joint finetune，formal，node20）
+
+> **实验说明**
+> - 这是在 `DFR-19` 否掉 gate-only warmup 之后补的更激进 two-stage 变体：继续使用同一个 merged init checkpoint `runs/resnext_decision_256x8_mainline/artifacts/dfr19_merged_single_view_experts_s42.pt`，但不再只解冻 gate，而是把 `view_encoders + view_classifiers + confidence_heads + confidence_calibrator` 全部放开，用较小学习率 `5e-5` 做 joint finetune。
+> - 对应 config 是 `configs/cmp_resnext_decision_256x8_dfr20_merged_experts_joint_finetune_formal_s42.yaml`，Slurm job `435554` 跑在 `node20` 的单卡 `V100q 32GB` 上；代码落点是 commit `86df7d9`。
+
+- [x] **DFR-20-RESNEXT-DECISION-256X8-MERGED-EXPERTS-JOINT-FINETUNE-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr20_merged_experts_joint_finetune_formal_s42`（commit `86df7d9`）→ `init_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`，`best_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`, `peak_vram≈20.78 GiB`, `total_seconds≈283.2` → **discard**（joint finetune 同样没有超过 merged init，更没有回到当前 retained `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`。）
+- **训练轨迹观察**：这条线比 `DFR-19` 更激进，但趋势仍然是否定的。验证准确率走成 `epoch1=0.8298`、`epoch2=0.7660`、`epoch3=0.8936`，直到 `epoch4` 仍未超过 `init=0.9043`，最终同样 early stop。说明把三条 stronger experts 生硬拼回一个 3-view model 后，不仅 gate 不好重对齐，连 full/joint finetune 也会在短程内先明显破坏原有 calibration。
+- **当前判断**：`DFR-20` 否定了“直接 merge 后整体一起微调”这条一步到位方案。到这里更清楚了：当前 merged-expert 方案缺的不是更大训练自由度，而是一个更平滑的对齐过渡。
+- **推荐动作**：下一步应转到 **中间态 realignment**，也就是保持 `view_encoders` 固定，只解冻 `view_classifiers + confidence_heads + confidence_calibrator`，先把每个视角 head 与 late-fusion 空间重新对齐；如果这一层还不行，再考虑更细的分阶段 unfreeze，而不是继续做 full-joint。 
 
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
