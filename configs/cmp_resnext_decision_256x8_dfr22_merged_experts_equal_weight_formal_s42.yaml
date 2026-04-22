@@ -44,6 +44,6 @@ train:
 
 stagewise:
   init_checkpoint: runs/resnext_decision_256x8_mainline/artifacts/dfr19_merged_single_view_experts_s42.pt
-  strict_load: true
+  strict_load: false
   trainable_prefixes:
     - view_classifiers
