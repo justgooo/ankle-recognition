@@ -481,19 +481,19 @@ def main() -> None:
         "routing_health": {
             "full_minus_single_view_axial_accuracy": safe_mean(
                 [
-                    float(item["view_controls"]["control_delta_accuracy"]["single_view_axial"])
+                    -float(item["view_controls"]["control_delta_accuracy"]["single_view_axial"])
                     for item in run_reports
                 ]
             ),
             "full_minus_leave_out_coronal_accuracy": safe_mean(
                 [
-                    float(item["view_controls"]["control_delta_accuracy"]["leave_out_coronal"])
+                    -float(item["view_controls"]["control_delta_accuracy"]["leave_out_coronal"])
                     for item in run_reports
                 ]
             ),
             "full_minus_leave_out_sagittal_accuracy": safe_mean(
                 [
-                    float(item["view_controls"]["control_delta_accuracy"]["leave_out_sagittal"])
+                    -float(item["view_controls"]["control_delta_accuracy"]["leave_out_sagittal"])
                     for item in run_reports
                 ]
             ),
