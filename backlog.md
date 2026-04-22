@@ -104,6 +104,19 @@
 - **当前判断**：`DFR-05` 是目前这条 decision-only 修复里第一条真正的 **positive keep**。这说明 bounded-gating 不是“只会打平的额外复杂度”，关键在于边界强度；`0.10` 太硬，`0.05` 则成功把 late-fusion 从 axial hard-selection 的极端状态往回拉，而且给出了明确的 accuracy/F1 收益。
 - **推荐动作**：下一步不要立刻继续扫更多 floor 数值。优先补一轮 **mechanism check**：对 `DFR-05` winner 运行 matched `fusion-weight telemetry`，确认这次提升是否真的伴随 axial 权重塌缩缓解；如果 telemetry 证据也转好，再决定是做 exact confirmation，还是把 `DFR-05` 作为新 anchor 去叠更轻的 robustness training。
 
+## 2026-04-22：Decision-Fusion Follow-up（DFR-06 fusion-weight telemetry on DFR-05 winner，existing checkpoint telemetry，node19）
+
+> **实验说明**
+> - 这是对新 keep `DFR-05` 的机制侧复核，不新开训练，只在现有 winner checkpoint 上跑离线 telemetry，检查 bounded-gating 的收益是否真的伴随 “axial hard-selection 缓解”。
+> - 使用 `scripts/analyze_fusion_weights.py`，输入 config 为 `configs/cmp_resnext_decision_256x8_dfr05_bounded_gating_floor05_formal_s42.yaml`，checkpoint 为 `runs/resnext_decision_256x8_mainline/dfr05_bounded_gating_floor05_formal_s42/best.pt`；runtime env 继续保持 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_FUSION_WEIGHT_FLOOR=0.05`。
+> - 输出文件为 `runs/resnext_decision_256x8_mainline/dfr05_bounded_gating_floor05_formal_s42/fusion_weight_analysis.json`，运行 commit 为 `36d99ee`，不产生新的模型 checkpoint。
+
+- [x] **DFR-06-RESNEXT-DECISION-256X8-BOUNDED-GATING-FLOOR05-TELEMETRY**：分析 `DFR-05` winner checkpoint（训练指标仍是 `val_acc=0.9468085106382979`, `val_auc=0.9736363636363636`, `val_f1=0.9425287356321839`）并产出 `fusion_weight_analysis.json` → **discard**（本轮是机制验证，不产生新的更优 checkpoint；其价值在于回答 `DFR-05` 为什么有效，而不是替换当前 keep。）
+- **权重分布变化**：相较旧 `L3-no-mixer` winner 的 `axial top-weight 94/94` 与 `mean axial weight=0.997426`，`DFR-05` 已显著去塌缩。新的 top-weight 分布变成 `axial=57 / coronal=37 / sagittal=0`，mean fusion weight 则是 `axial=0.5558 / coronal=0.3920 / sagittal=0.0522`。这说明 bounded-gating 确实把 late-fusion 从“几乎纯 axial selector”拉回到了“axial+coronal 共治”的状态。
+- **证据对齐情况**：`top_weight hit rate` 对 `true_margin` 是 `0.9043`，高于旧 winner 的 `0.8830`；同时 `top_true_margin` 分布也从过去几乎固定 axial，变成 `axial=50 / coronal=44 / sagittal=0`。这说明新 winner 的权重已经更接近“谁对当前样本更有真实判别证据”。但 `top_pred_margin` 几乎都落在 `coronal=83/94`，而 top-weight 只给了 coronal `37/94`，说明 coronal 分支仍有明显的 over-confident tendency，需要继续谨慎对待。
+- **当前判断**：`DFR-06` 给出了一个偏正面的机制证据。`DFR-05` 的收益不是纯偶然，它确实缓解了旧主线的极端 axial dominance；不过当前新 winner 也没有完全学成理想的三视角平衡，更多像是从 “axial hard-selection” 修到了 “axial-coronal 双主导、sagittal 仍弱”。
+- **推荐动作**：下一步优先做 **exact direct formal confirmation**，先确认 `DFR-05` 这组 mild bounded-gating 在同一 formal 语义下可复现；如果 confirmation 仍站住 `0.94+ val_acc`，再决定是沿 `floor` 轴做 alternate-seed 扩展，还是把 `DFR-05` 当新 anchor 去叠更轻的 robustness training。
+
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
 > **独立 side campaign 说明**
