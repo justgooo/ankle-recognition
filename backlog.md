@@ -39,7 +39,7 @@
 > - 因此，新的结构性修复优先级改成：先修 **per-view logits 的上下文建模能力**，再补 **auxiliary per-view supervision**，最后补 **train-time 视角鲁棒性**；三步都必须保持最终输出仍是“3 个视角 logits 经 late fusion 合成”。
 
 - [x] **DFR-01 contextual per-view classifier path on top of decision late fusion**：已在 `node19` 上完成 `seed=42` formal（job `433578`，commit `942b1e9`，config `configs/cmp_resnext_decision_256x8_dfr01_classifier_context_formal_s42.yaml`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_ENABLE_CLASSIFIER_VIEW_CONTEXT=1`）→ best `val_acc=0.8723404255319149`, `val_auc=0.9350000000000000`, `val_f1=0.8604651162790697`，明显低于当前 `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，因此 **discard**。
-- [ ] **DFR-02 auxiliary per-view supervision for decision fusion**：若 `DFR-01` 不崩，再利用现有 `train.py` 的 `_view_logits/_log_vars` 钩子，把 per-view classifiers 拉回显式监督，检验 coronal / sagittal 是否能在不改最终 late fusion 语义的前提下恢复有效判别力。
+- [x] **DFR-02 auxiliary per-view supervision for decision fusion**：已在 `node19` 上完成 `seed=42` formal（job `433581`，commit `feba55e`，config `configs/cmp_resnext_decision_256x8_dfr02_aux_view_loss_formal_s42.yaml`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS=1` + `ANKLE_DECISION_AUX_VIEW_LOSS_WEIGHT=0.5`）→ best `val_acc=0.8723404255319149`, `val_auc=0.9468181818181818`, `val_f1=0.8723404255319149`，同样明显低于当前 `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，因此 **discard**。
 - [ ] **DFR-03 train-time view robustness for decision fusion**：若前两步成立，再在训练时加入 `view dropout / axial perturbation`，专门针对 `FWR-03` 暴露出的 axial hard-selection 问题，检验 late-fusion 权重是否开始出现真实迁移。
 
 ## 2026-04-22：Decision-Fusion Repair（DFR-01 contextual per-view classifier path，formal，node19）
@@ -53,6 +53,18 @@
 - **训练轨迹观察**：首轮验证直接掉到 `val_acc=0.4681 / val_auc=0.7005`，之后虽回升到 `epoch 3` 的 `0.8404 / 0.8791`，最终 best 也只到 `0.8723 / 0.9350`；中后期还出现多次明显震荡，例如 `epoch 11` 一度掉到 `val_acc=0.5106`、`val_loss=1.8744`。这说明“仅在 classifier path 引入 cross-view context”并没有修复当前 decision-fusion 的 axial-dominant failure mode，反而带来了更强的不稳定性。
 - **当前判断**：`DFR-01` 给出的结论是负面的。feature-fusion 里有效的轻量 cross-view context，直接迁到 decision path 并不能自然转化为更强的 late fusion；至少在当前 `256x8 ResNeXt` 几何与 `seed=42` formal 语义下，这条修复方向会明显伤害主指标。
 - **推荐动作**：下一步进入 **`DFR-02 auxiliary per-view supervision`**，但不要再保留本轮的 classifier-context 结构。更合理的下一轮是回到当前 strongest `L3-no-mixer` anchor，在不引入 classifier-path cross-view mixing 的前提下，只给 per-view logits 加显式辅助监督，先测试 coronal / sagittal 是否能被拉回有效判别。
+
+## 2026-04-22：Decision-Fusion Repair（DFR-02 auxiliary per-view supervision，formal，node19）
+
+> **实验说明**
+> - 本轮回到当前 strongest decision anchor `256x8 ResNeXt + L3-no-mixer`，不保留 `DFR-01` 的 classifier-path context，只利用现有 `train.py` 里的 `_view_logits/_log_vars` 钩子，把 per-view CE 作为显式 auxiliary supervision 叠加回训练损失。
+> - 代码落点是 commit `feba55e`：在 `src/model.py` 里新增 `ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS` 与 `ANKLE_DECISION_AUX_VIEW_LOSS_WEIGHT`，通过已有 UWDF loss hook 暴露固定权重的 per-view auxiliary CE；late-fusion 输出语义仍保持 `view_logits -> fusion_weights -> fused logits`。
+> - 运行使用隔离 formal config `configs/cmp_resnext_decision_256x8_dfr02_aux_view_loss_formal_s42.yaml` 与 Slurm job `433581`（`V100q / node19 / 1xV100 32GB / 24 CPU / 96G`），输出目录 `runs/resnext_decision_256x8_mainline/dfr02_aux_view_loss_formal_s42`。
+
+- [x] **DFR-02-RESNEXT-DECISION-256X8-AUX-VIEW-LOSS-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr02_aux_view_loss_formal_s42`（commit `feba55e`）→ `val_acc=0.8723404255319149`, `val_auc=0.9468181818181818`, `val_f1=0.8723404255319149`, `peak_vram≈2.20 GiB`, `total_seconds≈820.1` → **discard**（相较当前 retained `L3-no-mixer` seed42 anchor `27b557c` 的 `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`，accuracy / AUC / F1 分别回落 `0.0531914893617021 / 0.0309090909090909 / 0.0490078890748267`，因此没有主线保留价值。）
+- **训练轨迹观察**：辅助监督把早期 collapse 稍微拉回来了，`epoch 7` 左右一度达到 `val_acc=0.8511 / val_auc=0.9268`，最终 best 也抬到 `0.8723 / 0.9468`，比 `DFR-01` 的 `0.8723 / 0.9350` 在 ranking 上更好；但它始终没有逼近 `L3-no-mixer` anchor 的 accuracy ceiling，而且整体训练 loss 长时间停留在 `>1.0`，说明这类显式 per-view CE 并没有真正把弱视角转化成可用的 late-fusion 增益。
+- **当前判断**：`DFR-02` 相比 `DFR-01` 更稳一些，但结论仍然是否定的。单纯给三视角 logits 加辅助监督，不足以修复 `FWR` 暴露出来的 axial hard-selection；它更多像是在训练期给 view classifiers 加了额外约束，却没有改变 inference 时 evidence routing 的基本格局。
+- **推荐动作**：继续进入 **`DFR-03 train-time view robustness`**。既然 `DFR-01/02` 都没有解决“模型过度依赖 axial”这个根因，下一步应直接在训练期制造视角缺失 / axial 退化样本，测试 late-fusion 是否能被迫学出更稳的路由策略。
 
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
