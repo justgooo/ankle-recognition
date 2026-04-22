@@ -804,6 +804,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.enable_classifier_view_context = _env_flag(
             "ANKLE_DECISION_ENABLE_CLASSIFIER_VIEW_CONTEXT"
         )
+        self.enable_aux_view_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS"
+        )
+        self.aux_view_loss_weight = _env_positive_float(
+            "ANKLE_DECISION_AUX_VIEW_LOSS_WEIGHT",
+            0.5,
+        )
         self.fusion_temperature = _env_positive_float(
             "ANKLE_LEARNED_FUSION_TEMPERATURE",
             LEARNED_FUSION_TEMPERATURE,
@@ -967,6 +974,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "fusion_weights": fusion_weights,
         }
 
+    def _set_aux_view_loss_state(self, view_logits: torch.Tensor) -> None:
+        """Expose per-view logits through the existing train.py UWDF hook."""
+        if self.enable_aux_view_loss:
+            self._view_logits = view_logits
+            log_var_value = -math.log(self.aux_view_loss_weight)
+            self._log_vars = torch.full(
+                (view_logits.shape[0], view_logits.shape[1], 1),
+                log_var_value,
+                device=view_logits.device,
+                dtype=view_logits.dtype,
+            )
+        else:
+            self._view_logits = None
+            self._log_vars = None
+
     def fuse_decisions(
         self,
         view_logits: torch.Tensor,
@@ -1001,6 +1023,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     def forward_with_decision_info(self, images: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Return the usual fused logits plus intermediate tensors for matched controls."""
         decision_outputs = self._compute_decision_outputs(images)
+        self._set_aux_view_loss_state(decision_outputs["view_logits"])
         logits = self.fuse_decisions(
             decision_outputs["view_logits"],
             decision_outputs["fusion_weights"],
