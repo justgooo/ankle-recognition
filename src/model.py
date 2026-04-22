@@ -930,6 +930,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_AXIAL_BLUR_KERNEL",
             9,
         )
+        self.train_dominant_gate_dropout_prob = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB",
+            0.0,
+        )
         self.forced_active_view_mask = _env_view_mask(
             "ANKLE_DECISION_FORCE_ACTIVE_VIEW_MASK"
         )
@@ -1099,6 +1103,30 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
         return augmented
 
+    def _apply_train_dominant_gate_dropout(self, confidences: torch.Tensor) -> torch.Tensor:
+        """During training, flatten the dominant gate on some samples so weak views receive fusion gradients."""
+        if not self.training or self.train_dominant_gate_dropout_prob <= 0.0:
+            return confidences
+
+        batch_size = confidences.shape[0]
+        drop_mask = (
+            torch.rand(batch_size, device=confidences.device)
+            < self.train_dominant_gate_dropout_prob
+        )
+        if not torch.any(drop_mask):
+            return confidences
+
+        adjusted = confidences.clone()
+        sample_indices = drop_mask.nonzero(as_tuple=False).squeeze(1)
+        selected_confidences = adjusted[sample_indices, :, 0]
+        dominant_view = selected_confidences.detach().argmax(dim=1, keepdim=True)
+        sum_confidences = selected_confidences.sum(dim=1, keepdim=True)
+        dominant_confidence = selected_confidences.gather(dim=1, index=dominant_view)
+        replacement = (sum_confidences - dominant_confidence) / max(selected_confidences.shape[1] - 1, 1)
+        selected_confidences.scatter_(dim=1, index=dominant_view, src=replacement)
+        adjusted[sample_indices, :, 0] = selected_confidences
+        return adjusted
+
     def _compute_decision_outputs(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         """Return per-view logits plus learned fusion weights for analysis/control runs."""
         images = self._apply_train_view_robustness(images)
@@ -1155,6 +1183,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         self.confidence_calibrator(feature, raw_confidence)
                     )
             confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
+            confidences = self._apply_train_dominant_gate_dropout(confidences)
 
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
