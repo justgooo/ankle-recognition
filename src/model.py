@@ -934,6 +934,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB",
             0.0,
         )
+        self.train_non_dominant_weight_floor = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR",
+            0.0,
+        )
         self.forced_active_view_mask = _env_view_mask(
             "ANKLE_DECISION_FORCE_ACTIVE_VIEW_MASK"
         )
@@ -1132,6 +1136,38 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         adjusted = flat_confidences * (1.0 - apply_mask) + dropped_confidences * apply_mask
         return adjusted.unsqueeze(-1)
 
+    def _apply_train_non_dominant_weight_floor(
+        self,
+        fusion_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        """During training, reserve a small mass for non-dominant views so their experts keep learning."""
+        if not self.training or self.train_non_dominant_weight_floor <= 0.0:
+            return fusion_weights
+
+        batch_size, num_views, _ = fusion_weights.shape
+        if num_views <= 1:
+            return fusion_weights
+
+        reserved_mass = self.train_non_dominant_weight_floor * (num_views - 1)
+        if reserved_mass >= 1.0:
+            raise ValueError(
+                "ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR leaves no residual mass for the dominant view."
+            )
+
+        flat_weights = fusion_weights.squeeze(-1)
+        dominant_view = flat_weights.detach().argmax(dim=1)
+        dominant_mask = nn.functional.one_hot(
+            dominant_view,
+            num_classes=num_views,
+        ).to(dtype=flat_weights.dtype, device=flat_weights.device)
+        non_dominant_mask = 1.0 - dominant_mask
+        adjusted = (
+            flat_weights * (1.0 - reserved_mass)
+            + non_dominant_mask * self.train_non_dominant_weight_floor
+        )
+        adjusted = adjusted / adjusted.sum(dim=1, keepdim=True).clamp_min(1e-12)
+        return adjusted.unsqueeze(-1)
+
     def _compute_decision_outputs(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         """Return per-view logits plus learned fusion weights for analysis/control runs."""
         images = self._apply_train_view_robustness(images)
@@ -1204,6 +1240,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 dim=1,
                 keepdim=True,
             )
+        blended_fusion_weights = self._apply_train_non_dominant_weight_floor(
+            blended_fusion_weights
+        )
         fusion_weights = self._apply_fusion_weight_floor(blended_fusion_weights)
         view_logit_temperatures = None
         if self.enable_view_logit_temperature:
