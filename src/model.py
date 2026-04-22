@@ -1108,7 +1108,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         if not self.training or self.train_dominant_gate_dropout_prob <= 0.0:
             return confidences
 
-        batch_size = confidences.shape[0]
+        batch_size, num_views, _ = confidences.shape
         drop_mask = (
             torch.rand(batch_size, device=confidences.device)
             < self.train_dominant_gate_dropout_prob
@@ -1116,16 +1116,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         if not torch.any(drop_mask):
             return confidences
 
-        adjusted = confidences.clone()
-        sample_indices = drop_mask.nonzero(as_tuple=False).squeeze(1)
-        selected_confidences = adjusted[sample_indices, :, 0]
-        dominant_view = selected_confidences.detach().argmax(dim=1, keepdim=True)
-        sum_confidences = selected_confidences.sum(dim=1, keepdim=True)
-        dominant_confidence = selected_confidences.gather(dim=1, index=dominant_view)
-        replacement = (sum_confidences - dominant_confidence) / max(selected_confidences.shape[1] - 1, 1)
-        selected_confidences.scatter_(dim=1, index=dominant_view, src=replacement)
-        adjusted[sample_indices, :, 0] = selected_confidences
-        return adjusted
+        flat_confidences = confidences.squeeze(-1)
+        dominant_view = flat_confidences.detach().argmax(dim=1)
+        dominant_mask = nn.functional.one_hot(
+            dominant_view,
+            num_classes=num_views,
+        ).to(dtype=flat_confidences.dtype, device=flat_confidences.device)
+        dominant_confidence = (flat_confidences * dominant_mask).sum(dim=1, keepdim=True)
+        replacement = (flat_confidences.sum(dim=1, keepdim=True) - dominant_confidence) / max(num_views - 1, 1)
+        dropped_confidences = (
+            flat_confidences * (1.0 - dominant_mask)
+            + replacement * dominant_mask
+        )
+        apply_mask = drop_mask.to(dtype=flat_confidences.dtype).unsqueeze(1)
+        adjusted = flat_confidences * (1.0 - apply_mask) + dropped_confidences * apply_mask
+        return adjusted.unsqueeze(-1)
 
     def _compute_decision_outputs(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         """Return per-view logits plus learned fusion weights for analysis/control runs."""
