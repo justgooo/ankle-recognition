@@ -39,6 +39,22 @@
 
 ---
 
+## 2026-04-23：Decision-Fusion Repair（DFR-25 dominant-gate dropout，adaptive main-study，RTX A6000）
+
+> **实验说明**
+> - 本轮严格对齐当前唯一主线：不切 backbone / 几何 family，不切到 feature fusion，只在 `256x8 ResNeXt decision + L3-no-mixer` 上做一个**直接作用于 routing** 的修复。
+> - 唯一离散改动是 commit `bf4256e` 在 `src/model.py` 新增 `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB`：仅在训练态、仅对当前样本的**最高 gate confidence** 做随机压平，迫使 full-fusion loss 穿过次强视角；`view_logits` 本身不被破坏，推理语义仍保持 learned late fusion。
+> - 这条线与 `DFR-03` 的关键区别是：`DFR-03` 通过输入 view dropout / axial blur 同时扰动 classifier 与 gate；本轮只扰动 gate，因此更直接服务于“减弱 axial dominance、让弱视角拿到真实融合梯度”，同时避免再次伤害 per-view expert。
+> - 首次 fresh main-study 尝试使用预留 search-config copy [autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260423_021418.yaml](/dataset/HH/ankle-ct/autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260423_021418.yaml) 与 study_root [runs/optuna_main_autoloop/iter_0001_20260423_021418](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0001_20260423_021418)，但 commit `1eed9e9` 的首版实现因为训练态 `scatter_` 原地写入破坏 autograd，在 `epoch 1` 全量 crash；这被判定为 **code bug**，不记作模型结论。随后在 commit `bf4256e` 去掉原地写入，并按 fresh-run 规则换到新的 search-config copy [autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260423_021418_retry1.yaml](/dataset/HH/ankle-ct/autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260423_021418_retry1.yaml) 与新的 study_root [runs/optuna_main_autoloop/iter_0001_20260423_021418_retry1](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0001_20260423_021418_retry1) 重跑。
+
+- [x] **DFR-25-RESNEXT-DECISION-256X8-DOMINANT-GATE-DROPOUT-MAIN-S42**：fresh adaptive `main-study` [runs/optuna_main_autoloop/iter_0001_20260423_021418_retry1](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0001_20260423_021418_retry1) 的 best completed trial（trial `1`，commit `bf4256e`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25`）→ `val_acc=0.9361702127659575`, `val_auc=0.9786363636363636`, `val_f1=0.9333333333333333`, `peak_vram≈2.15 GiB`, `total_seconds≈1071.0` → **keep**（相较 matched `equal-weight` control `seed=42` `0.9255319148936170 / 0.9486363636363637 / 0.9176470588235294`，主指标 `val_acc` 提升 `0.0106382978723405`；相较当前 `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9750000000000000 / 0.9213483146067416`，`val_acc / val_auc / val_f1` 分别提升 `0.0106382978723405 / 0.0036363636363636 / 0.0119850187265917`。这也是当前 `256x8 decision-only` 主线下，首次有**真正的 multi-view learned full-fusion** 在同 geometry / budget / seed protocol 上明确超过 matched `equal-weight` control 的单轮正结果。）
+- **study 内部分布**：requested `4` 个 valid trial 中，只有 trial `1` 站上 `0.9362 / 0.9786 / 0.9333`；其余 3 个 valid trial (`0/2/3`) 全都停在 `0.9042553191489362 val_acc` 档，说明这条新 repair 已经给出强正信号，但**当前仍对超参敏感**。monitor 也给出一致方向：`gradient_clip_norm=2.5` 与更低的 `weight_decay=2.5e-4` 更有利。
+- **tail-fill 说明**：wave-aligned 额外补齐的 trial `4/5` 在 requested `4` 个 valid trial 已经全部完成后仍明显落后当前 best；为按“本 session 只做一轮后退出”收口，本轮手动结束了这两个 tail-fill trial。它们在 ledger 里显示为 `crash`，但这不是新的模型故障，不影响本轮 best completed trial 的 keep / discard 判断。
+- **当前判断**：`DFR-25` 是一条**机制上合格、结果上偏正面**的新 repair。它直接削弱 dominant view lock-in、避免像 `DFR-03` 那样同时伤害 classifier，并且在 seed42 上把 learned full-fusion `val_acc` 真正推到了 matched `equal-weight` 之上；但按 2026-04-23 的主线完成标准，这仍只是**单 seed keep**，还不能宣告主线完成。
+- **推荐动作**：下一步优先做 **matched alternate-seed validation**，按 `seed=123 -> seed=456` 的顺序复验同一 runtime env 与同一 winning scalar（`lr=1e-4`, `weight_decay=2.5e-4`, `dropout=0.25`, `gradient_clip_norm=2.5`）。只有当这条 dominant-gate-dropout repair 在 `seed=123/456` 上也能稳定让 learned full-fusion `val_acc` 超过 matched `equal-weight`，当前唯一主方向才算真正完成。若 alternate seed 仍有正信号，再补一轮 FWR-style telemetry，确认收益来自实际的 routing 改善，而不是偶然 calibration spike。
+
+---
+
 ## 2026-04-22：人类追加任务（融合权重合理性 side campaign，限定 3 轮 autoresearch）
 
 > **高优先级 side campaign 说明**
@@ -622,11 +638,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-03`：在 `256x8 ResNeXt decision + L3-no-mixer` anchor 上，仅加入训练期 `view dropout + axial blur` 鲁棒性扰动（commit `ecf7d47`；Slurm job `433591`；输出目录 `runs/resnext_decision_256x8_mainline/dfr03_view_robustness_formal_s42`；runtime env 为 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_VIEW_DROPOUT_PROB=0.15` + `ANKLE_DECISION_TRAIN_AXIAL_BLUR_PROB=0.30` + `ANKLE_DECISION_TRAIN_AXIAL_BLUR_KERNEL=9`）。 |
-| 上次结果 | **discard**。底层 checkpoint 指标仍是 `val_acc=0.925532`, `val_auc=0.975000`, `val_f1=0.921348`，不能替换历史 retained `L3-no-mixer` seed42 keep。机制上，本轮把当前 winner 的 learned fusion 进一步钉死为 **静态 axial selector**：axial blur 之后 full-fusion 指标跌到 `0.617021 / 0.840455 / 0.333333`，共有 `37/94` 个样本翻转、其中 `33` 个是 regressed；但 `top-weight axial` 依旧 `94/94`，平均权重甚至从 `0.997426` 微升到 `0.997567`。更关键的是，`66` 个 axial `pred_margin` 下降样本里有 `25` 个 axial weight 反而上升，`33` 个 regressed 样本里也有 `18` 个 axial weight 上升，说明证据退化并没有触发任何有效的权重迁移。 |
-| 下一步 | `DFR-01~03` 已全部跑完。若继续沿 **decision-fusion-only** 主线推进，优先级不再是 `DFR-01/02`，而是把 `DFR-03` 作为唯一值得继续的起点，做小范围 robustness 强度搜索，并补一轮 matched FWR-style 后验分析验证是否真的出现权重迁移。 |
+| 上次实验 | `DFR-25`：在 `256x8 ResNeXt decision + L3-no-mixer` anchor 上，仅加入训练态 **dominant-gate dropout**（commit `bf4256e`；fresh adaptive main-study [runs/optuna_main_autoloop/iter_0001_20260423_021418_retry1](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0001_20260423_021418_retry1)；runtime env 为 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25`）。首次实现 commit `1eed9e9` 在旧 study_root [runs/optuna_main_autoloop/iter_0001_20260423_021418](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0001_20260423_021418) 因原地 `scatter_` 触发 autograd bug，已修复后 fresh rerun。 |
+| 上次结果 | **keep**。best completed trial `1` 达到 `val_acc=0.9361702127659575`, `val_auc=0.9786363636363636`, `val_f1=0.9333333333333333`, `peak_vram≈2.15 GiB`，明确高于 matched `equal-weight` seed42 control `0.9255319148936170 / 0.9486363636363637 / 0.9176470588235294`，也高于当前 `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9750000000000000 / 0.9213483146067416`。这说明“只在训练态随机压平 dominant gate、但不破坏 view logits”这条 routing-only repair 已经给出首个直接正结果；不过它仍然只是单 seed keep，不能当作主线完成。 |
+| 下一步 | 优先做 **matched alternate-seed validation**：保持同一 runtime env 与 trial-1 winning scalar（`lr=1e-4`, `weight_decay=2.5e-4`, `dropout=0.25`, `gradient_clip_norm=2.5`），先补 `seed=123`，再补 `seed=456`。如果 alternate seeds 仍能让 learned full-fusion `val_acc` 超过 matched `equal-weight`，再补一轮 FWR-style telemetry，确认这次收益确实来自 routing 改善。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 9（`DFR-03` 虽然是三条 DFR 中最强的一条，但 best `val_acc=0.9042553191489362` 仍低于 retained `L3-no-mixer` seed42 anchor `0.9255319148936170`，因此在 `DFR-02` 的基础上再加 1；不过后续仍有明确的新思路，即仅围绕 `DFR-03` 的 robustness 强度做小范围搜索，不触发“没有新思路”的停问条件。） |
+| 连续 discard 计数 | 0（`DFR-25` 给出了新的 keep，打断此前 discard 序列；虽然它还只是单 seed 正结果，但已经不是 discard。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -782,15 +798,19 @@
 ## 当前最优纪录
 
 > 当前 ledger 需要区分“主线 canonical 选择”和“历史单次峰值”：
-> - 当前主线 canonical backbone 已收束为：**`resnext + decision fusion + 512x16 + 20 epochs`**
-> - 历史单次高点、旧 proxy winner 与旧 ResUNet lane 仅保留为 reference，不再覆盖当前 backbone 锁定结论
+> - **2026-04-23 当前唯一主线** 已锁到：**`resnext + decision fusion + 256x8 + L3-no-mixer / routing repair`**
+> - 旧 `512x16` backbone compare、paper lane 与旧 proxy winner 仅保留为 historical reference，不再覆盖当前主线判断
 
 | 指标 | 值 | 来源 commit | 配置 | 备注 |
 |------|---:|-------------|------|------|
-| **主线 canonical mean val_acc** | **0.8581560283687942** | `5b286a7` | `configs/cmp_backbone_decision_resnext_512x16_e20_{s42,s123,s456}.yaml` | matched 3-seed backbone final winner；相对 `cspnet-decision` mean `val_acc` 高 `0.0106382978723404` |
-| **主线 canonical mean val_auc** | **0.9119696969696971** | `5b286a7` | 同上 | 与上行同一 matched final；相对 `cspnet-decision` mean `val_auc` 高 `0.0189393939393940` |
+| **当前主线 seed42 learned > equal keep** | **0.9361702127659575** | `bf4256e` | `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260423_021418_retry1.yaml` | `DFR-25 dominant-gate dropout` best completed trial；在当前 `256x8 decision-only` 主线上首次把 multi-view learned full-fusion `val_acc` 明确推到 matched `equal-weight` 之上，但仍是 single-seed keep |
+| **当前主线 matched equal-weight control (s42)** | **0.9255319148936170** | `8e0bdf4` | `configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l0_equal_formal_s42.yaml` | 当前 256x8 locked mainline 的 fixed equal-weight accuracy 参考 |
+| **当前主线 learned multiseed anchor mean val_acc** | **0.9148936170212766** | `27b557c/3f7bc35` | `configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l3_no_mixer_formal_{s42,s123,s456}.yaml` | `L3-no-mixer` 的 matched 3-seed mean；仍是当前更稳的 learned anchor |
+| **当前主线 learned multiseed anchor mean val_auc** | **0.9628787878787879** | `27b557c/3f7bc35` | 同上 | 与上行同一 matched 3-seed `L3-no-mixer` anchor |
+| legacy `512x16` canonical mean val_acc | 0.8581560283687942 | `5b286a7` | `configs/cmp_backbone_decision_resnext_512x16_e20_{s42,s123,s456}.yaml` | 旧 backbone compare winner；保留作历史 reference |
+| legacy `512x16` canonical mean val_auc | 0.9119696969696971 | `5b286a7` | 同上 | 与上行同一 matched final；保留作历史 reference |
 | **paper reproduction best val_acc** | **0.8510638297872340** | `ed6d535` | `paper_repro/configs/d4_hybrid_25d_3d.yaml` | corrected paper reproduction 总冠军；closer-to-paper rerun 后 `D4` 以 `val_auc=0.9309090909090909` 同时占据该 lane 的最高 AUC |
-| **canonical fusion 控制变量参考** | **0.854609929078014** | `3b826ad` | `configs/cmp_decision_equal_resnext_{learned,equal}_512x16_e20_{s42,s123,s456}.yaml` | matched 3-seed fusion control：equal 的 mean `val_acc` 比 learned 高 `0.007092198581560`，但 learned 的 mean `val_auc` 反而高 `0.009090909090909`；综合规则仍先判 equal 胜出，但证据呈 split verdict |
+| legacy `512x16` fusion 控制变量参考 | 0.854609929078014 | `3b826ad` | `configs/cmp_decision_equal_resnext_{learned,equal}_512x16_e20_{s42,s123,s456}.yaml` | 旧 `512x16` matched fusion control；保留作 historical reference |
 | 全局单次 val_acc 峰值 | 0.893617021276596 | `1695ece` | `configs/cmp_fair_v100_decision_formal_cspnet.yaml` | 历史公平对比单次峰值（`256x8 / 15 epochs`），不是当前 canonical backbone |
 | 历史 proxy winner | 0.8829787234042553 | `a60c3e0` | `configs/autoresearch_proxy.yaml` + fresh proxy study trial 0 | 旧 canonical proxy 参考；不再覆盖当前 backbone 锁定 |
 
