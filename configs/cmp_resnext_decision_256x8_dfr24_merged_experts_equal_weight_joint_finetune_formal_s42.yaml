@@ -1,9 +1,7 @@
-# Decision-fusion follow-up DFR-22.
-# Pure equal-weight control on the merged single-view experts.
-# This is an eval-only run (epoch 0 only) to answer whether the merged experts
-# already work better once learned routing is removed.
-experiment_name: cmp_resnext_decision_256x8_dfr22_merged_experts_equal_weight_formal_s42
-output_dir: runs/resnext_decision_256x8_mainline/dfr22_merged_experts_equal_weight_formal_s42
+# Decision-fusion follow-up DFR-24.
+# Keep equal-weight fusion fixed and jointly realign encoders plus classifiers.
+experiment_name: cmp_resnext_decision_256x8_dfr24_merged_experts_equal_weight_joint_finetune_formal_s42
+output_dir: runs/resnext_decision_256x8_mainline/dfr24_merged_experts_equal_weight_joint_finetune_formal_s42
 seed: 42
 
 runtime_env:
@@ -33,7 +31,7 @@ model:
   equal_weight_fusion: true
 
 train:
-  epochs: 0
+  epochs: 10
   lr: 5.0e-5
   weight_decay: 5.0e-4
   class_weight: true
@@ -48,4 +46,5 @@ stagewise:
   init_checkpoint: runs/resnext_decision_256x8_mainline/artifacts/dfr19_merged_single_view_experts_s42.pt
   strict_load: false
   trainable_prefixes:
+    - view_encoders
     - view_classifiers
