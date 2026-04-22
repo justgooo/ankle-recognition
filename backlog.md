@@ -201,7 +201,18 @@
 - [x] **DFR-20-RESNEXT-DECISION-256X8-MERGED-EXPERTS-JOINT-FINETUNE-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr20_merged_experts_joint_finetune_formal_s42`（commit `86df7d9`）→ `init_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`，`best_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`, `peak_vram≈20.78 GiB`, `total_seconds≈283.2` → **discard**（joint finetune 同样没有超过 merged init，更没有回到当前 retained `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`。）
 - **训练轨迹观察**：这条线比 `DFR-19` 更激进，但趋势仍然是否定的。验证准确率走成 `epoch1=0.8298`、`epoch2=0.7660`、`epoch3=0.8936`，直到 `epoch4` 仍未超过 `init=0.9043`，最终同样 early stop。说明把三条 stronger experts 生硬拼回一个 3-view model 后，不仅 gate 不好重对齐，连 full/joint finetune 也会在短程内先明显破坏原有 calibration。
 - **当前判断**：`DFR-20` 否定了“直接 merge 后整体一起微调”这条一步到位方案。到这里更清楚了：当前 merged-expert 方案缺的不是更大训练自由度，而是一个更平滑的对齐过渡。
-- **推荐动作**：下一步应转到 **中间态 realignment**，也就是保持 `view_encoders` 固定，只解冻 `view_classifiers + confidence_heads + confidence_calibrator`，先把每个视角 head 与 late-fusion 空间重新对齐；如果这一层还不行，再考虑更细的分阶段 unfreeze，而不是继续做 full-joint。 
+- **推荐动作**：下一步应转到 **中间态 realignment**，也就是保持 `view_encoders` 固定，只解冻 `view_classifiers + confidence_heads + confidence_calibrator`，先把每个视角 head 与 late-fusion 空间重新对齐；如果这一层还不行，再考虑更细的分阶段 unfreeze，而不是继续做 full-joint。
+
+## 2026-04-22：Decision-Fusion Follow-up（DFR-21 merged single-view experts + classifier/gate finetune，formal，node20）
+
+> **实验说明**
+> - 这是在 `DFR-20` 之后补的中间态对齐实验：继续使用同一个 merged init checkpoint `runs/resnext_decision_256x8_mainline/artifacts/dfr19_merged_single_view_experts_s42.pt`，但不再放开 `view_encoders`，只解冻 `view_classifiers + confidence_heads + confidence_calibrator`，让每个视角 head 与 late-fusion routing 先重新对齐。
+> - 对应 config 是 `configs/cmp_resnext_decision_256x8_dfr21_merged_experts_classifier_gate_finetune_formal_s42.yaml`，Slurm job `435617` 跑在 `node20` 的单卡 `V100q 32GB` 上；代码落点是 commit `156c6a1`。
+
+- [x] **DFR-21-RESNEXT-DECISION-256X8-MERGED-EXPERTS-CLASSIFIER-GATE-FINETUNE-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr21_merged_experts_classifier_gate_finetune_formal_s42`（commit `156c6a1`）→ `init_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`，`best_val=0.9042553191489362 / 0.9740909090909091 / 0.9010989010989011`, `peak_vram≈1.22 GiB`, `total_seconds≈245.0` → **discard**（与 `DFR-19/20` 一样，没有任何 epoch 超过 merged init，更没有逼近当前 retained `L3-no-mixer` seed42 anchor `0.9255319148936170 / 0.9777272727272727 / 0.9213483146067416`。）
+- **训练轨迹观察**：中间态对齐也没有把 merged experts 救回来。验证准确率依次走成 `epoch1=0.8511`、`epoch2=0.8936`、`epoch3=0.8723`、`epoch4=0.8617`，最终 early stop。也就是说，问题并不只是“encoder 解冻过多”或“joint finetune 太猛”；即便只允许 classifier+gate 重新拟合，merged init 依然没有恢复到 `0.9043` 以上。
+- **当前判断**：到这里，`DFR-19/20/21` 三条 together 已经把“merge 后再继续学”这条线压得很窄了。共同结论是：直接把三条 stronger single-view experts 拼回多视角模型，会形成一个初始 `0.9043` 的 mixed geometry，而无论只调 gate、调 classifier+gate，还是 full-joint，都没法在短程内把它拉回当前主线 anchor。
+- **推荐动作**：下一步不该继续在 merged checkpoint 上盲调解冻范围，而是先回答一个更基本的问题：**merged experts 在 equal-weight 下是不是本来就比 old learned gate 更好**。如果 `equal-weight on merged experts` 明显高于 `0.9043`，那说明专家本身没问题，问题主要在 learned routing；反之，如果 equal-weight 也不行，那 merge 方案本身就需要重写。 
 
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
