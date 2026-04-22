@@ -2,7 +2,6 @@
 #SBATCH --job-name=ankle-sv-escape
 #SBATCH --partition=RTXA6Kq
 #SBATCH --nodes=1
-#SBATCH --nodelist=node15
 #SBATCH --gres=gpu:3
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=96G
@@ -72,8 +71,9 @@ for attempt in $(seq 1 20); do
     break
   fi
   if [ "$attempt" -eq 20 ]; then
-    echo "Allocated GPUs never became idle enough within the startup wait window."
-    exit 1
+    echo "Allocated GPUs never became idle enough within the startup wait window; requeueing."
+    scontrol requeue "${SLURM_JOB_ID}"
+    exit 0
   fi
   sleep 30
 done
