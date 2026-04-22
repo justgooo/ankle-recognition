@@ -19,11 +19,14 @@
 > - 在完成上面这个目标之前，**不允许切换到其他方向**。禁止把 backbone/geometry family 切换、feature fusion、无关 side campaign、泛化清理、与单视角依赖无直接关系的 calibration 小修小补，当成新的主线。
 > - 本主线的完成标准不是单个 seed spike，也不是只提升 `val_auc` / `val_f1`。只有当 **同一 geometry / budget / seed protocol 下的 multi-view full-fusion learned 分支**，在主指标 `val_acc` 上明确高于 matched `equal-weight` control，才算完成，才允许切换方向。
 > - 任何只证明“single-view expert 更强”“equal-weight 更强”“leave-one-view-out 结果更稳定”“AUC/F1 更好但 accuracy 没过 equal”的实验，都**不算**完成这个主方向。
+> - 目标不是把 `equal-weight` 本身当成答案。`equal-weight` 只允许作为 matched control / 外部门槛；真正要找的是能解释或实现多视角净收益的 **learned weighting**，或作为过渡研究工具的 **non-equal fixed weighting with clear interpretability**。
+> - 如果某条 learned weighting 或 non-equal fixed weighting 首次在单个 seed 上翻过 `equal-weight`，后续优先做 matched confirmation、multi-seed validation 与权重 / 证据 telemetry，先确认它确实在摆脱单视角依赖，而不是一次高方差 spike；在这个确认完成前，不要切去无关方向。
 >
 > **inner agent 行动前自检要求**
 > - 每一轮在决定改动前，必须至少做两轮自检：
 >   1. 这项改动是否**直接**作用于摆脱单视角依赖，例如减弱 axial dominance、增强 coronal/sagittal 在 full-fusion 中的有效贡献、修复 learned routing 不迁移的问题？
 >   2. 如果它成功，为什么它有机会把 **multi-view full-fusion learned `val_acc`** 推到 `equal-weight` 之上，而不是只改善单视角表现、训练稳定性、或局部 calibration？
+>   3. 这项改动是在逼近一种可复用的 learned weighting 机制，还是在验证一种 **非 `equal-weight` 固定权重** 的可解释性？如果它只是再次把 `equal-weight` 当终点，或说不清为什么该 non-equal 权重形状有意义，则该方向不合格。
 > - 如果这两问里任意一问不能给出具体机制链路，则该改动视为**不合格方向**，本轮不得执行。
 >
 > **允许优先探索的修复类型**
