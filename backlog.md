@@ -166,6 +166,20 @@
 - **当前判断**：这三条结果基本否定了“只修 gate 就能修好单视角依赖”这条线。更准确地说，当前瓶颈已经不再是 gate 参数没调够，而是 experts 本身就带着明显的 axial bias；在这种前提下，无论是 stagewise、robustness 还是 bounded-gating，单独作用在 gate 上都只能维持初始化点，或者训练后更差。
 - **推荐动作**：后续主线应改成先做 **`single-view expert strengthening`**，也就是先把 `axial / coronal / sagittal` 三个 masked single-view expert 单独训练出来，确认弱视角的 standalone ceiling 是否能显著高于当前 FWR-control 里的“从多视角 checkpoint 裁出来的单视角表现”；只有在这一步确认 `coronal/sagittal` 具备可用专家能力后，再回到真正的两阶段 `decision fusion`。
 
+## 2026-04-22：Decision-Fusion Follow-up（DFR-16/17/18 single-view expert strengthening，formal，node20+node19）
+
+> **实验说明**
+> - 这是沿着“先修弱视角 experts，再修 late-fusion routing”这条主线补的第一步。仍然保持 `decision fusion only`，但通过新增 `ANKLE_DECISION_FORCE_ACTIVE_VIEW_MASK`，在标准 `train.py` 语义下强制只保留一个视角参与 late fusion，从而把当前 `256x8 ResNeXt + L3-no-mixer` scaffold 退化成真正的单视角 expert 训练。
+> - 代码落点是 commit `d690119`（在 `src/model.py` 里新增固定 active-view mask）与提交修正 commit `80e0557`（修复 Slurm `--export` 逗号会截断 mask 的 launch bug，改为 `ACTIVE_VIEW_INDEX` 在脚本内展开）。三条 formal 共用通用脚本 `scripts/slurm_resnext_decision_256x8_single_view_masked.sbatch`，但分别指向独立 config：`DFR-16=axial`、`DFR-17=coronal`、`DFR-18=sagittal`。
+> - 首次提交 `435477/435478/435479` 因 `--export` 逗号截断在启动前即失败，不计入实验结果。修复后有效作业是：`DFR-16=435481`（`node20`）、`DFR-17=435486`（重定向到 `node19`）、`DFR-18=435482`（`node20`）；三条都在单卡 `V100q 32GB` 上正常完赛。
+
+- [x] **DFR-16-RESNEXT-DECISION-256X8-SINGLE-VIEW-AXIAL-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr16_single_view_axial_formal_s42`（commit `80e0557`）→ `val_acc=0.9255319148936170`, `val_auc=0.9781818181818183`, `val_f1=0.9230769230769231`, `peak_vram≈2.15 GiB`, `total_seconds≈838.4` → **keep**（相较 `FWR-01` 里“从多视角 winner 裁出来的 `single_view_axial` control”`0.9255319148936170 / 0.9750000000000000 / 0.9213483146067416`，本轮 direct single-view training 在不降主指标的前提下，进一步抬高了 `val_auc / val_f1`。）
+- [x] **DFR-17-RESNEXT-DECISION-256X8-SINGLE-VIEW-CORONAL-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr17_single_view_coronal_formal_s42`（commit `80e0557`）→ `val_acc=0.8936170212765957`, `val_auc=0.9372727272727274`, `val_f1=0.8863636363636364`, `peak_vram≈2.15 GiB`, `total_seconds≈831.9` → **keep**（相较 `FWR-01` 里同 seed 的 `single_view_coronal` control `0.4680851063829787 / 0.7013636363636363 / 0.1071428571428571`，这是一次大幅恢复，说明 coronal 不是天然无效视角，而是此前在 joint late-fusion 里没有被训练成像样 expert。）
+- [x] **DFR-18-RESNEXT-DECISION-256X8-SINGLE-VIEW-SAGITTAL-FORMAL-S42**：`runs/resnext_decision_256x8_mainline/dfr18_single_view_sagittal_formal_s42`（commit `80e0557`）→ `val_acc=0.8617021276595744`, `val_auc=0.9040909090909091`, `val_f1=0.8354430379746836`, `peak_vram≈2.15 GiB`, `total_seconds≈840.9` → **keep**（相较 `FWR-01` 里同 seed 的 `single_view_sagittal` control `0.4680851063829787 / 0.6295454545454545 / 0.1071428571428571`，也出现了显著恢复，说明 sagittal 的问题更像 starvation，而不是“这个视角没有信息”。）
+- **训练轨迹观察**：三条 single-view experts 都不是靠“偶然 spike”赢的。`axial` 最终站上 `0.9255 / 0.9782`；`coronal` 在 `epoch 13` 达到 `0.8936 / 0.9373`；`sagittal` 最终在 `epoch 15` 回到 `0.8617 / 0.9041`。虽然 `coronal/sagittal` 仍然落后于 axial，但它们与 `FWR-01` control 相比的提升幅度已经足够说明：过去的问题不是视角本身没判别力，而是多视角 joint 训练把弱视角饿死了。
+- **当前判断**：这一轮是关键正结果。它直接把“是否值得继续修 single-view dependence”从不确定变成了明确的 **值得**。因为现在已经有证据表明：`coronal` 和 `sagittal` 在 direct expert training 下都能学成有信息量的独立专家，而当前 late-fusion 主线没有把这两个视角的潜力转化出来。
+- **推荐动作**：下一步不再做新的单视角扫参，而是进入真正的 **two-stage decision fusion**：把 `DFR-16/17/18` 的三个 expert checkpoint 按视角回填到同一个 3-view decision model 里，先冻结 per-view experts、只训练 `confidence_heads / confidence_calibrator` 做 gate warmup，再小学习率 joint finetune。只有这一步能回答“当三个视角都先被训成像样 expert 后，late fusion 还能不能摆脱 axial dominance”。 
+
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
 > **独立 side campaign 说明**
