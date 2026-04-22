@@ -1166,13 +1166,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         ).to(dtype=flat_weights.dtype, device=flat_weights.device)
         dominant_weight = (flat_weights * dominant_mask).sum(dim=1, keepdim=True)
         if self.train_axial_dominance_threshold > 0.0:
-            # Only rescue the residual axial lock-in regime so migrated samples keep
-            # their learned routing freedom instead of receiving a blanket floor.
+            # Scale the rescue smoothly with axial dominance excess so mildly
+            # concentrated samples keep their learned routing freedom.
+            dominance_window = max(1.0 - self.train_axial_dominance_threshold, 1e-6)
+            dominance_excess = (
+                dominant_weight.squeeze(1) - self.train_axial_dominance_threshold
+            ) / dominance_window
             apply_mask = (
-                dominant_view.eq(0)
-                & dominant_weight.squeeze(1).ge(self.train_axial_dominance_threshold)
-            ).to(dtype=flat_weights.dtype, device=flat_weights.device).unsqueeze(1)
-            if not torch.any(apply_mask.bool()):
+                dominant_view.eq(0).to(dtype=flat_weights.dtype, device=flat_weights.device)
+                * dominance_excess.clamp(0.0, 1.0).to(
+                    dtype=flat_weights.dtype,
+                    device=flat_weights.device,
+                )
+            ).unsqueeze(1)
+            if not torch.any(apply_mask.gt(0.0)):
                 return fusion_weights
         else:
             apply_mask = torch.ones(
