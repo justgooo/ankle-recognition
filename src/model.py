@@ -801,6 +801,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.disable_fusion_calibrator = _env_flag(
             "ANKLE_DISABLE_FUSION_CALIBRATOR"
         )
+        self.enable_classifier_view_context = _env_flag(
+            "ANKLE_DECISION_ENABLE_CLASSIFIER_VIEW_CONTEXT"
+        )
         self.fusion_temperature = _env_positive_float(
             "ANKLE_LEARNED_FUSION_TEMPERATURE",
             LEARNED_FUSION_TEMPERATURE,
@@ -840,6 +843,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     for _ in range(3)  # 创建 3 个分类器
                 ]
             )
+            if self.enable_classifier_view_context:
+                self.classifier_view_recalibrators = nn.ModuleList(
+                    [ViewFeatureRecalibration(self.feature_dim) for _ in range(3)]
+                )
+                from .cross_view_attention import CrossViewAttention
+
+                self.classifier_cross_view_mixer = CrossViewAttention(
+                    feature_dim=self.feature_dim,
+                    attention_dim=256,
+                    num_heads=4,
+                    num_layers=1,
+                    dropout=0.1,
+                    residual_scale=0.125,
+                )
             if not self.equal_weight_fusion:
                 # 默认 learned path：先做轻量 cross-view token interaction，再叠加共享的
                 # 低秩 residual calibrator。需要做单模块 ablation 时，可通过环境变量
@@ -871,14 +888,30 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         bias_limit=0.15,
                     )
 
+    def _compute_classifier_features(
+        self,
+        view_features: list[torch.Tensor],
+    ) -> list[torch.Tensor]:
+        """Optionally contextualize per-view classifier features while keeping late fusion."""
+        if self.minimal_fusion_baseline or not self.enable_classifier_view_context:
+            return view_features
+        recalibrated_features = [
+            recalibrator(feature)
+            for recalibrator, feature in zip(self.classifier_view_recalibrators, view_features)
+        ]
+        stacked_features = torch.stack(recalibrated_features, dim=1)
+        contextualized = self.classifier_cross_view_mixer(stacked_features)
+        return list(contextualized.unbind(dim=1))
+
     def _compute_decision_outputs(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         """Return per-view logits plus learned fusion weights for analysis/control runs."""
         view_features = self.encode_views(images)  # 3 个 (B, 512) 的列表
+        classifier_features = self._compute_classifier_features(view_features)
 
         view_logits = torch.stack(
             [
                 classifier(feature)
-                for classifier, feature in zip(self.view_classifiers, view_features)
+                for classifier, feature in zip(self.view_classifiers, classifier_features)
             ],
             dim=1,
         )  # (B, 3, 2)

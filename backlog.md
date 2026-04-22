@@ -31,6 +31,17 @@
 > - 除非 implementation risk 很高，否则优先用当前 canonical `256x8` formal/main lane；只有 smoke/debug 才允许先走 proxy。
 > - 每轮都必须更新 `backlog.md` 与 `results.tsv`；记录时明确标注这是 `fusion-weight rationality` side campaign，而不是 `L6` scalar repair 延续。
 
+## 2026-04-22：人类更正后的后续主线（decision fusion only）
+
+> **主线修正说明**
+> - 人类已明确要求：后续主线 **不要切到 feature fusion**；最终输出语义必须保持 `decision fusion / late fusion`。
+> - feature-fusion 既有实现与历史 keep（尤其 `15b1ef6` 的 `per-view recalibration + light cross-view mixer + gated head`）只作为**模块参考**，允许把其中局部结构迁入 decision-fusion 的 `per-view classifier` 或 `reliability` 路径，但**不允许**把整条主线改成 `fusion_type=feature`。
+> - 因此，新的结构性修复优先级改成：先修 **per-view logits 的上下文建模能力**，再补 **auxiliary per-view supervision**，最后补 **train-time 视角鲁棒性**；三步都必须保持最终输出仍是“3 个视角 logits 经 late fusion 合成”。
+
+- [ ] **DFR-01 contextual per-view classifier path on top of decision late fusion**：基于当前 strongest decision branch `256x8 ResNeXt + L3-no-mixer`，把 feature-fusion 里已验证过的轻量 `per-view recalibration + cross-view mixer` 迁到 `view_classifiers` 之前，但保留最终 `view_logits -> fusion_weights -> fused logits` 语义不变；先做 `seed=42` formal，验证这条结构修复是否至少不再明显弱于当前 `L3-no-mixer` anchor。
+- [ ] **DFR-02 auxiliary per-view supervision for decision fusion**：若 `DFR-01` 不崩，再利用现有 `train.py` 的 `_view_logits/_log_vars` 钩子，把 per-view classifiers 拉回显式监督，检验 coronal / sagittal 是否能在不改最终 late fusion 语义的前提下恢复有效判别力。
+- [ ] **DFR-03 train-time view robustness for decision fusion**：若前两步成立，再在训练时加入 `view dropout / axial perturbation`，专门针对 `FWR-03` 暴露出的 axial hard-selection 问题，检验 late-fusion 权重是否开始出现真实迁移。
+
 ## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
 
 > **独立 side campaign 说明**
