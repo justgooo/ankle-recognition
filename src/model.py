@@ -97,6 +97,33 @@ def _env_positive_int(name: str, default: int) -> int:
     return value
 
 
+def _env_view_mask(name: str) -> tuple[float, float, float] | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    parts = [part.strip() for part in raw.split(",")]
+    if len(parts) != 3:
+        raise ValueError(f"{name} must contain exactly 3 comma-separated entries, got {raw!r}.")
+    values: list[float] = []
+    for part in parts:
+        lowered = part.lower()
+        if lowered in {"true", "yes", "on"}:
+            value = 1.0
+        elif lowered in {"false", "no", "off"}:
+            value = 0.0
+        else:
+            try:
+                value = float(part)
+            except ValueError as exc:
+                raise ValueError(f"{name} entries must be 0/1-like values, got {part!r}.") from exc
+        if value not in {0.0, 1.0}:
+            raise ValueError(f"{name} entries must be 0.0 or 1.0, got {part!r}.")
+        values.append(value)
+    if sum(values) <= 0.0:
+        raise ValueError(f"{name} must keep at least one active view, got {raw!r}.")
+    return values[0], values[1], values[2]
+
+
 def build_resnet18_encoder(use_pretrained: bool, freeze_layers: int = DEFAULT_FREEZE_LAYERS) -> nn.Module:
     """
     构建一个 ResNet18 特征提取器（编码器）。
@@ -903,6 +930,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_AXIAL_BLUR_KERNEL",
             9,
         )
+        self.forced_active_view_mask = _env_view_mask(
+            "ANKLE_DECISION_FORCE_ACTIVE_VIEW_MASK"
+        )
         if self.train_axial_blur_kernel % 2 == 0:
             raise ValueError("ANKLE_DECISION_TRAIN_AXIAL_BLUR_KERNEL must be odd.")
         self.fusion_temperature = _env_positive_float(
@@ -1230,10 +1260,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         """Return the usual fused logits plus intermediate tensors for matched controls."""
         decision_outputs = self._compute_decision_outputs(images)
         self._set_aux_view_loss_state(decision_outputs["view_logits"])
+        active_view_mask = None
+        if self.forced_active_view_mask is not None:
+            active_view_mask = decision_outputs["view_logits"].new_tensor(self.forced_active_view_mask)
         logits = self.fuse_decisions(
             decision_outputs["view_logits"],
             decision_outputs["fusion_weights"],
+            active_view_mask=active_view_mask,
         )
+        if active_view_mask is not None:
+            decision_outputs["active_view_mask"] = active_view_mask
         return logits, decision_outputs
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
