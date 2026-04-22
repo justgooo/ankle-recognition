@@ -22,14 +22,56 @@
 > - 若某一轮需要新增轻量 instrumentation，优先把分析产物写到各自 `output_dir`（例如 `fusion_weight_analysis.json`、`view_ablation_summary.json`、`perturbation_summary.json`），避免把结论只留在临时 shell 输出里。
 >
 > **本轮 3 个固定任务（按顺序执行）**
-> - [ ] **FWR-01 single-view / leave-one-view-out matched control**：围绕当前 `L3-no-mixer` 主线补一轮视角贡献对照，至少比较 `single-view axial/coronal/sagittal` 与 `leave-one-view-out`，回答 learned fusion 的收益是否主要来自“接近 best single view”还是“主动压低拖后腿视角”。
-> - [ ] **FWR-02 fusion-weight telemetry**：对当前 learned fusion 记录样本级 `fusion_weights`，并补最小可解释统计，至少包括 `top-weight hit rate`，以及 fusion weight 与 per-view logit margin / per-view correctness 之间的一致性或相关性，回答“最高权重是否真的落在最有证据的视角上”。
-> - [ ] **FWR-03 perturbation-based weight migration**：对单视角施加可控退化（优先低容量、可复现的 blur / noise / slice-drop 之一），比较扰动前后 `fusion_weights`、预测稳定性与 val 指标变化，回答 learned fusion 是否会在视角质量下降时自动下调该视角权重。
+> - [x] **FWR-01 single-view / leave-one-view-out matched control**：已在 fresh adaptive `main-study` `runs/optuna_main_autoloop/iter_0001_20260422_020718` 上完成；结论是当前 `L3-no-mixer` `seed=42` 的 full fusion 与 `single_view_axial`、`leave_out_coronal`、`leave_out_sagittal` 完全同分，收益主要表现为 **axial dominance**，而不是多视角间更细粒度的 learned redistribution。
+> - [x] **FWR-02 fusion-weight telemetry**：已对 `runs/optuna_main_autoloop/iter_0001_20260422_020718` 的 `L3-no-mixer` `trial_0000` checkpoint 生成 `fusion_weight_analysis.json`；结论是 learned fusion 的权重几乎完全塌缩到 axial（`mean weight=0.997426`, `top-weight axial=94/94`），`top-weight hit rate` 虽然对 `pred_margin / true_margin` 仍有 `0.861702 / 0.882979`，但这更像 **“axial 恒定主导”** 而不是按样本把权重迁到最有证据的视角。
+> - [x] **FWR-03 perturbation-based weight migration**：已对同一 `L3-no-mixer` winner checkpoint 做 `axial` 可复现高斯模糊扰动（`kernel=17`, `sigma=4.0`）；结论是即便 axial 证据被明显打坏，fusion top-weight 仍然 `94/94` 固定留在 axial，learned fusion 并不会把权重迁向 coronal / sagittal。
 >
 > **执行规则**
 > - 外层 loop 固定为 `max-iterations=3`，每轮只做一个离散实验，不要在同一轮混多个独立想法。
 > - 除非 implementation risk 很高，否则优先用当前 canonical `256x8` formal/main lane；只有 smoke/debug 才允许先走 proxy。
 > - 每轮都必须更新 `backlog.md` 与 `results.tsv`；记录时明确标注这是 `fusion-weight rationality` side campaign，而不是 `L6` scalar repair 延续。
+
+## 2026-04-22：Fusion-Weight Rationality（FWR-01 single-view / leave-one-view-out matched control，adaptive main-study，node19）
+
+> **独立 side campaign 说明**
+> - 这是人类限定 `3` 轮外层 autoresearch 的第 `1/3` 轮，只做 `FWR-01`：围绕当前 strongest learned branch `256x8 ResNeXt decision fusion + L3-no-mixer`，补一轮 matched `single-view` / `leave-one-view-out` 控制，并把分析结果落到本轮 run dir 的 `view_ablation_summary.json`。
+> - 首次 fresh study `runs/optuna_main_autoloop/iter_0001_20260422_020107` 在 commit `51967c9` 上暴露了 workflow code bug：`scripts/optuna_workflow.py` 的并行 worker 提前把 `WAITING` template trial 算进停止条件，导致 `n_trials=1` 且 `max-workers=2` 时 study 直接 `0 trial completed`。该空跑不计入实验结果；随后在 commit `c3ba210` 修复后，改用新的 fresh search-config copy `autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260422_020718.yaml` 与新的 study_root `runs/optuna_main_autoloop/iter_0001_20260422_020718` 重跑。
+> - 有效运行环境是 `node19`，adaptive policy 可见 `GPU 1/2` 两张空闲 `Tesla V100-PCIE-32GB`；fresh study 最终只执行 1 个 template trial，trial config 继续保持 canonical `256x8` 几何与标量：`freeze_layers=3`、`lr=1e-4`、`weight_decay=5e-4`、`dropout=0.25`、`gradient_clip_norm=2.0`，唯一 runtime path 是 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`。
+
+- [x] **FWR-01-RESNEXT-DECISION-256X8-L3-NOMIXER-MAIN-S42-CONTROL**：fresh adaptive `main-study` `runs/optuna_main_autoloop/iter_0001_20260422_020718` 的唯一 completed trial（trial `0`，commit `c3ba210`，best checkpoint 路径 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/run/best.pt`）→ `val_acc=0.9255319148936170`, `val_auc=0.9750000000000000`, `val_f1=0.9213483146067416`, `peak_vram≈2.15 GiB`, `total_seconds≈818.6`；随后用同一 trial config 运行 `scripts/analyze_view_controls.py`，产出 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/run/view_ablation_summary.json` → **discard**（相较历史 best `L3-no-mixer` seed42 keep `27b557c` 的 `0.9255319148936170 / 0.9777272727272727`，这次只是在主指标上打平，且 `val_auc` 回落 `0.0027272727272727`，因此不能作为新的 retained model checkpoint。）
+- **matched control 结果**：`full_fusion`、`single_view_axial`、`leave_out_coronal`、`leave_out_sagittal` 四条路径在验证集上给出完全相同的 `0.9255319148936170 val_acc / 0.9750000000000000 val_auc / 0.9213483146067416 val_f1`；相反，`single_view_coronal`、`single_view_sagittal`、`leave_out_axial` 全部掉到 `0.4680851063829787 val_acc`，其中 `leave_out_axial` 的 `val_auc=0.7109090909090909`，单独 coronal / sagittal 则只有 `0.7013636363636363 / 0.6295454545454545`。
+- **翻转统计**：相较 full fusion，`single_view_axial`、`leave_out_coronal`、`leave_out_sagittal` 的 changed-prediction count 都是 `0`；而 `single_view_coronal`、`single_view_sagittal`、`leave_out_axial` 都有 `49` 个预测翻转，其中 `46` 个是从 full-fusion 的正确样本退化成错误，只带来 `3` 个纠错样本。这说明当前 winner 的有效信息几乎被 axial 一条视角吃满，coronal / sagittal 在这个 seed 上没有表现出可见的主指标增益。
+- **当前判断**：`FWR-01` 已经足够回答第一轮问题。对这次 `L3-no-mixer seed42` winner 而言，learned fusion 的收益更接近 **“贴着 best single view（axial）工作”**，而不是“通过 learned weights 稳定压低拖后腿视角后仍保留多视角净收益”。也就是说，在当前 strongest branch 的至少这个 matched seed 上，fusion 机制还没有给出“超越 best single view”的额外证据。
+- **推荐动作**：下一轮按固定顺序转入 **`FWR-02 fusion-weight telemetry`**。重点不再是继续重训 `L6` 标量修复，而是补样本级 `fusion_weights` 记录与最小一致性统计，先回答“最高权重是否真的落在最有证据的视角上”；如果 telemetry 继续显示 axial 几乎恒定主导，再决定 `FWR-03` 的扰动设计优先对 axial 还是弱视角下手。
+
+## 2026-04-22：Fusion-Weight Rationality（FWR-02 fusion-weight telemetry，existing main-study checkpoint telemetry，node19）
+
+> **独立 side campaign 说明**
+> - 这是人类限定 `3` 轮外层 autoresearch 的第 `2/3` 轮，只做 `FWR-02`：不新开 study、不重训，而是在 commit `478f371` 上新增 `scripts/analyze_fusion_weights.py`，对上一轮已完成的 `L3-no-mixer` adaptive `main-study` `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000` 做离线 telemetry。
+> - 分析输入继续使用上一轮 trial config `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/config.yaml` 与 checkpoint `.../run/best.pt`；runtime path 保持 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`。本轮只额外生成 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/run/fusion_weight_analysis.json`，不复用 `432763` 的任何运行目录，也不重新触发 `L6`。
+> - 运行环境是 `node19`；因 host `GPU 0` 当时已有占用（`2940 MiB / 25% util`），实际 telemetry 通过 `CUDA_VISIBLE_DEVICES=1` 在空闲 `V100 32GB` 上完成，仅做离线前向推理。
+
+- [x] **FWR-02-RESNEXT-DECISION-256X8-L3-NOMIXER-MAIN-S42-TELEMETRY**：commit `478f371` 用新增脚本分析既有 adaptive `main-study` checkpoint `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/run/best.pt`（训练指标仍是 `val_acc=0.9255319148936170`, `val_auc=0.9750000000000000`, `val_f1=0.9213483146067416`, `peak_vram≈2.15 GiB`）并产出 `fusion_weight_analysis.json` → **discard**（本轮没有产生新的更优 checkpoint；它回答的是机制问题而不是主指标提升，相较历史 best `L3-no-mixer` seed42 keep `27b557c` 仍然保持 `val_acc` 打平但 `val_auc` 落后 `0.0027272727272727`。）
+- **权重塌缩结论**：sample-level telemetry 显示 learned fusion 几乎是一个硬性的 axial selector。三视角平均权重分别为 `axial=0.997426`、`coronal=0.001593`、`sagittal=0.000981`；`axial` 在 `94/94` 个验证样本上都是 top-weight view，且最小 axial 权重仍有 `0.992064`。这说明当前 strongest learned branch 基本没有发生样本级的权重迁移。
+- **top-weight hit rate / margin 对齐**：`top-weight hit rate` 对 `pred_margin` 是 `81/94 = 0.861702`，对 `true_margin` 是 `83/94 = 0.882979`。`top_pred_margin` 分布是 `axial=81 / coronal=13 / sagittal=0`，而 `top_true_margin` 分布是 `axial=83 / coronal=7 / sagittal=4`；也就是说，即使有 `11` 个样本的最高 `true_margin` 已经落到非 axial 视角，fusion 仍然把最高权重固定给 axial。
+- **correctness 对齐的真实来源**：`top-weight correct rate = 0.925532`，`mixed-correctness` 子集里的 `top-weight correct rate = 46/49 = 0.938776`，看起来很高；但拆开看，`49` 个 mixed-correctness 样本里有 `46` 个是 **只有 axial 一条视角预测正确**。因此这条“高一致性”更多来自 axial 本来就是 best single view，而不是 learned weights 在不同样本之间做了有意义的 evidence routing。按扁平样本-视角对统计，`weight vs pred_margin / true_margin / correctness` 的 Pearson 分别是 `0.7063 / 0.6907 / 0.4451`，`correct-view mean weight=0.4968` 也高于 `incorrect-view mean weight=0.0660`；但这些 aggregate 相关性依然被全局 axial prior 主导。
+- **最关键的反例**：共有 `11` 个样本出现“非 axial 视角拥有最高 true-margin”，其中 `7` 个最终 full fusion 仍然预测错误。更尖锐的是，有 `3` 个阳性样本上 **axial 错、coronal+sagittal 对**，且 `coronal` 还是最高 true-margin view，但 fusion weight 依旧维持在 `>0.998 axial`，导致 full fusion 跟着 axial 一起错。这说明当前 learned fusion 没有在最需要的时候把权重迁到更有证据的非 axial 分支。
+- **当前判断**：`FWR-02` 已经足够回答第二轮问题。当前 `256x8 + L3-no-mixer` winner 的 learned fusion 更像是 **近乎静态的 axial hard-selection**，不是“按样本根据证据重新分配权重”的自适应机制。它在 aggregate 上看起来“top-weight 和 correctness 对齐”，主要因为 axial 本来就最强，而不是因为权重学会了真正的跨视角迁移。
+- **推荐动作**：下一轮按固定顺序转入 **`FWR-03 perturbation-based weight migration`**。既然 telemetry 已经证明权重几乎不离开 axial，最有信息量的设计就是优先对 axial 做可控退化（首选低容量、可复现的 blur / noise / slice-drop 之一），直接测试在 axial 质量下降时，权重是否会从 `~0.997` 真正迁向 coronal / sagittal。
+
+## 2026-04-22：Fusion-Weight Rationality（FWR-03 perturbation-based weight migration，existing main-study checkpoint perturbation analysis，node19）
+
+> **独立 side campaign 说明**
+> - 这是人类限定 `3` 轮外层 autoresearch 的第 `3/3` 轮，也是本 bounded side campaign 的收口轮次：不新开 study、不重训，而是在 commit `27219b2` 上新增 `scripts/analyze_fusion_perturbations.py`，对同一 `L3-no-mixer` adaptive `main-study` `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000` checkpoint 做离线扰动分析。
+> - 分析输入继续使用 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/config.yaml` 与 `.../run/best.pt`；runtime path 仍是 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1`。本轮只额外生成 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/run/perturbation_summary.json`，不复用 `432763` 的任何运行目录，也不重新触发 `L6`。
+> - 扰动设计固定为 **axial 单视角 deterministic Gaussian blur**（`kernel=17`, `sigma=4.0`），运行环境是 `node19` 的 `CUDA_VISIBLE_DEVICES=0`。之所以选这条设计，是因为 `FWR-01/02` 已经表明 axial 是当前 winner 的绝对主导视角；最有信息量的问题不再是“谁最强”，而是“当 axial 变差时，权重会不会真的迁走”。
+
+- [x] **FWR-03-RESNEXT-DECISION-256X8-L3-NOMIXER-MAIN-S42-PERTURB**：commit `27219b2` 用新增脚本分析既有 adaptive `main-study` checkpoint `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/run/best.pt`（训练指标仍是 `val_acc=0.9255319148936170`, `val_auc=0.9750000000000000`, `val_f1=0.9213483146067416`, `peak_vram≈2.15 GiB`）并产出 `perturbation_summary.json` → **discard**（本轮没有产生新的更优 checkpoint；它回答的是机制问题而不是主指标提升，相较历史 retained `L3-no-mixer` seed42 keep `27b557c` 仍然只是 `val_acc` 打平但 `val_auc` 落后 `0.0027272727272727`。）
+- **扰动后的融合退化**：对 axial 做 blur 后，full-fusion 验证集指标直接降到 `val_acc=0.6170212765957447`, `val_auc=0.8404545454545455`, `val_f1=0.3333333333333333`，相较 baseline 分别回落 `0.3085106382978723 / 0.1345454545454545 / 0.5880149812734083`。共有 `37/94` 个样本发生预测翻转，其中 `33` 个是从 baseline 的正确样本退化成错误，只带来 `4` 个纠错样本。
+- **最关键的权重迁移结论**：尽管 axial 的证据被明显打坏，fusion top-weight 仍然 **没有任何一次** 从 axial 迁走。扰动前后 `top-weight axial` 都是 `94/94`；三视角平均权重从 `axial/coronal/sagittal = 0.997426 / 0.001593 / 0.000981` 变成 `0.997567 / 0.001488 / 0.000945`。也就是说，当前 learned fusion 并不是“弱化了 axial 但仍不够多”，而是 **在显著退化场景下依旧维持硬性的 axial selector**。
+- **证据退化与权重变化脱钩**：axial 本身的 per-view 指标也和 full fusion 一起大幅下滑，`axial val_acc / val_auc` 同样掉到 `0.617021 / 0.840000`，平均 `pred_margin / true_margin` 分别下降 `1.461722 / 2.363960`。但这些退化并没有触发权重迁移：虽然 `67/94` 个样本的 axial weight 有小幅下降，但平均变化只有 `+0.0001409`，而且 `66` 个 axial `pred_margin` 下降样本里有 `25` 个反而出现 axial weight **上升**；更尖锐的是，`33` 个从对变错的 regressed 样本里有 `18` 个也出现 axial weight 上升。
+- **当前判断**：到这里，bounded `fusion-weight rationality` side campaign 已经足够回答问题。当前 `256x8 + L3-no-mixer` winner 的 learned fusion 不仅在静态 telemetry 上表现为 axial collapse，在显式的 axial degradation 下也依旧**不会把权重迁给更稳定的非 axial 分支**。这说明它更像“几乎固定的 axial hard-selection”，而不是具备样本级证据路由能力的 adaptive fusion。
+- **推荐动作**：本 side campaign 到此完成 `3/3`，外层 autoresearch loop 应按人类要求退出这一支。若未来还要继续追问 learned fusion 的合理性，不要再重复 control / telemetry / perturbation 轮次；只有真正会改变 evidence routing 的**结构性修复**才值得继续，比如显式限制 axial prior、引入跨视角竞争正则或辅助迁移目标。当前常规主线则应把控制权交回外层 queue，并继续避免与独立运行中的 `432763` / `L6` 冲突。
 
 ## 2026-04-21：人类方向追加约束（主线切回 ResNeXt decision 256x8 learned-weighting）
 
@@ -370,11 +412,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `L5-temp1p5` + `L5-temp2p0` 的 `256x8` formal matched closeout（commit `f84df46`；Slurm batch `432737`；`V100q/node20`；用 `scripts/slurm_resnext_decision_256x8_matrix.sbatch` 在同一节点并行跑完 strongest learned branch `L3-no-mixer` 上的 `temperature=1.5 / 2.0` 三 seed closeout，run dirs 位于 `runs/resnext_decision_256x8_matrix/formal/l5_temp1p5/*` 与 `runs/resnext_decision_256x8_matrix/formal/l5_temp2p0/*`。） |
-| 上次结果 | `L5-temp1p5` keep ×2 / discard ×1，`L5-temp2p0` discard ×3（`temp1.5` 3-seed mean `0.914894 / 0.965303 / 0.908446`，相较 `L3` 只提升 AUC / F1，不提升 mean accuracy，且 `val_acc` std 从 `0.015045` 恶化到 `0.022981`；`temp2.0` 3-seed mean `0.897163 / 0.964848 / 0.881694`，mean accuracy 比 `L3` 回落 `0.017730`。结论：temperature 线正式封口，`L3-no-mixer` 继续保持 strongest learned branch。） |
-| 下一步 | 不再继续 `temp=*` probe；转入 **`L3-no-mixer` 的非-temp 标量修复**。最高优先级是先做 `seed=123` 的 fresh `main-study`，只在 `lr / weight_decay / dropout / gradient_clip_norm` 上做小范围搜索，目标是优先修复当前 strongest learned branch 的剩余低点。 |
+| 上次实验 | `FWR-03`：对 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000` 的 `256x8 ResNeXt decision + L3-no-mixer` checkpoint 做 perturbation-based weight migration 分析（代码 commit `27219b2`；分析产物位于 `runs/optuna_main_autoloop/iter_0001_20260422_020718/trials/trial_0000/run/perturbation_summary.json`；离线推理运行在 `node19` 的 `CUDA_VISIBLE_DEVICES=0` 上完成；扰动为 `axial Gaussian blur kernel=17 sigma=4.0`）。 |
+| 上次结果 | **discard**。底层 checkpoint 指标仍是 `val_acc=0.925532`, `val_auc=0.975000`, `val_f1=0.921348`，不能替换历史 retained `L3-no-mixer` seed42 keep。机制上，本轮把当前 winner 的 learned fusion 进一步钉死为 **静态 axial selector**：axial blur 之后 full-fusion 指标跌到 `0.617021 / 0.840455 / 0.333333`，共有 `37/94` 个样本翻转、其中 `33` 个是 regressed；但 `top-weight axial` 依旧 `94/94`，平均权重甚至从 `0.997426` 微升到 `0.997567`。更关键的是，`66` 个 axial `pred_margin` 下降样本里有 `25` 个 axial weight 反而上升，`33` 个 regressed 样本里也有 `18` 个 axial weight 上升，说明证据退化并没有触发任何有效的权重迁移。 |
+| 下一步 | 本 bounded `fusion-weight rationality` side campaign 已完成 `3/3`，默认把控制权交回外层 loop，不再继续 `FWR-01~03`。如果后续还要追问 learned fusion 的合理性，优先级不再是 telemetry/control，而是**结构性 repair**：显式削弱 axial prior 或强制权重竞争/迁移；在此之前，继续避免与独立运行中的 `432763` / `L6` 冲突。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 4（上一轮 `L4-no-calibrator` 的 `seed=42/456` 与 `L5-temp1p5` 的 `seed=42/456` 都有 keep，已多次打断 discard streak；当前最新连续 discard 序列是 `L5-temp1p5-s123` → `L5-temp2p0-s42` → `L5-temp2p0-s123` → `L5-temp2p0-s456`，因此当前 discard streak 为 4。） |
+| 连续 discard 计数 | 7（`FWR-03` 同样属于 mechanism-only discard，因此在 `FWR-02` 的基础上再加 1。由于本轮是人类限定的 bounded `3/3` side campaign 收口，当前动作不是继续盲跑，而是把控制权交回外层 loop；后续若没有新的结构性思路，则应由人类或 backlog 主线优先级决定是否继续该问题。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
