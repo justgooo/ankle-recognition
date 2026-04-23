@@ -1,0 +1,50 @@
+# DFR-23 timeout recovery.
+# Formalize the already-saved epoch-1 best checkpoint in isolation so we can land summary.json
+# without rerunning the full fine-tune.
+experiment_name: cmp_resnext_decision_256x8_dfr23_merged_experts_equal_weight_classifier_finetune_formalize_s42
+output_dir: runs/resnext_decision_256x8_mainline/dfr23_merged_experts_equal_weight_classifier_finetune_formalize_s42
+seed: 42
+
+runtime_env:
+  ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 256
+  num_slices_per_view: 8
+  trim_edge_slices: 2
+  batch_size: 6
+  num_workers: 4
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnext
+  fusion_type: decision
+  share_backbone: false
+  use_pretrained: true
+  freeze_layers: 3
+  fusion_hidden_dim: 256
+  dropout: 0.25
+  use_attention_pooling: false
+  equal_weight_fusion: true
+
+train:
+  epochs: 0
+  lr: 5.0e-5
+  weight_decay: 5.0e-4
+  class_weight: true
+  device: auto
+  augmentation: false
+  scheduler: none
+  label_smoothing: 0.0
+  gradient_clip_norm: 2.0
+  early_stopping_patience: 4
+
+stagewise:
+  init_checkpoint: runs/resnext_decision_256x8_mainline/dfr23_merged_experts_equal_weight_classifier_finetune_formal_s42/best.pt
+  strict_load: false
+  trainable_prefixes:
+    - view_classifiers
