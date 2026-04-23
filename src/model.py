@@ -946,6 +946,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD",
             0.0,
         )
+        self.train_axial_teacher_misalignment_dropout_boost = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_DROPOUT_BOOST",
+            0.0,
+        )
         self.train_teacher_non_axial_competitive_gap = _env_unit_float(
             "ANKLE_DECISION_TRAIN_TEACHER_NONAXIAL_COMPETITIVE_GAP",
             0.0,
@@ -1234,6 +1238,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         if (
             self.train_axial_teacher_misalignment_scale_threshold <= 0.0
             and self.train_axial_teacher_misalignment_threshold <= 0.0
+            and self.train_axial_teacher_misalignment_dropout_boost <= 0.0
             and self.train_teacher_non_axial_competitive_gap <= 0.0
             and not self.train_require_teacher_non_axial_top
         ):
@@ -1242,6 +1247,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             raise ValueError(
                 "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD / "
                 "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_SCALE_THRESHOLD / "
+                "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_DROPOUT_BOOST / "
                 "ANKLE_DECISION_TRAIN_TEACHER_NONAXIAL_COMPETITIVE_GAP / "
                 "ANKLE_DECISION_TRAIN_REQUIRE_TEACHER_NONAXIAL_TOP "
                 "requires gate and teacher weights."
@@ -1258,6 +1264,34 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         axial_misalignment = (
             flat_gate_weights[:, 0] - flat_teacher_weights[:, 0]
         ).clamp_min(0.0)
+        if self.train_axial_teacher_misalignment_dropout_boost > 0.0:
+            # Preserve the base DFR-25 random dropout coverage, but add extra
+            # correction on samples where gate routing over-trusts axial while
+            # the detached view-logit teacher still sees non-axial evidence.
+            boost_mask = dominant_view.eq(0)
+            if self.train_require_teacher_non_axial_top:
+                boost_mask = boost_mask & teacher_top_view.ne(0)
+            if self.train_teacher_non_axial_competitive_gap > 0.0:
+                boost_mask = boost_mask & teacher_axial_non_axial_gap.le(
+                    self.train_teacher_non_axial_competitive_gap
+                )
+            if self.train_axial_teacher_misalignment_threshold > 0.0:
+                boost_mask = boost_mask & axial_misalignment.ge(
+                    self.train_axial_teacher_misalignment_threshold
+                )
+            if self.train_axial_teacher_misalignment_scale_threshold > 0.0:
+                boost_values = (
+                    axial_misalignment
+                    / max(self.train_axial_teacher_misalignment_scale_threshold, 1e-6)
+                ).clamp(0.0, 1.0)
+            else:
+                boost_values = torch.ones_like(sample_probs)
+            boost_values = boost_values * boost_mask.to(dtype=sample_probs.dtype)
+            sample_probs = sample_probs + (
+                self.train_axial_teacher_misalignment_dropout_boost * boost_values
+            )
+            return torch.rand(batch_size, device=device) < sample_probs.clamp(0.0, 1.0)
+
         sample_probs = sample_probs * dominant_view.eq(0).to(dtype=sample_probs.dtype)
         if self.train_require_teacher_non_axial_top:
             sample_probs = sample_probs * teacher_top_view.ne(0).to(dtype=sample_probs.dtype)
@@ -1609,6 +1643,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             or self.train_target_teacher_dropout_redistribution
             or self.train_axial_teacher_misalignment_scale_threshold > 0.0
             or self.train_axial_teacher_misalignment_threshold > 0.0
+            or self.train_axial_teacher_misalignment_dropout_boost > 0.0
             or self.train_teacher_non_axial_competitive_gap > 0.0
             or self.train_require_teacher_non_axial_top
         ):
