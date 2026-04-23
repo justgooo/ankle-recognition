@@ -946,6 +946,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD",
             0.0,
         )
+        self.train_require_teacher_non_axial_top = _env_flag(
+            "ANKLE_DECISION_TRAIN_REQUIRE_TEACHER_NONAXIAL_TOP"
+        )
         self.train_non_dominant_weight_floor = _env_unit_float(
             "ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR",
             0.0,
@@ -1227,22 +1230,27 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         if (
             self.train_axial_teacher_misalignment_scale_threshold <= 0.0
             and self.train_axial_teacher_misalignment_threshold <= 0.0
+            and not self.train_require_teacher_non_axial_top
         ):
             return torch.rand(batch_size, device=device) < sample_probs
         if fusion_weights is None or teacher_weights is None:
             raise ValueError(
                 "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD / "
-                "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_SCALE_THRESHOLD "
+                "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_SCALE_THRESHOLD / "
+                "ANKLE_DECISION_TRAIN_REQUIRE_TEACHER_NONAXIAL_TOP "
                 "requires gate and teacher weights."
             )
 
         flat_gate_weights = fusion_weights.detach().squeeze(-1)
         flat_teacher_weights = teacher_weights.detach().squeeze(-1)
         dominant_view = flat_gate_weights.argmax(dim=1)
+        teacher_top_view = flat_teacher_weights.argmax(dim=1)
         axial_misalignment = (
             flat_gate_weights[:, 0] - flat_teacher_weights[:, 0]
         ).clamp_min(0.0)
         sample_probs = sample_probs * dominant_view.eq(0).to(dtype=sample_probs.dtype)
+        if self.train_require_teacher_non_axial_top:
+            sample_probs = sample_probs * teacher_top_view.ne(0).to(dtype=sample_probs.dtype)
         if self.train_axial_teacher_misalignment_scale_threshold > 0.0:
             # Ramp dropout coverage smoothly from aligned cases up to the old
             # hard-threshold mismatch point so near-mismatch samples get some
@@ -1252,7 +1260,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 / max(self.train_axial_teacher_misalignment_scale_threshold, 1e-6)
             ).clamp(0.0, 1.0)
             sample_probs = sample_probs * misalignment_scale.to(dtype=sample_probs.dtype)
-        else:
+        elif self.train_axial_teacher_misalignment_threshold > 0.0:
             sample_probs = sample_probs * axial_misalignment.ge(
                 self.train_axial_teacher_misalignment_threshold
             ).to(dtype=sample_probs.dtype)
@@ -1583,6 +1591,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             or self.train_target_teacher_dropout_redistribution
             or self.train_axial_teacher_misalignment_scale_threshold > 0.0
             or self.train_axial_teacher_misalignment_threshold > 0.0
+            or self.train_require_teacher_non_axial_top
         ):
             teacher_fusion_weights = self._compute_gate_teacher_weights(view_logits)
         if self.train_dominant_gate_dropout_prob > 0.0 and not self.minimal_fusion_baseline:
