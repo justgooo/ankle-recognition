@@ -15,23 +15,24 @@
 ## 2026-04-23：人类最新主线锁定（最高优先级，覆盖旧规则）
 
 > **主方向硬约束**
-> - 当前 autoresearch 的唯一主方向，改为：**摆脱目前 decision fusion 除 `equal-weight` 外最佳 learned 方案的单视角依赖**，尤其是 `axial dominance` / `weak-view starvation`，并把真正的 **multi-view full-fusion learned accuracy** 做到明确高于 matched `equal-weight` control。
+> - 当前 autoresearch 的唯一主方向，改为：**实验 decision fusion，把 axial / coronal / sagittal 各个视角的信息还原成它们在 full-fusion 中该有的作用**。核心不是把权重机械拉平均，也不是只压制 axial，而是让该主导的视角在有真实证据时主导、该补充的视角在提供增量信息时被真正用上，并把真正的 **multi-view full-fusion learned accuracy** 做到明确高于 matched `equal-weight` control。
 > - 在完成上面这个目标之前，**不允许切换到其他方向**。禁止把 backbone/geometry family 切换、feature fusion、无关 side campaign、泛化清理、与单视角依赖无直接关系的 calibration 小修小补，当成新的主线。
 > - 本主线的完成标准不是单个 seed spike，也不是只提升 `val_auc` / `val_f1`。只有当 **同一 geometry / budget / seed protocol 下的 multi-view full-fusion learned 分支**，在主指标 `val_acc` 上明确高于 matched `equal-weight` control，才算完成，才允许切换方向。
-> - 任何只证明“single-view expert 更强”“equal-weight 更强”“leave-one-view-out 结果更稳定”“AUC/F1 更好但 accuracy 没过 equal”的实验，都**不算**完成这个主方向。
-> - 目标不是把 `equal-weight` 本身当成答案。`equal-weight` 只允许作为 matched control / 外部门槛；真正要找的是能解释或实现多视角净收益的 **learned weighting**，或作为过渡研究工具的 **non-equal fixed weighting with clear interpretability**。
-> - 如果某条 learned weighting 或 non-equal fixed weighting 首次在单个 seed 上翻过 `equal-weight`，后续优先做 matched confirmation、multi-seed validation 与权重 / 证据 telemetry，先确认它确实在摆脱单视角依赖，而不是一次高方差 spike；在这个确认完成前，不要切去无关方向。
+> - 任何只证明“single-view expert 更强”“equal-weight 更强”“leave-one-view-out 结果更稳定”“某个视角继续错误独占但 accuracy 偶然更高”“AUC/F1 更好但 accuracy 没过 equal”的实验，都**不算**完成这个主方向。
+> - 目标不是把 `equal-weight` 本身当成答案，也不是把三视角硬拉成平均分。`equal-weight` 只允许作为 matched control / 外部门槛；真正要找的是能解释或实现“各视角信息按其应有作用进入决策”的 **learned weighting**，或作为过渡研究工具的 **non-equal fixed weighting with clear interpretability**。
+> - 如果某条 learned weighting 或 non-equal fixed weighting 首次在单个 seed 上翻过 `equal-weight`，后续优先做 matched confirmation、multi-seed validation 与权重 / 证据 telemetry，先确认它确实在让各视角信息回到应有作用，而不是一次高方差 spike 或一次表面去塌缩；在这个确认完成前，不要切去无关方向。
 >
 > **inner agent 行动前自检要求**
 > - 每一轮在决定改动前，必须至少做两轮自检：
->   1. 这项改动是否**直接**作用于摆脱单视角依赖，例如减弱 axial dominance、增强 coronal/sagittal 在 full-fusion 中的有效贡献、修复 learned routing 不迁移的问题？
->   2. 如果它成功，为什么它有机会把 **multi-view full-fusion learned `val_acc`** 推到 `equal-weight` 之上，而不是只改善单视角表现、训练稳定性、或局部 calibration？
->   3. 这项改动是在逼近一种可复用的 learned weighting 机制，还是在验证一种 **非 `equal-weight` 固定权重** 的可解释性？如果它只是再次把 `equal-weight` 当终点，或说不清为什么该 non-equal 权重形状有意义，则该方向不合格。
+>   1. 这项改动是否**直接**帮助 decision fusion 还原各视角信息在 full-fusion 中应有的作用，例如减弱错误的 axial 独占、增强 coronal/sagittal 在有证据样本上的有效进入、修复 evidence 与 routing 不一致、或让“该主导的视角主导、该补充的视角补充”？
+>   2. 如果它成功，为什么它有机会把 **multi-view full-fusion learned `val_acc`** 推到 `equal-weight` 之上，而不是只把权重做得更平均、只改善单视角表现、训练稳定性、或局部 calibration？
+>   3. 这项改动是在逼近一种可复用的 learned weighting 机制，还是在验证一种 **非 `equal-weight` 固定权重** 的可解释性？如果它只是无差别抹平视角差异，或说不清为什么这种权重形状能让各视角信息发挥应有作用，则该方向不合格。
 > - 如果这两问里任意一问不能给出具体机制链路，则该改动视为**不合格方向**，本轮不得执行。
 >
 > **允许优先探索的修复类型**
 > - 直接改变 evidence routing 的修复
 > - 直接缓解弱视角 starvation 的修复
+> - 直接修复 evidence-to-routing 对不齐、让视角信息回到应有作用的修复
 > - 能让 stronger per-view experts 在 full-fusion 下真正形成超过 `equal-weight` 的净收益的对齐/训练修复
 >
 > **解释优先级**
@@ -819,17 +820,47 @@
 
 ---
 
+## 2026-04-23：Decision-Fusion Repair Follow-up（DFR-34 targeted strongest-fallback rescue redistribution，adaptive main-study，RTX A6000）
+
+> **实验说明**
+> - 本轮继续严格保持当前唯一主线与 `256x8 ResNeXt decision + L3-no-mixer + DFR-25` 语义不变，不切 backbone / geometry，不切到 feature fusion；唯一离散改动是在 commit `dbdc290` 的 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_TRAIN_TARGET_TOP_NONDOMINANT_RESCUE`。
+> - 这个修复仍然只在**训练态**生效，并保留 `DFR-25` 的 dominant-gate dropout 与 `DFR-26` 的 `ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR=0.05`；但不再把 rescue mass 平均分给两个 non-dominant views，而是把**同样的总 rescue mass**集中投给当前 gate 排名最高的 fallback view。推理期仍保持原始 learned late fusion，不引入任何 inference-time floor 或固定权重。
+> - fresh adaptive `main-study` 使用 search-config copy [autoresearch_logs/generated_search_configs/optuna_main_search_iter_0014_20260423_103248.yaml](/dataset/HH/ankle-ct/autoresearch_logs/generated_search_configs/optuna_main_search_iter_0014_20260423_103248.yaml) 与 study_root [runs/optuna_main_autoloop/iter_0014_20260423_103248](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0014_20260423_103248)，runtime env 为 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25` + `ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR=0.05` + `ANKLE_DECISION_TRAIN_TARGET_TOP_NONDOMINANT_RESCUE=1`。
+> - 本轮唯一研究问题是：如果 `DFR-33` 的 ceiling 被压在 `equal-weight tie` 的根因主要是“uniform rescue 把最有价值的 fallback 梯度稀释给了另一个弱视角”，那么把 rescue mass 定向集中到 strongest fallback view，是否能把 learned full-fusion 从 `equal-weight tie` 重新推回到明确更高的 `val_acc`。
+
+- [x] **DFR-34-RESNEXT-DECISION-256X8-TARGETED-STRONGEST-FALLBACK-RESCUE-MAIN-S42**：fresh adaptive `main-study` [runs/optuna_main_autoloop/iter_0014_20260423_103248](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0014_20260423_103248) 的 best completed trial（trial `5`，commit `dbdc290`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25` + `ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR=0.05` + `ANKLE_DECISION_TRAIN_TARGET_TOP_NONDOMINANT_RESCUE=1`）→ `val_acc=0.9255319148936170`, `val_auc=0.9813636363636363`, `val_f1=0.9263157894736842`, `peak_vram≈2.15 GiB`, `total_seconds≈869.1` → **discard**（相较 matched `equal-weight` control `seed=42` `0.9255319148936170 / 0.9486363636363637 / 0.9176470588235294`，只做到 `val_acc` 打平，虽然 `val_auc / val_f1` 仍高 `0.0327272727272726 / 0.0086687306501548`；但相较 retained `DFR-26` seed42 keep `0.9361702127659575 / 0.9800000000000000 / 0.9302325581395349`，`val_acc / val_f1` 分别回落 `0.0106382978723405 / 0.0039167686658507`，仅 `val_auc` 小幅更高 `0.0013636363636363`；相较 `DFR-25` seed42 winner `0.9361702127659575 / 0.9786363636363636 / 0.9333333333333333`，同样是 `val_acc / val_f1` 回落 `0.0106382978723405 / 0.0070175438596491`，只有 `val_auc` 更高 `0.0027272727272727`。按当前主指标规则，这条 targeted rescue redistribution 仍未达到保留门槛。）
+- **study 内部分布**：`6/6` completed trial 形成 `0.8830 / 0.9043 / 0.9149 / 0.9255` 四档。更关键的是，`DFR-25/26` 已知的 seed42 winning corner（trial `1`: `lr=1e-4`, `weight_decay=2.5e-4`, `dropout=0.25`, `gradient_clip_norm=2.5`）在本轮只得到 `0.9042553191489362 val_acc`；而最终 best trial `5` 其实是 trial `2` 参数的 tail-fill duplicate（`lr=7.5e-5`, `weight_decay=7.5e-4`, `dropout=0.3`, `gradient_clip_norm=2.5`），trial `2` 本体只有 `0.9148936170212766`。这说明 gate-ranked targeted rescue 不仅没恢复 retained ceiling，还带来了明显的 run-to-run 波动。
+- **当前判断**：`DFR-34` 给出的结论是 **negative**。把 rescue mass 从“均分给两个弱视角”改成“全部给当前 gate 认为最强的 fallback view”，最佳情况下确实能把 ceiling 从 `0.9149` 拉回到 `equal-weight tie`；但它仍然没有把 learned full-fusion `val_acc` 推回 matched `equal-weight` 之上，也没保住 `DFR-25/26` 的 seed42 best corner。更像的解释是：**当前 gate 自己仍带着 residual collapse bias，用 gate 排名来决定 rescue 目标，会把一部分训练态补偿继续投向并不真正最有价值的 fallback route**。
+- **推荐动作**：保持 `256x8 ResNeXt decision + L3-no-mixer + DFR-25` 主线不变，也不要回到 detector family 的阈值细扫。若继续沿 targeted redistribution family 前进，更直接的下一步应是测试 **detached teacher-evidence targeted rescue**：仍保持 training-only semantics 与总 rescue mass 不变，但不要再由当前 gate 排名决定 rescue target，而是按 detached per-view evidence / teacher weight 把 rescue mass 集中投给真正更强的 fallback expert，验证这是否能减少 gate 自身偏置带来的误导分配。
+
+---
+
+## 2026-04-23：Decision-Fusion Repair Follow-up（DFR-35 detached teacher-evidence targeted rescue，adaptive main-study，RTX A6000）
+
+> **实验说明**
+> - 本轮继续严格保持当前唯一主线与 `256x8 ResNeXt decision + L3-no-mixer + DFR-25` 语义不变，不切 backbone / geometry，不切到 feature fusion；唯一离散改动是在 commit `6a20314` 的 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_TRAIN_TARGET_TEACHER_NONDOMINANT_RESCUE`。
+> - 这个修复仍然只在**训练态**生效，并保留 `DFR-25` 的 dominant-gate dropout 与 `DFR-26` 的 `ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR=0.05`；但 `DFR-34` 用当前 gate 排名选 fallback target 的逻辑被替换成 **detached teacher evidence / teacher weight** 选 target。也就是说，总 rescue mass 不变，只把“投给哪个 non-dominant view”的决策从已塌缩 gate 中解耦出来，改由 detached per-view classifier evidence 决定。推理期仍保持原始 learned late fusion，不引入任何 inference-time floor 或固定权重。
+> - fresh adaptive `main-study` 使用 search-config copy [autoresearch_logs/generated_search_configs/optuna_main_search_iter_0015_20260423_111428.yaml](/dataset/HH/ankle-ct/autoresearch_logs/generated_search_configs/optuna_main_search_iter_0015_20260423_111428.yaml) 与 study_root [runs/optuna_main_autoloop/iter_0015_20260423_111428](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0015_20260423_111428)，runtime env 为 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25` + `ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR=0.05` + `ANKLE_DECISION_TRAIN_TARGET_TEACHER_NONDOMINANT_RESCUE=1`。
+> - 本轮唯一研究问题是：如果 `DFR-34` 的失败主要因为“用 gate 自己来挑 fallback target 仍会继承 residual collapse bias”，那么把 rescue target 改成 detached teacher-evidence ranking，是否能把 learned full-fusion 从 matched `equal-weight tie` 重新推回到明确更高的 `val_acc`。
+
+- [x] **DFR-35-RESNEXT-DECISION-256X8-DETACHED-TEACHER-EVIDENCE-TARGETED-RESCUE-MAIN-S42**：fresh adaptive `main-study` [runs/optuna_main_autoloop/iter_0015_20260423_111428](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0015_20260423_111428) 的 best completed trial（trial `2`，commit `6a20314`，runtime env `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25` + `ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR=0.05` + `ANKLE_DECISION_TRAIN_TARGET_TEACHER_NONDOMINANT_RESCUE=1`）→ `val_acc=0.9255319148936170`, `val_auc=0.9813636363636364`, `val_f1=0.9176470588235294`, `peak_vram≈2.15 GiB`, `total_seconds≈931.5` → **discard**（相较 matched `equal-weight` control `seed=42` `0.9255319148936170 / 0.9486363636363637 / 0.9176470588235294`，只做到 `val_acc / val_f1` 打平，虽然 `val_auc` 仍高 `0.0327272727272727`；相较 retained `DFR-26` seed42 keep `0.9361702127659575 / 0.9800000000000000 / 0.9302325581395349`，`val_acc / val_f1` 分别回落 `0.0106382978723405 / 0.0125854993160055`，仅 `val_auc` 小幅更高 `0.0013636363636364`；相较 `DFR-25` seed42 winner `0.9361702127659575 / 0.9786363636363636 / 0.9333333333333333`，同样是 `val_acc / val_f1` 回落 `0.0106382978723405 / 0.0156862745098039`，只有 `val_auc` 更高 `0.0027272727272728`。按当前主指标规则，这条 detached teacher-targeted rescue 仍未达到保留门槛。）
+- **study 内部分布**：`6/6` completed trial 形成 `0.9043 / 0.9149 / 0.9255` 三档，其中 `0.9255` 出现了 3 次（trial `0/2/5`），但没有任何一个角点回到 retained `DFR-25/26` 的 `0.9362`。更关键的是，`DFR-25/26` 已知的 seed42 winning corner（trial `1`: `lr=1e-4`, `weight_decay=2.5e-4`, `dropout=0.25`, `gradient_clip_norm=2.5`）在本轮再次只得到 `0.9148936170212766 val_acc`；而 best trial `2`（`lr=7.5e-5`, `weight_decay=7.5e-4`, `dropout=0.3`, `gradient_clip_norm=2.5`）也只恢复到 matched `equal-weight tie`，与 `DFR-34` 的 best ceiling 实质相同。
+- **当前判断**：`DFR-35` 给出的结论仍然是 **negative**。把 rescue target 从 gate-ranked 改成 detached teacher-evidence ranked，并没有把 learned full-fusion `val_acc` 推回 matched `equal-weight` 之上，也没有恢复 `DFR-25/26` 的 seed42 best corner。这说明 `DFR-34` 的失败**不只是 rescue target 被 gate 偏置误导**；更像是当前整条 `non-dominant floor / rescue mass` family 本身就在压制 `DFR-25` 已经建立起来的更优 routing dynamics。
+- **推荐动作**：保持 `256x8 ResNeXt decision + L3-no-mixer + DFR-25` 主线不变，但**不要继续沿 floor / targeted-rescue family 细扫**。更直接的下一步应回到 `DFR-25` 自身，测试 **teacher-guided dominant-gate dropout redistribution**：仍保持 training-only semantics，但不再额外注入 `floor=0.05` 的 rescue mass，而是在 dominant-gate dropout 触发时，把被压平的 dominant mass 按 detached teacher-evidence 重新分配给更强 fallback expert，验证“修复对象应该是 dropout redistribution 本身，而不是 dropout 之后再叠一层 non-dominant floor”。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-33 continuous low-entropy scaling`：在 commit `1c1900d` 的 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_TRAIN_AXIAL_ENTROPY_SCALE_THRESHOLD`，并用 fresh adaptive `main-study` [runs/optuna_main_autoloop/iter_0013_20260423_094918](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0013_20260423_094918) 验证 continuous low-entropy rescue 是否能比 `DFR-32` 的 hard trigger 更好地覆盖 near-collapse axial starvation case。 |
-| 上次结果 | **discard**。best completed trial `4` 为 `val_acc=0.9255319148936170`, `val_auc=0.9827272727272727`, `val_f1=0.9176470588235294`；`6/6` completed trial 形成 `0.8936 / 0.9043 / 0.9149 / 0.9255` 四档。continuous scaling 确实把 `DFR-32` 中被 hard entropy trigger 压坏的旧 winning corner 从 `0.9149` 拉回到了 `0.9255`，但 ceiling 仍只到 matched `equal-weight tie`，没有任何 trial 回到 retained `DFR-25/26` 的 `0.9362`。 |
-| 下一步 | 保持 `256x8 ResNeXt decision + L3-no-mixer + DFR-25` 主线不变，也**不要**继续沿 entropy trigger family 扫阈值。更直接的下一步应改测 **targeted non-dominant rescue redistribution**：保持 training-only semantics 与总 rescue mass 不变，但把 rescued mass 从“均分给两个非 dominant 视角”改成按当前 non-dominant gate 排名或 detached teacher evidence，集中投向最强 fallback view，验证这是否能真正把 learned full-fusion 再推回 `equal-weight` 之上。 |
+| 上次实验 | `DFR-35 detached teacher-evidence targeted rescue`：在 commit `6a20314` 的 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_TRAIN_TARGET_TEACHER_NONDOMINANT_RESCUE`，并用 fresh adaptive `main-study` [runs/optuna_main_autoloop/iter_0015_20260423_111428](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0015_20260423_111428) 验证“把 training-only rescue target 从 gate-ranked fallback 改成 detached teacher-evidence fallback”是否能修复 `DFR-34` 的 residual target-misdirection。 |
+| 上次结果 | **discard**。best completed trial `2` 为 `val_acc=0.9255319148936170`, `val_auc=0.9813636363636364`, `val_f1=0.9176470588235294`；`6/6` completed trial 形成 `0.9043 / 0.9149 / 0.9255` 三档。teacher-targeted rescue 最好时仍只回到 matched `equal-weight tie`，没有任何 trial 回到 retained `DFR-25/26` 的 `0.9362`，而且 `DFR-25/26` 的已知 winning corner 在本轮再次掉到 `0.9149`。 |
+| 下一步 | 保持 `256x8 ResNeXt decision + L3-no-mixer + DFR-25` 主线不变，并把 autoresearch 下一阶段方向锁定为：**实验 decision fusion 还原各视角信息在 full-fusion 中应有的作用**。不要继续沿 `floor / targeted-rescue` family 细扫；后续 inner agent 必须在行动前至少两轮自检，确认该改动是否直接帮助“该主导的视角主导、该补充的视角补充”，以及它为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上。只有通过这两轮自检的单项修复才允许执行。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 8（`DFR-26 seed123`、`DFR-27 conditional axial-dominance floor`、`DFR-28 continuous axial-dominance-scaled rescue`、`DFR-29 reduced continuous rescue scale`、`DFR-30 axial top1-top2 margin trigger`、`DFR-31 continuous top1-top2 margin-scaled rescue`、`DFR-32 axial low-entropy trigger` 与本轮 `DFR-33 continuous low-entropy scaling` 连续为 discard；上一轮 keep 已在 `DFR-26 seed42` 处把计数清零。） |
+| 连续 discard 计数 | 10（`DFR-26 seed123`、`DFR-27 conditional axial-dominance floor`、`DFR-28 continuous axial-dominance-scaled rescue`、`DFR-29 reduced continuous rescue scale`、`DFR-30 axial top1-top2 margin trigger`、`DFR-31 continuous top1-top2 margin-scaled rescue`、`DFR-32 axial low-entropy trigger`、`DFR-33 continuous low-entropy scaling`、`DFR-34 targeted strongest-fallback rescue redistribution` 与本轮 `DFR-35 detached teacher-evidence targeted rescue` 连续为 discard；上一轮 keep 已在 `DFR-26 seed42` 处把计数清零。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 

@@ -37,12 +37,12 @@
 
 > [!IMPORTANT]
 > **2026-04-23 人类主线锁定**
-> - 当前 autoresearch 的唯一主方向是：**摆脱当前 decision-fusion learned branch 的单视角依赖，并让真正的 multi-view full-fusion learned `val_acc` 明确超过 matched `equal-weight` control**。
+> - 当前 autoresearch 的唯一主方向是：**实验 decision fusion，把 axial / coronal / sagittal 各视角的信息还原成它们在 full-fusion 中应有的作用，并让真正的 multi-view full-fusion learned `val_acc` 明确超过 matched `equal-weight` control**。
 > - 在达成这个目标之前，**不得切换到其他方向**：不要切 backbone family、不要切到 feature fusion、不要把无关的 side campaign 或泛化 cleanup 当主线。
 > - 完成标准必须是同一 geometry / budget / seed protocol 下，**full-fusion learned** 在主指标 `val_acc` 上明确高于 matched `equal-weight`；单 seed spike、只提升 AUC/F1、或只改善 single-view 结果都不算完成。
-> - `equal-weight` 只作为 matched control / 外部门槛，不是要回退到的最终答案。当前真正要找的是能解释或实现多视角净收益的 **learned weighting**，或用于解释该收益来源的 **non-equal fixed weighting**。
-> - 如果某条 learned weighting 或 non-equal fixed weighting 首次在单 seed 上翻过 `equal-weight`，后续优先做 matched confirmation、multi-seed validation 与权重 / 证据 telemetry，先确认它确实在摆脱单视角依赖；在这个确认完成前，不应切去无关方向。
-> - 每轮行动前必须先自检：这项改动是否直接减弱单视角依赖，以及它为什么有机会把 full-fusion learned accuracy 推到 `equal-weight` 之上；如果不能明确回答，这轮改动就不应执行。
+> - `equal-weight` 只作为 matched control / 外部门槛，不是要回退到的最终答案，也不是要把 learned branch 硬拉平均。当前真正要找的是能解释或实现“各视角信息按其应有作用进入决策”的 **learned weighting**，或用于解释该收益来源的 **non-equal fixed weighting**。
+> - 如果某条 learned weighting 或 non-equal fixed weighting 首次在单 seed 上翻过 `equal-weight`，后续优先做 matched confirmation、multi-seed validation 与权重 / 证据 telemetry，先确认它确实在让各视角信息回到应有作用；在这个确认完成前，不应切去无关方向。
+> - 每轮行动前必须先自检：这项改动是否直接帮助 decision fusion 还原各视角信息的应有作用，以及它为什么有机会把 full-fusion learned accuracy 推到 `equal-weight` 之上；如果不能明确回答，这轮改动就不应执行。
 
 ## 研究策略
 

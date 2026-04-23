@@ -88,13 +88,13 @@ FIRST_GPU="${SELECTED_GPU_ID_ARRAY[0]}"
 MAX_WORKERS="${#SELECTED_GPU_ID_ARRAY[@]}"
 
 CAMPAIGN_NOTE=$(cat <<'EOF'
-- 当前 autoresearch 的唯一主方向是：摆脱目前 decision fusion 除 `equal-weight` 外最佳 learned 方案的单视角依赖，尤其是 `axial dominance` / `weak-view starvation`，并把真正的 multi-view full-fusion learned `val_acc` 做到明确高于 matched `equal-weight` control。
+- 当前 autoresearch 的唯一主方向是：实验 decision fusion，把 axial / coronal / sagittal 各视角的信息还原成它们在 full-fusion 中应有的作用；核心不是机械平均分权，而是让该主导的视角主导、该补充的视角补充，并把真正的 multi-view full-fusion learned `val_acc` 做到明确高于 matched `equal-weight` control。
 - 在完成上面目标之前，不允许切换到其他方向；不要切 backbone family，不要切到 feature fusion，不要把无关 side campaign、泛化 cleanup 或与单视角依赖无直接关系的小修小补当成主线。
 - 本轮以及后续每一轮 inner agent 在行动前都必须至少做两轮自检：
-  1. 这项改动是否直接减弱 single-view dependence，或直接增强弱视角在 full-fusion 中的有效贡献？
-  2. 如果它成功，为什么它有机会把 multi-view full-fusion learned `val_acc` 推到 matched `equal-weight` 之上，而不是只改善单视角表现、稳定性或局部 calibration？
+  1. 这项改动是否直接帮助“该主导的视角主导、该补充的视角补充”，或直接修复 evidence 与 routing 不一致、增强弱视角在有证据样本上的有效贡献？
+  2. 如果它成功，为什么它有机会把 multi-view full-fusion learned `val_acc` 推到 matched `equal-weight` 之上，而不是只把权重做得更平均、或只改善单视角表现、稳定性或局部 calibration？
 - 如果上面两问任意一问不能给出具体机制链路，该方向就不合格，不要执行。
-- 只允许优先探索真正改变 evidence routing、缓解弱视角 starvation、或让 stronger per-view experts 在 full-fusion 下形成超过 `equal-weight` 净收益的修复。
+- 只允许优先探索真正改变 evidence routing、缓解弱视角 starvation、修复 evidence-to-routing 对不齐、或让 stronger per-view experts 在 full-fusion 下形成超过 `equal-weight` 净收益的修复。
 - 本次作业固定运行 15 轮 outer autoresearch iterations；不要无限循环。
 EOF
 )

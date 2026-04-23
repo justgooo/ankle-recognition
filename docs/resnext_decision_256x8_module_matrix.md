@@ -1,7 +1,7 @@
 # ResNeXt Decision 256x8 Module Matrix
 
 This matrix defines the canonical `256x8` learned-weighting repair track.
-The current goal is not merely to improve the learned branch against itself, but to remove single-view dependence and make true multi-view full-fusion learned accuracy exceed the matched `equal-weight` control before the mainline can move elsewhere.
+The current goal is not merely to improve the learned branch against itself, but to restore the proper role of each view's information inside decision fusion, so the view that should lead can lead, the view that should supplement can supplement, and true multi-view full-fusion learned accuracy can exceed the matched `equal-weight` control before the mainline can move elsewhere.
 The shared anchor is [configs/autoresearch_formal_resnext_decision_256x8.yaml](/dataset/HH/ankle-ct/configs/autoresearch_formal_resnext_decision_256x8.yaml).
 
 ## Anchor
@@ -27,9 +27,9 @@ The shared anchor is [configs/autoresearch_formal_resnext_decision_256x8.yaml](/
 ## Recommended Order
 
 1. Lock `L1-learned` as the current learned repair anchor across `42/123/456`, but treat `L0-equal` as the external gate the learned branch must surpass
-2. Run `L2-minimal`, `L3-no-mixer`, and `L4-no-calibrator` as single-module ablations against `L1`, only if they have a direct mechanism link to reducing single-view dependence
+2. Run `L2-minimal`, `L3-no-mixer`, and `L4-no-calibrator` as single-module ablations against `L1`, only if they have a direct mechanism link to restoring the proper role of each view's information inside full fusion
 3. Promote the strongest learned branch from step 2 into a single closing `L5-temp1p5` / `L5-temp2p0` check only when that check still directly targets multi-view routing rather than generic cleanup
-4. After `L5` closes, stop opening new `temp=*` ablations unless a later mechanism result forces a targeted re-check tied to escaping single-view dependence
+4. After `L5` closes, stop opening new `temp=*` ablations unless a later mechanism result forces a targeted re-check tied to restoring the proper role of each view's information
 5. Do not switch to unrelated directions until a learned multi-view branch clearly beats `L0-equal` on matched full-fusion `val_acc`
 
 ## Materialized Configs
@@ -49,7 +49,7 @@ The shared anchor is [configs/autoresearch_formal_resnext_decision_256x8.yaml](/
 ## Notes
 
 - `equal-weight` remains mandatory as a matched control and also the gate the learned mainline must eventually beat before the research direction can move on.
-- A learned ablation is not enough just because it improves the canonical learned anchor; it should stay on the mainline only if there is a concrete mechanism case that it reduces single-view dependence and could move full-fusion learned `val_acc` past `equal-weight`.
+- A learned ablation is not enough just because it improves the canonical learned anchor; it should stay on the mainline only if there is a concrete mechanism case that it restores the proper role of each view's information and could move full-fusion learned `val_acc` past `equal-weight`.
 - As of `2026-04-22`, the strongest learned branch from the matched single-module sweep is `L3-no-mixer`, so `L5-temp*` should be interpreted as `L3-no-mixer + temperature`, not `L1 + temperature`.
 - `temperature` is now treated as a closing calibration probe rather than an open-ended ablation axis. Once the current `L5-temp1p5 / L5-temp2p0` pair finishes, later mainline sweeps should not add more `temp=*` lanes by default.
 - The completed `L5` closeout did not beat `L3-no-mixer` on mean `val_acc`: `temp1.5` only improved AUC/F1 with worse seed stability, and `temp2.0` reduced accuracy. So the post-`L5` canonical branch remains plain `L3-no-mixer`.
