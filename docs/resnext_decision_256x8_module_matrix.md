@@ -50,6 +50,7 @@ The shared anchor is [configs/autoresearch_formal_resnext_decision_256x8.yaml](/
 
 - `equal-weight` remains mandatory as a matched control and also the gate the learned mainline must eventually beat before the research direction can move on.
 - A learned ablation is not enough just because it improves the canonical learned anchor; it should stay on the mainline only if there is a concrete mechanism case that it restores the proper role of each view's information and could move full-fusion learned `val_acc` past `equal-weight`.
+- Every mainline experiment should materialize or refresh `fusion_weight_analysis.json` for its best completed checkpoint / trial, then record the expected weight-ratio change and the actual `axial/coronal/sagittal` weight ratios in the experiment ledger rather than reporting metrics alone.
 - As of `2026-04-22`, the strongest learned branch from the matched single-module sweep is `L3-no-mixer`, so `L5-temp*` should be interpreted as `L3-no-mixer + temperature`, not `L1 + temperature`.
 - `temperature` is now treated as a closing calibration probe rather than an open-ended ablation axis. Once the current `L5-temp1p5 / L5-temp2p0` pair finishes, later mainline sweeps should not add more `temp=*` lanes by default.
 - The completed `L5` closeout did not beat `L3-no-mixer` on mean `val_acc`: `temp1.5` only improved AUC/F1 with worse seed stability, and `temp2.0` reduced accuracy. So the post-`L5` canonical branch remains plain `L3-no-mixer`.

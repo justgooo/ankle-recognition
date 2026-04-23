@@ -206,6 +206,8 @@ def build_prompt(
 - 当前唯一主方向：实验 decision fusion，把 axial / coronal / sagittal 各视角的信息还原成它们在 full-fusion 中应有的作用；核心不是机械平均分权，而是让该主导的视角主导、该补充的视角补充，并让真正的 multi-view full-fusion learned `val_acc` 明确超过 matched `equal-weight` control
 - 在 full-fusion learned `val_acc` 尚未明确超过 matched `equal-weight` 之前，禁止切换到其他方向；不要切 backbone/geometry family，不要切到 feature fusion，不要把无关 side campaign 或泛化 cleanup 当主线
 - 单 seed spike、只提升 `val_auc` / `val_f1`、只改善 single-view 或 leave-one-view-out 结果，都不算完成上述主方向
+- 每轮实验完成后，必须验证各视角权重比例；默认对本轮 best completed checkpoint / best trial 生成或补齐 `fusion_weight_analysis.json`，至少提取三视角 `mean fusion weight axial/coronal/sagittal` 与 `top-weight count/rate`
+- 每条实验记录都必须写出：设计思路、预计改进效果、实验实际结果；其中预计改进效果必须明确说明预期哪一视角权重比例 / routing 行为会如何变化，以及为什么这有机会把 learned full-fusion `val_acc` 推过 matched `equal-weight`
 - fresh run 默认必须使用新的 `study_root`；只有你明确想续跑同一个 study 时才允许 `--resume`
 - 不要修改 train.py、src/dataset.py、src/utils.py、tools/、任何数据文件或数据集划分
 - 不要使用测试集指标做模型选择
@@ -229,6 +231,7 @@ def build_prompt(
    - 这项改动是否直接帮助“该主导的视角主导、该补充的视角补充”，或直接修复 evidence 与 routing 不一致、增强弱视角在有证据样本上的有效贡献？
    - 如果它成功，为什么它有机会把 multi-view full-fusion learned `val_acc` 推到 matched `equal-weight` 之上，而不是只把权重做得更平均、或只改善单视角表现、稳定性或局部 calibration？
    如果这两问任意一问不能给出具体机制链路，就不要执行该改动，换一个更直接的方向。
+   - 在这一步同时整理好将写入实验记录的两段短说明：`设计思路` 与 `预计改进效果`，其中必须包含预期会改变的视角权重比例 / top-weight 分布 / routing 迁移方向。
 4. 只做一项离散、可解释的研究改动；不要把多个独立想法混在同一轮。
 5. 在训练或调参前 git commit 本轮改动。
 {primary_lane_instructions}
@@ -243,9 +246,10 @@ def build_prompt(
    - data issue：停止本轮并输出阻塞原因
    - code bug：可以修复后重跑 1 次
    - 其他失败：按 crash 记录
-9. 更新 results.tsv（只追加；并行风险下使用 `flock -x /tmp/ankle_results.lock`）和 backlog.md，包括 Agent 状态、上次实验、上次结果、下一步。
-10. `results.tsv` 的 config 列仍保持 `formal` / `proxy` 语义：main-study 或 direct formal 记为 `formal`；proxy-study 或 direct proxy 记为 `proxy`。
-11. 最后输出一行机器可读总结，格式必须是：
+9. 对本轮 best completed checkpoint / best trial 验证各视角权重比例。优先运行 `scripts/analyze_fusion_weights.py` 生成或刷新 `fusion_weight_analysis.json`；至少提取并记录三视角 `mean fusion weight axial/coronal/sagittal` 与 `top-weight count/rate`。如果本轮是 analysis-only 实验，也必须在记录里显式引用已有权重 telemetry 文件和关键比例。
+10. 更新 results.tsv（只追加；并行风险下使用 `flock -x /tmp/ankle_results.lock`）和 backlog.md，包括 Agent 状态、上次实验、上次结果、下一步；并且本轮实验记录必须明确写出：`设计思路`、`预计改进效果`、`实验实际结果（含权重比例验证）`。
+11. `results.tsv` 的 config 列仍保持 `formal` / `proxy` 语义：main-study 或 direct formal 记为 `formal`；proxy-study 或 direct proxy 记为 `proxy`。
+12. 最后输出一行机器可读总结，格式必须是：
     EXPERIMENT_DONE: <keep|discard|crash> | lane=<main-study|proxy-study|formal|proxy> | description=<...> | val_acc=<...> | val_auc=<...> | commit=<...>
 
 如果你遇到真正需要人类拍板的阻塞，不要继续盲跑；只输出一行：

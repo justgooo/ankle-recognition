@@ -43,6 +43,8 @@
 > - `equal-weight` 只作为 matched control / 外部门槛，不是要回退到的最终答案，也不是要把 learned branch 硬拉平均。当前真正要找的是能解释或实现“各视角信息按其应有作用进入决策”的 **learned weighting**，或用于解释该收益来源的 **non-equal fixed weighting**。
 > - 如果某条 learned weighting 或 non-equal fixed weighting 首次在单 seed 上翻过 `equal-weight`，后续优先做 matched confirmation、multi-seed validation 与权重 / 证据 telemetry，先确认它确实在让各视角信息回到应有作用；在这个确认完成前，不应切去无关方向。
 > - 每轮行动前必须先自检：这项改动是否直接帮助 decision fusion 还原各视角信息的应有作用，以及它为什么有机会把 full-fusion learned accuracy 推到 `equal-weight` 之上；如果不能明确回答，这轮改动就不应执行。
+> - 每轮实验完成后必须验证各视角权重比例。默认做法是对本轮 best completed checkpoint / best trial 生成或补齐 `fusion_weight_analysis.json`，至少记录三视角 `mean fusion weight` 与 `top-weight count/rate`；不得只汇报主指标而不汇报视角权重。
+> - 每条实验记录都必须完整写下：`设计思路`、`预计改进效果`、`实验实际结果`。其中“预计改进效果”必须明确说明预期哪一视角权重比例 / routing 行为会如何变化，以及为什么这种变化有机会把 learned full-fusion `val_acc` 推过 matched `equal-weight`；“实验实际结果”必须写出实际权重比例与指标，且要明确说明是否符合预期。
 
 ## 研究策略
 
@@ -232,11 +234,13 @@ commit	val_acc	val_auc	val_f1	memory_gb	status	config	description
    - 其他 → 标记为 `crash`，写入 `results.tsv`，回退
 6. 如果运行成功：
    - 读取 `runs/autoresearch_formal/summary.json`
+   - 对本轮 best completed checkpoint / best trial 生成或补齐 `fusion_weight_analysis.json`，至少提取三视角 `mean fusion weight axial/coronal/sagittal` 与 `top-weight count/rate`
    - 将 `best_val.accuracy` 与当前保留的最佳结果比较
    - 只有当 val_acc 提升时，才保留这个提交
    - 如果 val_acc 持平，优先选择 `val_auc` 更高的版本
    - 如果两者都持平，优先选择更简单的代码
    - 否则回退这次实验
+   - 更新实验记录时，必须同时写入 `设计思路`、`预计改进效果`、`实验实际结果（含权重比例验证）`
 7. 只有在显存不足、需要快速 smoke，或定位训练 bug 时，才临时回退到 proxy：
    - `CUDA_VISIBLE_DEVICES=1 .venv/bin/python train.py --config configs/autoresearch_proxy.yaml > proxy.log 2>&1`
    - proxy 结果只作为快速诊断或低成本筛查证据，不再是当前默认门控步骤

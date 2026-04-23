@@ -94,6 +94,8 @@ CAMPAIGN_NOTE=$(cat <<'EOF'
   1. 这项改动是否直接帮助“该主导的视角主导、该补充的视角补充”，或直接修复 evidence 与 routing 不一致、增强弱视角在有证据样本上的有效贡献？
   2. 如果它成功，为什么它有机会把 multi-view full-fusion learned `val_acc` 推到 matched `equal-weight` 之上，而不是只把权重做得更平均、或只改善单视角表现、稳定性或局部 calibration？
 - 如果上面两问任意一问不能给出具体机制链路，该方向就不合格，不要执行。
+- 每轮实验完成后，都必须验证各视角权重比例。默认对本轮 best completed checkpoint / best trial 生成或补齐 `fusion_weight_analysis.json`，至少记录三视角 `mean fusion weight axial/coronal/sagittal` 与 `top-weight count/rate`；不能只报主指标不报权重。
+- 每条实验记录都必须写出：`设计思路`、`预计改进效果`、`实验实际结果`。其中预计改进效果必须明确预期哪一视角权重比例 / routing 行为会如何变化；实验实际结果必须写出实际权重比例与关键指标，并说明是否符合预期。
 - 只允许优先探索真正改变 evidence routing、缓解弱视角 starvation、修复 evidence-to-routing 对不齐、或让 stronger per-view experts 在 full-fusion 下形成超过 `equal-weight` 净收益的修复。
 - 本次作业固定运行 15 轮 outer autoresearch iterations；不要无限循环。
 EOF
