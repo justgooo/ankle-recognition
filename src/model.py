@@ -938,6 +938,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR",
             0.0,
         )
+        self.train_target_top_non_dominant_rescue = _env_flag(
+            "ANKLE_DECISION_TRAIN_TARGET_TOP_NONDOMINANT_RESCUE"
+        )
         self.train_non_dominant_rescue_scale = _env_unit_float(
             "ANKLE_DECISION_TRAIN_NONDOMINANT_RESCUE_SCALE",
             1.0,
@@ -1287,10 +1290,22 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             )
         apply_mask = apply_mask * self.train_non_dominant_rescue_scale
         non_dominant_mask = 1.0 - dominant_mask
-        adjusted = (
-            flat_weights * (1.0 - reserved_mass)
-            + non_dominant_mask * self.train_non_dominant_weight_floor
-        )
+        adjusted = flat_weights * (1.0 - reserved_mass)
+        if self.train_target_top_non_dominant_rescue:
+            # Concentrate the same rescue mass on the strongest fallback view so
+            # it can become a viable alternative instead of splitting mass
+            # equally across two still-starving non-dominant experts.
+            fallback_view = flat_weights.detach().masked_fill(
+                dominant_mask.bool(),
+                -1.0,
+            ).argmax(dim=1)
+            fallback_mask = nn.functional.one_hot(
+                fallback_view,
+                num_classes=num_views,
+            ).to(dtype=flat_weights.dtype, device=flat_weights.device)
+            adjusted = adjusted + fallback_mask * reserved_mass
+        else:
+            adjusted = adjusted + non_dominant_mask * self.train_non_dominant_weight_floor
         adjusted = adjusted / adjusted.sum(dim=1, keepdim=True).clamp_min(1e-12)
         blended = flat_weights * (1.0 - apply_mask) + adjusted * apply_mask
         return blended.unsqueeze(-1)
