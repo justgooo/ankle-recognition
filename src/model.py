@@ -942,6 +942,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_NONDOMINANT_RESCUE_SCALE",
             1.0,
         )
+        self.train_axial_top12_margin_scale_threshold = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_AXIAL_TOP12_MARGIN_SCALE_THRESHOLD",
+            0.0,
+        )
         self.train_axial_top12_margin_threshold = _env_unit_float(
             "ANKLE_DECISION_TRAIN_AXIAL_TOP12_MARGIN_THRESHOLD",
             0.0,
@@ -1177,9 +1181,32 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             num_classes=num_views,
         ).to(dtype=flat_weights.dtype, device=flat_weights.device)
         dominant_weight = (flat_weights * dominant_mask).sum(dim=1, keepdim=True)
-        if self.train_axial_top12_margin_threshold > 0.0:
-            # Use the top1-top2 gate gap as a collapse detector so rescue only
-            # fires when axial is truly separating from the strongest fallback view.
+        if self.train_axial_top12_margin_scale_threshold > 0.0:
+            # Scale rescue with the axial top1-top2 gate gap so near-collapse
+            # samples still feed weak-view experts without flattening healthy routing.
+            top2_weights = flat_weights.detach().topk(k=min(2, num_views), dim=1).values
+            if top2_weights.shape[1] < 2:
+                return fusion_weights
+            top12_margin = top2_weights[:, 0] - top2_weights[:, 1]
+            margin_window = max(
+                1.0 - self.train_axial_top12_margin_scale_threshold,
+                1e-6,
+            )
+            margin_excess = (
+                top12_margin - self.train_axial_top12_margin_scale_threshold
+            ) / margin_window
+            apply_mask = (
+                dominant_view.eq(0).to(dtype=flat_weights.dtype, device=flat_weights.device)
+                * margin_excess.clamp(0.0, 1.0).to(
+                    dtype=flat_weights.dtype,
+                    device=flat_weights.device,
+                )
+            ).unsqueeze(1)
+            if not torch.any(apply_mask.gt(0.0)):
+                return fusion_weights
+        elif self.train_axial_top12_margin_threshold > 0.0:
+            # Use the top1-top2 gate gap as a hard collapse detector so rescue
+            # only fires when axial fully separates from the fallback view.
             top2_weights = flat_weights.detach().topk(k=min(2, num_views), dim=1).values
             if top2_weights.shape[1] < 2:
                 return fusion_weights
