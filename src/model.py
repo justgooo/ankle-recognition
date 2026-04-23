@@ -970,6 +970,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.train_target_teacher_dropout_redistribution = _env_flag(
             "ANKLE_DECISION_TRAIN_TARGET_TEACHER_DROPOUT_REDISTRIBUTION"
         )
+        self.train_target_teacher_dropout_only_on_fallback_disagreement = _env_flag(
+            "ANKLE_DECISION_TRAIN_TARGET_TEACHER_DROPOUT_ONLY_ON_FALLBACK_DISAGREEMENT"
+        )
         self.train_non_dominant_rescue_scale = _env_unit_float(
             "ANKLE_DECISION_TRAIN_NONDOMINANT_RESCUE_SCALE",
             1.0,
@@ -1354,7 +1357,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         target_weights: torch.Tensor | None = None,
         drop_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Redirect dropped dominant gate mass toward the detached teacher-selected fallback view."""
+        """Optionally redirect dropped dominant gate mass toward the teacher-selected fallback view."""
         if (
             not self.training
             or not self.train_target_teacher_dropout_redistribution
@@ -1379,15 +1382,19 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dominant_view,
             num_classes=num_views,
         ).to(dtype=flat_weights.dtype, device=flat_weights.device)
+        gate_fallback_view = flat_weights.detach().masked_fill(
+            dominant_mask.bool(),
+            -1.0,
+        ).argmax(dim=1)
         target_scores = flat_weights.detach()
         if target_weights is not None:
             target_scores = target_weights.detach().squeeze(-1)
-        fallback_view = target_scores.masked_fill(
+        target_fallback_view = target_scores.masked_fill(
             dominant_mask.bool(),
             -1.0,
         ).argmax(dim=1)
         fallback_mask = nn.functional.one_hot(
-            fallback_view,
+            target_fallback_view,
             num_classes=num_views,
         ).to(dtype=flat_weights.dtype, device=flat_weights.device)
 
@@ -1397,13 +1404,26 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             / max(num_views - 1, 1)
         )
         redistributed_mass = (dominant_weight - non_dominant_mean).clamp_min(0.0)
-        adjusted = flat_weights * (1.0 - dominant_mask)
-        adjusted = adjusted + dominant_mask * non_dominant_mean
-        adjusted = adjusted + fallback_mask * redistributed_mass
-        adjusted = adjusted / adjusted.sum(dim=1, keepdim=True).clamp_min(1e-12)
+        flattened = flat_weights * (1.0 - dominant_mask)
+        flattened = flattened + dominant_mask * non_dominant_mean
+        flattened = flattened / flattened.sum(dim=1, keepdim=True).clamp_min(1e-12)
 
-        apply_mask = drop_mask.to(dtype=flat_weights.dtype).unsqueeze(1)
-        blended = flat_weights * (1.0 - apply_mask) + adjusted * apply_mask
+        targeted = flattened + fallback_mask * redistributed_mass
+        targeted = targeted / targeted.sum(dim=1, keepdim=True).clamp_min(1e-12)
+
+        target_mask = drop_mask
+        if self.train_target_teacher_dropout_only_on_fallback_disagreement:
+            # Keep the base DFR-25/37 flattening on mismatch samples where gate
+            # and teacher already agree on the fallback view; only redirect the
+            # dropped dominant mass when the fallback route itself is misaligned.
+            target_mask = drop_mask & target_fallback_view.ne(gate_fallback_view)
+        target_apply_mask = target_mask.to(dtype=flat_weights.dtype).unsqueeze(1)
+        flatten_apply_mask = (
+            (drop_mask & ~target_mask).to(dtype=flat_weights.dtype).unsqueeze(1)
+        )
+        base_apply_mask = drop_mask.to(dtype=flat_weights.dtype).unsqueeze(1)
+        blended = flat_weights * (1.0 - base_apply_mask)
+        blended = blended + flattened * flatten_apply_mask + targeted * target_apply_mask
         return blended.unsqueeze(-1)
 
     def _apply_train_non_dominant_weight_floor(
