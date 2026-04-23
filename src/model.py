@@ -946,6 +946,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD",
             0.0,
         )
+        self.train_teacher_non_axial_competitive_gap = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_TEACHER_NONAXIAL_COMPETITIVE_GAP",
+            0.0,
+        )
         self.train_require_teacher_non_axial_top = _env_flag(
             "ANKLE_DECISION_TRAIN_REQUIRE_TEACHER_NONAXIAL_TOP"
         )
@@ -1230,6 +1234,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         if (
             self.train_axial_teacher_misalignment_scale_threshold <= 0.0
             and self.train_axial_teacher_misalignment_threshold <= 0.0
+            and self.train_teacher_non_axial_competitive_gap <= 0.0
             and not self.train_require_teacher_non_axial_top
         ):
             return torch.rand(batch_size, device=device) < sample_probs
@@ -1237,6 +1242,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             raise ValueError(
                 "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD / "
                 "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_SCALE_THRESHOLD / "
+                "ANKLE_DECISION_TRAIN_TEACHER_NONAXIAL_COMPETITIVE_GAP / "
                 "ANKLE_DECISION_TRAIN_REQUIRE_TEACHER_NONAXIAL_TOP "
                 "requires gate and teacher weights."
             )
@@ -1245,12 +1251,24 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         flat_teacher_weights = teacher_weights.detach().squeeze(-1)
         dominant_view = flat_gate_weights.argmax(dim=1)
         teacher_top_view = flat_teacher_weights.argmax(dim=1)
+        strongest_non_axial_teacher = flat_teacher_weights[:, 1:].amax(dim=1)
+        teacher_axial_non_axial_gap = (
+            flat_teacher_weights[:, 0] - strongest_non_axial_teacher
+        )
         axial_misalignment = (
             flat_gate_weights[:, 0] - flat_teacher_weights[:, 0]
         ).clamp_min(0.0)
         sample_probs = sample_probs * dominant_view.eq(0).to(dtype=sample_probs.dtype)
         if self.train_require_teacher_non_axial_top:
             sample_probs = sample_probs * teacher_top_view.ne(0).to(dtype=sample_probs.dtype)
+        if self.train_teacher_non_axial_competitive_gap > 0.0:
+            # Keep the DFR-37 hard mismatch base, but only intervene when the
+            # detached teacher still sees at least one non-axial view as
+            # genuinely competitive with axial rather than requiring a full
+            # top-view flip like DFR-40.
+            sample_probs = sample_probs * teacher_axial_non_axial_gap.le(
+                self.train_teacher_non_axial_competitive_gap
+            ).to(dtype=sample_probs.dtype)
         if self.train_axial_teacher_misalignment_scale_threshold > 0.0:
             # Ramp dropout coverage smoothly from aligned cases up to the old
             # hard-threshold mismatch point so near-mismatch samples get some
@@ -1591,6 +1609,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             or self.train_target_teacher_dropout_redistribution
             or self.train_axial_teacher_misalignment_scale_threshold > 0.0
             or self.train_axial_teacher_misalignment_threshold > 0.0
+            or self.train_teacher_non_axial_competitive_gap > 0.0
             or self.train_require_teacher_non_axial_top
         ):
             teacher_fusion_weights = self._compute_gate_teacher_weights(view_logits)
