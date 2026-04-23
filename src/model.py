@@ -944,6 +944,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.train_target_teacher_non_dominant_rescue = _env_flag(
             "ANKLE_DECISION_TRAIN_TARGET_TEACHER_NONDOMINANT_RESCUE"
         )
+        self.train_target_teacher_dropout_redistribution = _env_flag(
+            "ANKLE_DECISION_TRAIN_TARGET_TEACHER_DROPOUT_REDISTRIBUTION"
+        )
         self.train_non_dominant_rescue_scale = _env_unit_float(
             "ANKLE_DECISION_TRAIN_NONDOMINANT_RESCUE_SCALE",
             1.0,
@@ -1143,9 +1146,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             return confidences
 
         batch_size, num_views, _ = confidences.shape
-        drop_mask = (
-            torch.rand(batch_size, device=confidences.device)
-            < self.train_dominant_gate_dropout_prob
+        drop_mask = self._sample_train_dominant_gate_dropout_mask(
+            batch_size,
+            confidences.device,
         )
         if not torch.any(drop_mask):
             return confidences
@@ -1165,6 +1168,76 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         apply_mask = drop_mask.to(dtype=flat_confidences.dtype).unsqueeze(1)
         adjusted = flat_confidences * (1.0 - apply_mask) + dropped_confidences * apply_mask
         return adjusted.unsqueeze(-1)
+
+    def _sample_train_dominant_gate_dropout_mask(
+        self,
+        batch_size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if not self.training or self.train_dominant_gate_dropout_prob <= 0.0:
+            return torch.zeros(batch_size, device=device, dtype=torch.bool)
+        return (
+            torch.rand(batch_size, device=device)
+            < self.train_dominant_gate_dropout_prob
+        )
+
+    def _apply_train_teacher_targeted_dominant_gate_dropout_redistribution(
+        self,
+        fusion_weights: torch.Tensor,
+        target_weights: torch.Tensor | None = None,
+        drop_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Redirect dropped dominant gate mass toward the detached teacher-selected fallback view."""
+        if (
+            not self.training
+            or not self.train_target_teacher_dropout_redistribution
+            or self.train_dominant_gate_dropout_prob <= 0.0
+        ):
+            return fusion_weights
+
+        batch_size, num_views, _ = fusion_weights.shape
+        if num_views <= 1:
+            return fusion_weights
+        if drop_mask is None:
+            drop_mask = self._sample_train_dominant_gate_dropout_mask(
+                batch_size,
+                fusion_weights.device,
+            )
+        if not torch.any(drop_mask):
+            return fusion_weights
+
+        flat_weights = fusion_weights.squeeze(-1)
+        dominant_view = flat_weights.detach().argmax(dim=1)
+        dominant_mask = nn.functional.one_hot(
+            dominant_view,
+            num_classes=num_views,
+        ).to(dtype=flat_weights.dtype, device=flat_weights.device)
+        target_scores = flat_weights.detach()
+        if target_weights is not None:
+            target_scores = target_weights.detach().squeeze(-1)
+        fallback_view = target_scores.masked_fill(
+            dominant_mask.bool(),
+            -1.0,
+        ).argmax(dim=1)
+        fallback_mask = nn.functional.one_hot(
+            fallback_view,
+            num_classes=num_views,
+        ).to(dtype=flat_weights.dtype, device=flat_weights.device)
+
+        dominant_weight = (flat_weights * dominant_mask).sum(dim=1, keepdim=True)
+        non_dominant_mean = (
+            (flat_weights * (1.0 - dominant_mask)).sum(dim=1, keepdim=True)
+            / max(num_views - 1, 1)
+        )
+        redistributed_mass = (dominant_weight - non_dominant_mean).clamp_min(0.0)
+        adjusted = flat_weights * (1.0 - dominant_mask)
+        adjusted = adjusted + dominant_mask * non_dominant_mean
+        adjusted = adjusted + fallback_mask * redistributed_mass
+        adjusted = adjusted / adjusted.sum(dim=1, keepdim=True).clamp_min(1e-12)
+
+        apply_mask = drop_mask.to(dtype=flat_weights.dtype).unsqueeze(1)
+        blended = flat_weights * (1.0 - apply_mask) + adjusted * apply_mask
+        return blended.unsqueeze(-1)
 
     def _apply_train_non_dominant_weight_floor(
         self,
@@ -1362,6 +1435,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "fusion_weights": fusion_weights,
             }
 
+        dominant_gate_dropout_mask = torch.zeros(
+            view_logits.shape[0],
+            device=view_logits.device,
+            dtype=torch.bool,
+        )
+
         if self.minimal_fusion_baseline:
             confidences = torch.stack(
                 [
@@ -1386,15 +1465,26 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         self.confidence_calibrator(feature, raw_confidence)
                     )
             confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
-            confidences = self._apply_train_dominant_gate_dropout(confidences)
+            if self.train_target_teacher_dropout_redistribution:
+                dominant_gate_dropout_mask = self._sample_train_dominant_gate_dropout_mask(
+                    view_logits.shape[0],
+                    view_logits.device,
+                )
+            else:
+                confidences = self._apply_train_dominant_gate_dropout(confidences)
 
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
         teacher_fusion_weights = None
         teacher_rescue_weights = None
         blended_fusion_weights = raw_fusion_weights
-        if self.gate_teacher_blend > 0.0:
+        if (
+            self.gate_teacher_blend > 0.0
+            or self.train_target_teacher_non_dominant_rescue
+            or self.train_target_teacher_dropout_redistribution
+        ):
             teacher_fusion_weights = self._compute_gate_teacher_weights(view_logits)
+        if self.gate_teacher_blend > 0.0:
             blended_fusion_weights = (
                 (1.0 - self.gate_teacher_blend) * raw_fusion_weights
                 + self.gate_teacher_blend * teacher_fusion_weights
@@ -1403,6 +1493,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 dim=1,
                 keepdim=True,
             )
+        blended_fusion_weights = self._apply_train_teacher_targeted_dominant_gate_dropout_redistribution(
+            blended_fusion_weights,
+            target_weights=teacher_fusion_weights,
+            drop_mask=dominant_gate_dropout_mask,
+        )
         if self.train_target_teacher_non_dominant_rescue:
             teacher_rescue_weights = teacher_fusion_weights
             if teacher_rescue_weights is None:
