@@ -934,6 +934,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB",
             0.0,
         )
+        self.train_axial_teacher_misalignment_threshold = _env_unit_float(
+            "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD",
+            0.0,
+        )
         self.train_non_dominant_weight_floor = _env_unit_float(
             "ANKLE_DECISION_TRAIN_NONDOMINANT_WEIGHT_FLOOR",
             0.0,
@@ -1140,16 +1144,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
         return augmented
 
-    def _apply_train_dominant_gate_dropout(self, confidences: torch.Tensor) -> torch.Tensor:
+    def _apply_train_dominant_gate_dropout(
+        self,
+        confidences: torch.Tensor,
+        drop_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """During training, flatten the dominant gate on some samples so weak views receive fusion gradients."""
         if not self.training or self.train_dominant_gate_dropout_prob <= 0.0:
             return confidences
 
         batch_size, num_views, _ = confidences.shape
-        drop_mask = self._sample_train_dominant_gate_dropout_mask(
-            batch_size,
-            confidences.device,
-        )
+        if drop_mask is None:
+            drop_mask = self._sample_train_dominant_gate_dropout_mask(
+                batch_size,
+                confidences.device,
+            )
         if not torch.any(drop_mask):
             return confidences
 
@@ -1173,13 +1182,30 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self,
         batch_size: int,
         device: torch.device,
+        fusion_weights: torch.Tensor | None = None,
+        teacher_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if not self.training or self.train_dominant_gate_dropout_prob <= 0.0:
             return torch.zeros(batch_size, device=device, dtype=torch.bool)
-        return (
+        drop_mask = (
             torch.rand(batch_size, device=device)
             < self.train_dominant_gate_dropout_prob
         )
+        if self.train_axial_teacher_misalignment_threshold <= 0.0:
+            return drop_mask
+        if fusion_weights is None or teacher_weights is None:
+            raise ValueError(
+                "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD requires gate and teacher weights."
+            )
+
+        flat_gate_weights = fusion_weights.detach().squeeze(-1)
+        flat_teacher_weights = teacher_weights.detach().squeeze(-1)
+        dominant_view = flat_gate_weights.argmax(dim=1)
+        axial_misalignment = flat_gate_weights[:, 0] - flat_teacher_weights[:, 0]
+        eligible_mask = dominant_view.eq(0) & axial_misalignment.ge(
+            self.train_axial_teacher_misalignment_threshold
+        )
+        return drop_mask & eligible_mask
 
     def _apply_train_teacher_targeted_dominant_gate_dropout_redistribution(
         self,
@@ -1440,6 +1466,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             device=view_logits.device,
             dtype=torch.bool,
         )
+        teacher_fusion_weights = None
+        teacher_rescue_weights = None
 
         if self.minimal_fusion_baseline:
             confidences = torch.stack(
@@ -1465,25 +1493,33 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         self.confidence_calibrator(feature, raw_confidence)
                     )
             confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
-            if self.train_target_teacher_dropout_redistribution:
-                dominant_gate_dropout_mask = self._sample_train_dominant_gate_dropout_mask(
-                    view_logits.shape[0],
-                    view_logits.device,
-                )
-            else:
-                confidences = self._apply_train_dominant_gate_dropout(confidences)
-
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
-        teacher_fusion_weights = None
-        teacher_rescue_weights = None
-        blended_fusion_weights = raw_fusion_weights
         if (
             self.gate_teacher_blend > 0.0
             or self.train_target_teacher_non_dominant_rescue
             or self.train_target_teacher_dropout_redistribution
+            or self.train_axial_teacher_misalignment_threshold > 0.0
         ):
             teacher_fusion_weights = self._compute_gate_teacher_weights(view_logits)
+        if self.train_dominant_gate_dropout_prob > 0.0 and not self.minimal_fusion_baseline:
+            dominant_gate_dropout_mask = self._sample_train_dominant_gate_dropout_mask(
+                view_logits.shape[0],
+                view_logits.device,
+                fusion_weights=raw_fusion_weights,
+                teacher_weights=teacher_fusion_weights,
+            )
+            if self.train_target_teacher_dropout_redistribution:
+                pass
+            else:
+                confidences = self._apply_train_dominant_gate_dropout(
+                    confidences,
+                    drop_mask=dominant_gate_dropout_mask,
+                )
+                scaled_confidences = confidences / self.fusion_temperature
+                raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)
+
+        blended_fusion_weights = raw_fusion_weights
         if self.gate_teacher_blend > 0.0:
             blended_fusion_weights = (
                 (1.0 - self.gate_teacher_blend) * raw_fusion_weights
