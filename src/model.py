@@ -941,6 +941,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.train_target_top_non_dominant_rescue = _env_flag(
             "ANKLE_DECISION_TRAIN_TARGET_TOP_NONDOMINANT_RESCUE"
         )
+        self.train_target_teacher_non_dominant_rescue = _env_flag(
+            "ANKLE_DECISION_TRAIN_TARGET_TEACHER_NONDOMINANT_RESCUE"
+        )
         self.train_non_dominant_rescue_scale = _env_unit_float(
             "ANKLE_DECISION_TRAIN_NONDOMINANT_RESCUE_SCALE",
             1.0,
@@ -1166,6 +1169,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     def _apply_train_non_dominant_weight_floor(
         self,
         fusion_weights: torch.Tensor,
+        rescue_target_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """During training, reserve a small mass for weak views so their experts keep learning."""
         if (
@@ -1291,7 +1295,23 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         apply_mask = apply_mask * self.train_non_dominant_rescue_scale
         non_dominant_mask = 1.0 - dominant_mask
         adjusted = flat_weights * (1.0 - reserved_mass)
-        if self.train_target_top_non_dominant_rescue:
+        if self.train_target_teacher_non_dominant_rescue:
+            # Route the full rescue mass toward the fallback view with the
+            # strongest detached classifier evidence instead of trusting the
+            # already-collapsed gate ranking to choose who gets the gradient.
+            target_scores = flat_weights.detach()
+            if rescue_target_weights is not None:
+                target_scores = rescue_target_weights.detach().squeeze(-1)
+            fallback_view = target_scores.masked_fill(
+                dominant_mask.bool(),
+                -1.0,
+            ).argmax(dim=1)
+            fallback_mask = nn.functional.one_hot(
+                fallback_view,
+                num_classes=num_views,
+            ).to(dtype=flat_weights.dtype, device=flat_weights.device)
+            adjusted = adjusted + fallback_mask * reserved_mass
+        elif self.train_target_top_non_dominant_rescue:
             # Concentrate the same rescue mass on the strongest fallback view so
             # it can become a viable alternative instead of splitting mass
             # equally across two still-starving non-dominant experts.
@@ -1371,6 +1391,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
         teacher_fusion_weights = None
+        teacher_rescue_weights = None
         blended_fusion_weights = raw_fusion_weights
         if self.gate_teacher_blend > 0.0:
             teacher_fusion_weights = self._compute_gate_teacher_weights(view_logits)
@@ -1382,8 +1403,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 dim=1,
                 keepdim=True,
             )
+        if self.train_target_teacher_non_dominant_rescue:
+            teacher_rescue_weights = teacher_fusion_weights
+            if teacher_rescue_weights is None:
+                teacher_rescue_weights = self._compute_gate_teacher_weights(view_logits)
         blended_fusion_weights = self._apply_train_non_dominant_weight_floor(
-            blended_fusion_weights
+            blended_fusion_weights,
+            rescue_target_weights=teacher_rescue_weights,
         )
         fusion_weights = self._apply_fusion_weight_floor(blended_fusion_weights)
         view_logit_temperatures = None
