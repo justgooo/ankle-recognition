@@ -236,7 +236,6 @@
   <g id="input-to-serial-pipeline">
     <path class="plain-line" d="M270 512 L306 512 M270 660 L306 660 M270 808 L306 808 M306 512 L306 808"/>
     <path class="line" d="M306 660 L360 660 L360 373 L439 373"/>
-    <circle class="line-junction" cx="306" cy="660" r="4"/>
   </g>
 
   <!-- Single-view serial processing for Steps 2-4 -->
@@ -259,7 +258,6 @@
     </g>
 
     <line class="line" x1="602" y1="452" x2="602" y2="490"/>
-    <circle class="line-junction" cx="602" cy="452" r="4"/>
 
     <g id="step3-serial-features">
       <rect class="module module-blue" x="468" y="492" width="268" height="142" rx="12" fill="#f7fbff"/>
@@ -447,10 +445,10 @@
         </g>
 
         <g id="mean-pooling-arrows">
-          <path class="slice-pool-arrow" d="M 700 170 L 835 250"/>
-          <path class="slice-pool-arrow" d="M 700 235 L 835 267"/>
-          <path class="slice-pool-arrow" d="M 700 295 L 835 295"/>
-          <path class="slice-pool-arrow" d="M 700 355 L 835 323"/>
+          <path class="slice-pool-arrow" d="M 700 172 L 835 258"/>
+          <path class="slice-pool-arrow" d="M 700 252 L 835 282"/>
+          <path class="slice-pool-arrow" d="M 700 338 L 835 306"/>
+          <path class="slice-pool-arrow" d="M 700 418 L 835 330"/>
           <text class="slice-pool-label" x="760" y="405">mean pooling</text>
         </g>
 
@@ -477,11 +475,9 @@
     </g>
 
     <line class="line" x1="602" y1="634" x2="602" y2="690"/>
-    <circle class="line-junction" cx="602" cy="634" r="4"/>
 
     <path class="line" d="M810 688 L810 360 L932 360"/>
     <path class="line" d="M810 688 L810 472 L932 472"/>
-    <circle class="line-junction" cx="810" cy="690" r="4"/>
 
   </g>
 
@@ -510,14 +506,7 @@
       <text class="body-text mini center muted" x="172" y="108">疾病分类头</text>
       <rect class="callout" x="52" y="34" width="34" height="42" rx="7" stroke="#2b61b2"/>
       <text class="body-text tiny center" x="69" y="60">LN</text>
-      <line class="thin-line" x1="86" y1="55" x2="104" y2="55"/>
-      <g>
-        <line x1="118" y1="35" x2="118" y2="75" stroke="#111" stroke-width="1.1"/>
-        <circle cx="118" cy="41" r="4.5" fill="#d7e8ff" stroke="#111"/>
-        <circle cx="118" cy="55" r="4.5" fill="#d7e8ff" stroke="#111"/>
-        <circle cx="118" cy="69" r="4.5" fill="#d7e8ff" stroke="#111"/>
-      </g>
-      <line class="thin-line" x1="132" y1="55" x2="148" y2="55"/>
+      <line class="thin-line" x1="86" y1="55" x2="148" y2="55"/>
       <rect class="callout" x="150" y="34" width="44" height="42" rx="7" stroke="#2b61b2"/>
       <text class="body-text mini center" x="172" y="60">Drop</text>
       <line class="thin-line" x1="194" y1="55" x2="212" y2="55"/>
@@ -531,14 +520,12 @@
 
     <!-- Disease logits and reliability signals leave this panel for downstream fusion. -->
     <path class="disease-line" d="M1391 472 L1484 472 L1484 1037 L1585 1037"/>
-    <circle class="disease-junction" cx="1391" cy="472" r="4"/>
 
   </g>
 
   <!-- Reliability/gating panel -->
   <g id="可靠性-panel" transform="translate(-97 0)">
     <path class="reliability-line" d="M1270 360 L1400 360 L1400 252 L1464 252"/>
-    <circle class="reliability-junction" cx="1270" cy="360" r="4"/>
 
     <g transform="translate(1464 162)">
       <rect class="gate-box" x="0" y="0" width="272" height="250" rx="12"/>
@@ -603,7 +590,6 @@
     </g>
 
     <line class="line" x1="1600" y1="412" x2="1600" y2="444"/>
-    <circle class="line-junction" cx="1600" cy="412" r="4"/>
 
     <g transform="translate(1464 444)">
       <rect class="gate-box" x="0" y="0" width="272" height="136" rx="10"/>
@@ -623,7 +609,6 @@
     </g>
 
     <line class="line" x1="1600" y1="580" x2="1600" y2="626"/>
-    <circle class="line-junction" cx="1600" cy="580" r="4"/>
 
     <g transform="translate(1464 626)">
       <rect class="training-box" x="0" y="0" width="272" height="146" rx="10"/>
@@ -641,7 +626,6 @@
     </g>
 
     <line class="line" x1="1600" y1="772" x2="1600" y2="812"/>
-    <circle class="line-junction" cx="1600" cy="772" r="4"/>
 
     <g transform="translate(1464 812)">
       <rect class="gate-box" x="0" y="0" width="272" height="130" rx="10"/>
@@ -707,11 +691,8 @@
     </g>
 
     <path class="reliability-line" d="M1736 877 L1785 877 L1785 204 L1856 204"/>
-    <circle class="reliability-junction" cx="1736" cy="877" r="4"/>
     <path class="fusion-line" d="M1736 1037 L1801 1037 L1801 248 L1856 248"/>
-    <circle class="fusion-junction" cx="1736" cy="1037" r="4"/>
     <path class="line" d="M1997 272 L1997 336"/>
-    <circle class="line-junction" cx="1997" cy="272" r="4"/>
   </g>
 
   <!-- Output panel -->
