@@ -622,6 +622,77 @@ class PerViewLogitTemperatureCalibrator(nn.Module):
         return centered_logits / temperatures + view_logits.mean(dim=-1, keepdim=True)
 
 
+class EvidenceAwareReliabilityGate(nn.Module):
+    """Residual reliability-logit correction from detached per-view evidence."""
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        evidence_dim: int = 8,
+        bottleneck_dim: int = 64,
+        residual_limit: float = 0.25,
+        dropout: float = 0.05,
+    ) -> None:
+        super().__init__()
+        if residual_limit <= 0.0:
+            raise ValueError("residual_limit must be > 0.")
+        self.feature_norm = nn.LayerNorm(feature_dim)
+        self.evidence_norm = nn.LayerNorm(evidence_dim)
+        self.adapter = nn.Sequential(
+            nn.Linear(feature_dim + evidence_dim, bottleneck_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(bottleneck_dim, 1),
+        )
+        self.residual_limit = float(residual_limit)
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    @staticmethod
+    def _evidence_from_logits(view_logits: torch.Tensor) -> torch.Tensor:
+        detached_logits = view_logits.detach()
+        probs = torch.softmax(detached_logits, dim=-1).clamp_min(1e-8)
+        max_prob = probs.max(dim=-1).values
+        margin = detached_logits.max(dim=-1).values - detached_logits.min(dim=-1).values
+        entropy = -(probs * probs.log()).sum(dim=-1) / math.log(float(probs.shape[-1]))
+        if probs.shape[-1] > 1:
+            abnormal_prob = probs[..., 1]
+        else:
+            abnormal_prob = max_prob
+
+        centered_max_prob = max_prob - max_prob.mean(dim=1, keepdim=True)
+        centered_margin = margin - margin.mean(dim=1, keepdim=True)
+        centered_entropy = entropy - entropy.mean(dim=1, keepdim=True)
+        centered_abnormal_prob = abnormal_prob - abnormal_prob.mean(dim=1, keepdim=True)
+        return torch.stack(
+            [
+                max_prob,
+                margin,
+                entropy,
+                abnormal_prob,
+                centered_max_prob,
+                centered_margin,
+                centered_entropy,
+                centered_abnormal_prob,
+            ],
+            dim=-1,
+        )
+
+    def forward(
+        self,
+        view_features: torch.Tensor,
+        view_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        evidence = self._evidence_from_logits(view_logits).to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        features = self.feature_norm(view_features)
+        evidence = self.evidence_norm(evidence)
+        residual_input = torch.cat([features, evidence], dim=-1)
+        return self.residual_limit * torch.tanh(self.adapter(residual_input))
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -906,6 +977,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.enable_view_logit_temperature = _env_flag(
             "ANKLE_DECISION_ENABLE_VIEW_LOGIT_TEMPERATURE"
         )
+        self.enable_evidence_aware_gate = _env_flag(
+            "ANKLE_DECISION_ENABLE_EVIDENCE_AWARE_GATE"
+        )
+        self.evidence_aware_gate_residual_limit = _env_positive_float(
+            "ANKLE_DECISION_EVIDENCE_AWARE_GATE_RESIDUAL_LIMIT",
+            0.25,
+        )
         self.gate_teacher_blend = _env_unit_float(
             "ANKLE_DECISION_GATE_TEACHER_BLEND",
             0.0,
@@ -1105,6 +1183,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         bottleneck_dim=32,
                         scale_limit=0.25,
                         bias_limit=0.15,
+                    )
+                if self.enable_evidence_aware_gate:
+                    self.evidence_aware_gate = EvidenceAwareReliabilityGate(
+                        feature_dim=self.feature_dim,
+                        residual_limit=self.evidence_aware_gate_residual_limit,
                     )
         if self.enable_view_logit_temperature:
             self.view_logit_temperature_calibrator = PerViewLogitTemperatureCalibrator(
@@ -1655,6 +1738,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         self.confidence_calibrator(feature, raw_confidence)
                     )
             confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
+            if self.enable_evidence_aware_gate:
+                evidence_gate_features = torch.stack(gating_features, dim=1)
+                confidences = confidences + self.evidence_aware_gate(
+                    evidence_gate_features,
+                    view_logits,
+                )
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
         if (
