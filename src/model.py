@@ -717,17 +717,63 @@ class GateLogitRMSLimiter(nn.Module):
 class GateViewPriorDebiaser(nn.Module):
     """Remove persistent per-view reliability-logit offsets before softmax."""
 
-    def __init__(self, strength: float = 1.0, momentum: float = 0.1) -> None:
+    def __init__(
+        self,
+        strength: float = 1.0,
+        momentum: float = 0.1,
+        max_strength: float | None = None,
+        evidence_close_gap: float = 0.0,
+        evidence_close_window: float = 0.0,
+    ) -> None:
         super().__init__()
         if not (0.0 <= strength <= 1.0):
             raise ValueError("strength must be in [0, 1].")
         if not (0.0 < momentum <= 1.0):
             raise ValueError("momentum must be in (0, 1].")
+        if max_strength is None:
+            max_strength = strength
+        if not (0.0 <= max_strength <= 1.0):
+            raise ValueError("max_strength must be in [0, 1].")
+        if max_strength < strength:
+            raise ValueError("max_strength must be >= strength.")
+        if evidence_close_gap < 0.0:
+            raise ValueError("evidence_close_gap must be >= 0.")
+        if evidence_close_window < 0.0:
+            raise ValueError("evidence_close_window must be >= 0.")
         self.strength = float(strength)
+        self.max_strength = float(max_strength)
         self.momentum = float(momentum)
+        self.evidence_close_gap = float(evidence_close_gap)
+        self.evidence_close_window = float(evidence_close_window)
         self.register_buffer("running_centered_prior", torch.zeros(1, 3, 1))
 
-    def forward(self, confidences: torch.Tensor) -> torch.Tensor:
+    def _sample_strength(
+        self,
+        confidences: torch.Tensor,
+        view_logits: torch.Tensor | None,
+    ) -> float | torch.Tensor:
+        if self.max_strength <= self.strength or view_logits is None:
+            return self.strength
+        if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        detached_logits = view_logits.detach()
+        pred_margins = detached_logits.max(dim=-1).values - detached_logits.min(dim=-1).values
+        axial_margin = pred_margins[:, :1]
+        best_non_axial_margin = pred_margins[:, 1:].amax(dim=1, keepdim=True)
+        close_delta = best_non_axial_margin - axial_margin + self.evidence_close_gap
+        if self.evidence_close_window > 0.0:
+            scale = (close_delta / self.evidence_close_window).clamp(min=0.0, max=1.0)
+        else:
+            scale = (close_delta >= 0.0).to(dtype=confidences.dtype)
+        scale = scale.to(device=confidences.device, dtype=confidences.dtype)
+        strength = self.strength + (self.max_strength - self.strength) * scale
+        return strength.unsqueeze(-1)
+
+    def forward(
+        self,
+        confidences: torch.Tensor,
+        view_logits: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if confidences.ndim != 3 or confidences.shape[-1] != 1:
             raise ValueError("confidences must have shape (batch, views, 1).")
         if confidences.shape[1] != self.running_centered_prior.shape[1]:
@@ -749,7 +795,8 @@ class GateViewPriorDebiaser(nn.Module):
                 device=confidences.device,
                 dtype=confidences.dtype,
             )
-        return confidences - self.strength * prior
+        strength = self._sample_strength(confidences, view_logits)
+        return confidences - strength * prior
 
 
 class RelativeViewReliabilityGate(nn.Module):
@@ -1089,9 +1136,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH",
             1.0,
         )
+        self.gate_view_prior_debias_max_strength = _env_unit_float(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH",
+            self.gate_view_prior_debias_strength,
+        )
         self.gate_view_prior_debias_momentum = _env_unit_float(
             "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MOMENTUM",
             0.1,
+        )
+        self.gate_view_prior_debias_evidence_close_gap = _env_unit_float(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_GAP",
+            0.0,
+        )
+        self.gate_view_prior_debias_evidence_close_window = _env_unit_float(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_WINDOW",
+            0.0,
         )
         self.use_shared_confidence_head = _env_flag(
             "ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD"
@@ -1322,6 +1381,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     self.gate_view_prior_debiaser = GateViewPriorDebiaser(
                         strength=self.gate_view_prior_debias_strength,
                         momentum=self.gate_view_prior_debias_momentum,
+                        max_strength=self.gate_view_prior_debias_max_strength,
+                        evidence_close_gap=self.gate_view_prior_debias_evidence_close_gap,
+                        evidence_close_window=self.gate_view_prior_debias_evidence_close_window,
                     )
                 if self.enable_relative_view_gate:
                     self.relative_view_gate = RelativeViewReliabilityGate(
@@ -1903,7 +1965,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             if self.enable_gate_logit_rms_limit:
                 confidences = self.gate_logit_rms_limiter(confidences)
             if self.enable_gate_view_prior_debias:
-                confidences = self.gate_view_prior_debiaser(confidences)
+                confidences = self.gate_view_prior_debiaser(confidences, view_logits)
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
         if (
