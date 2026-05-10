@@ -1,8 +1,8 @@
 # Slower confirmation config for the current main autoresearch lane.
-# Human-directed mainline: DFR-53 ResNeXt 256x8 learned decision fusion.
-# DFR-53 uses a mid cap for DFR-51 conditional prior debiasing to avoid both axial recollapse and sagittal over-routing.
-experiment_name: autoresearch_formal_dfr53_midcap_evidence_close_prior_debias
-output_dir: runs/autoresearch_formal_dfr53_midcap_evidence_close_prior_debias
+# Human-directed mainline: DFR-54 ResNeXt 256x8 learned decision fusion.
+# DFR-54 narrows DFR-53 conditional prior debiasing to reduce over-routing while keeping non-axial rescue active.
+experiment_name: autoresearch_formal_dfr54_narrow_midcap_evidence_close_prior_debias
+output_dir: runs/autoresearch_formal_dfr54_narrow_midcap_evidence_close_prior_debias
 seed: 42
 
 runtime_env:
@@ -10,7 +10,7 @@ runtime_env:
   ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
   ANKLE_DECISION_ENABLE_GATE_VIEW_PRIOR_DEBIAS: "1"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH: "0.35"
-  ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH: "0.75"
+  ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH: "0.65"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MOMENTUM: "0.1"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_GAP: "0.2"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_WINDOW: "0.2"

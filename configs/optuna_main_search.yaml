@@ -1,8 +1,8 @@
 study:
-  name: autoresearch_dfr53_midcap_evidence_close_prior_debias_main
+  name: autoresearch_dfr54_narrow_midcap_evidence_close_prior_debias_main
   phase: main
   base_config: configs/autoresearch_formal.yaml
-  study_root: runs/optuna_main_dfr53_midcap_evidence_close_prior_debias
+  study_root: runs/optuna_main_dfr54_narrow_midcap_evidence_close_prior_debias
   direction: maximize
   n_trials: 1
   timeout_minutes: 240
@@ -19,7 +19,7 @@ study:
     ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: 0.25
     ANKLE_DECISION_ENABLE_GATE_VIEW_PRIOR_DEBIAS: 1
     ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH: 0.35
-    ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH: 0.75
+    ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH: 0.65
     ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MOMENTUM: 0.1
     ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_GAP: 0.2
     ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_WINDOW: 0.2
