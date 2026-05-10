@@ -107,15 +107,23 @@ def check_visible_gpus(min_count: int, min_free_gb: float) -> None:
             )
 
 
-def srun_lane_prefix(gpu_id: int, cpus: int) -> list[str]:
-    return [
+def srun_lane_prefix(gpu_id: int, cpus: int, output_path: Path | None = None) -> list[str]:
+    command = [
         "srun",
         "--overlap",
         "-N1",
         "-n1",
         f"-c{cpus}",
-        f"--export=ALL,CUDA_VISIBLE_DEVICES={gpu_id}",
     ]
+    if output_path is not None:
+        command.append(f"--output={output_path}")
+    command.extend(
+        [
+            "env",
+            f"CUDA_VISIBLE_DEVICES={gpu_id}",
+        ]
+    )
+    return command
 
 
 def check_srun_cuda(args: argparse.Namespace, gpu_ids: list[int]) -> None:
@@ -131,7 +139,6 @@ def check_srun_cuda(args: argparse.Namespace, gpu_ids: list[int]) -> None:
                 "print(f\"step_cuda_visible={os.environ.get('CUDA_VISIBLE_DEVICES')}\"); "
                 "print(f'step_cuda_available={available}'); "
                 "print(f'step_device_count={count}'); "
-                "[print('step_device', i, torch.cuda.get_device_name(i)) for i in range(count)]; "
                 "sys.exit(0 if available and count >= 1 else 2)"
             ),
         ]
@@ -147,8 +154,7 @@ def check_srun_cuda(args: argparse.Namespace, gpu_ids: list[int]) -> None:
 def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: int) -> int:
     log_path = log_dir / f"seed{spec.seed}_train.log"
     command = [
-        *srun_lane_prefix(gpu_id, args.cpus_per_run),
-        f"--output={log_path}",
+        *srun_lane_prefix(gpu_id, args.cpus_per_run, log_path),
         args.python,
         "scripts/run_train_with_config_env.py",
         "--config",
@@ -171,8 +177,7 @@ def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: i
 def run_telemetry(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: int) -> int:
     log_path = log_dir / f"seed{spec.seed}_telemetry.log"
     command = [
-        *srun_lane_prefix(gpu_id, max(1, args.cpus_per_run // 4)),
-        f"--output={log_path}",
+        *srun_lane_prefix(gpu_id, max(1, args.cpus_per_run // 4), log_path),
         args.python,
         "scripts/analyze_fusion_weights.py",
         "--config",
