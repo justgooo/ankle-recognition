@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--launcher",
         choices=("direct", "srun"),
-        default="direct",
+        default="srun",
         help=(
             "Launch per-seed processes directly inside the Slurm allocation, "
             "or as nested srun steps."
@@ -119,19 +119,14 @@ def check_visible_gpus(min_count: int, min_free_gb: float) -> None:
 def srun_lane_prefix(gpu_id: int, cpus: int, output_path: Path | None = None) -> list[str]:
     command = [
         "srun",
-        "--overlap",
+        "--exclusive",
         "-N1",
         "-n1",
+        "--gres=gpu:1",
         f"-c{cpus}",
     ]
     if output_path is not None:
         command.append(f"--output={output_path}")
-    command.extend(
-        [
-            "env",
-            f"CUDA_VISIBLE_DEVICES={gpu_id}",
-        ]
-    )
     return command
 
 
@@ -193,7 +188,7 @@ def check_cuda_lanes(args: argparse.Namespace, gpu_ids: list[int]) -> None:
         )
         if result.returncode != 0:
             raise SystemExit(
-                f"CUDA lane probe failed for CUDA_VISIBLE_DEVICES={gpu_id}; "
+                f"CUDA lane probe failed for logical gpu_id={gpu_id}; "
                 "refusing to launch a CPU-only training run."
             )
 
