@@ -1,8 +1,8 @@
 study:
-  name: autoresearch_dfr51_evidence_close_prior_debias_proxy
+  name: autoresearch_dfr52_capped_evidence_close_prior_debias_proxy
   phase: proxy
   base_config: configs/autoresearch_proxy.yaml
-  study_root: runs/optuna_proxy_dfr51_evidence_close_prior_debias
+  study_root: runs/optuna_proxy_dfr52_capped_evidence_close_prior_debias
   direction: maximize
   n_trials: 1
   timeout_minutes: 120
@@ -19,7 +19,7 @@ study:
     ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: 0.25
     ANKLE_DECISION_ENABLE_GATE_VIEW_PRIOR_DEBIAS: 1
     ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH: 0.35
-    ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH: 1.0
+    ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH: 0.55
     ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MOMENTUM: 0.1
     ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_GAP: 0.2
     ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_WINDOW: 0.2

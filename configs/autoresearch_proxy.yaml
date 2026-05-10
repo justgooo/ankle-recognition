@@ -1,8 +1,8 @@
 # Fast proxy config for the current main autoresearch lane.
-# Human-directed mainline: DFR-51 ResNeXt 256x8 learned decision fusion.
+# Human-directed mainline: DFR-52 ResNeXt 256x8 learned decision fusion.
 # Shortens only the epoch budget for smoke tests.
-experiment_name: autoresearch_proxy_dfr51_evidence_close_prior_debias
-output_dir: runs/autoresearch_proxy_dfr51_evidence_close_prior_debias
+experiment_name: autoresearch_proxy_dfr52_capped_evidence_close_prior_debias
+output_dir: runs/autoresearch_proxy_dfr52_capped_evidence_close_prior_debias
 seed: 42
 
 runtime_env:
@@ -10,7 +10,7 @@ runtime_env:
   ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
   ANKLE_DECISION_ENABLE_GATE_VIEW_PRIOR_DEBIAS: "1"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH: "0.35"
-  ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH: "1.0"
+  ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MAX_STRENGTH: "0.55"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MOMENTUM: "0.1"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_GAP: "0.2"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_WINDOW: "0.2"
