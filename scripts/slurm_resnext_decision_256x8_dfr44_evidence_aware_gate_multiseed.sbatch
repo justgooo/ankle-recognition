@@ -7,6 +7,7 @@
 #SBATCH --mem=120G
 #SBATCH --time=06:00:00
 #SBATCH --exclusive
+#SBATCH --exclude=node20
 #SBATCH --output=autoresearch_logs/slurm_%x_%j.out
 
 set -euo pipefail
