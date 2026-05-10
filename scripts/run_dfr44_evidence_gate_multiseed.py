@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--launcher",
         choices=("direct", "srun"),
-        default="srun",
+        default="direct",
         help=(
             "Launch per-seed processes directly inside the Slurm allocation, "
             "or as nested srun steps."
@@ -104,7 +104,21 @@ def check_visible_gpus(min_count: int, min_free_gb: float) -> None:
     if count < min_count:
         raise SystemExit(f"Need at least {min_count} visible GPUs, got {count}.")
 
-    for index, line in enumerate(gpu_lines[:min_count]):
+    visible_ids = parse_cuda_visible_devices(os.getenv("CUDA_VISIBLE_DEVICES", ""))
+    check_indices = visible_ids[:min_count] if len(visible_ids) >= min_count else list(range(min_count))
+    print(f"gpu_free_check_indices={check_indices}")
+    by_index = {}
+    for line in gpu_lines:
+        try:
+            by_index[int(line.split(",", 1)[0].strip())] = line
+        except ValueError:
+            continue
+
+    for index in check_indices:
+        line = by_index.get(index)
+        if line is None:
+            print(f"warning: nvidia-smi did not report gpu index {index}")
+            continue
         free_match = re.search(r"([0-9.]+)\s+MiB", line)
         if free_match is None:
             print(f"warning: unable to parse free memory from nvidia-smi line: {line}")
@@ -130,9 +144,29 @@ def srun_lane_prefix(gpu_id: int, cpus: int, output_path: Path | None = None) ->
     return command
 
 
+def parse_cuda_visible_devices(raw: str) -> list[int]:
+    devices: list[int] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            devices.append(int(token))
+        except ValueError:
+            return []
+    return devices
+
+
+def resolve_lane_device(gpu_id: int) -> str:
+    visible_devices = parse_cuda_visible_devices(os.getenv("CUDA_VISIBLE_DEVICES", ""))
+    if gpu_id < len(visible_devices):
+        return str(visible_devices[gpu_id])
+    return str(gpu_id)
+
+
 def cuda_lane_env(gpu_id: int) -> dict[str, str]:
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    env["CUDA_VISIBLE_DEVICES"] = resolve_lane_device(gpu_id)
     return env
 
 
@@ -197,7 +231,7 @@ def print_launch_command(command: list[str], gpu_id: int, launcher: str) -> None
     if launcher == "srun":
         print(command_text(command))
     else:
-        print(command_text(["env", f"CUDA_VISIBLE_DEVICES={gpu_id}", *command]))
+        print(command_text(["env", f"CUDA_VISIBLE_DEVICES={resolve_lane_device(gpu_id)}", *command]))
 
 
 def run_with_optional_log(
