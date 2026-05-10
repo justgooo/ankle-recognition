@@ -1,15 +1,15 @@
 # Slower confirmation config for the current main autoresearch lane.
-# Human-directed mainline: DFR-49 ResNeXt 256x8 learned decision fusion.
-# DFR-49 keeps DFR-25 and removes persistent per-view gate-logit priors.
-experiment_name: autoresearch_formal_dfr49_gate_view_prior_debias
-output_dir: runs/autoresearch_formal_dfr49_gate_view_prior_debias
+# Human-directed mainline: DFR-50 ResNeXt 256x8 learned decision fusion.
+# DFR-50 keeps DFR-49 prior debiasing but only applies a partial correction.
+experiment_name: autoresearch_formal_dfr50_partial_gate_view_prior_debias
+output_dir: runs/autoresearch_formal_dfr50_partial_gate_view_prior_debias
 seed: 42
 
 runtime_env:
   ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
   ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
   ANKLE_DECISION_ENABLE_GATE_VIEW_PRIOR_DEBIAS: "1"
-  ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH: "1.0"
+  ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH: "0.35"
   ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MOMENTUM: "0.1"
 
 data:
