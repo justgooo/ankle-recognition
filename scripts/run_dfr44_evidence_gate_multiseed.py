@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -69,45 +70,84 @@ def build_specs(configs: list[str]) -> list[RunSpec]:
 
 
 def check_visible_gpus(min_count: int, min_free_gb: float) -> None:
-    import torch
+    command = [
+        "nvidia-smi",
+        "--query-gpu=index,name,memory.free,memory.total,utilization.gpu",
+        "--format=csv,noheader",
+    ]
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        raise SystemExit("Failed to query GPUs with nvidia-smi.")
 
-    count = torch.cuda.device_count()
+    gpu_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    count = len(gpu_lines)
     print(f"visible_gpus={count}")
+    for line in gpu_lines:
+        print(f"nvidia_smi={line}")
     if count < min_count:
         raise SystemExit(f"Need at least {min_count} visible GPUs, got {count}.")
-    min_free_bytes = min_free_gb * 1024**3
-    for index in range(count):
-        try:
-            torch.cuda.set_device(index)
-            free_bytes, total_bytes = torch.cuda.mem_get_info()
-        except RuntimeError as exc:
-            print(
-                f"warning: unable to query CUDA memory for gpu={index}; "
-                f"continuing because Slurm already granted {count} visible GPUs. {exc}",
-                flush=True,
-            )
+
+    for index, line in enumerate(gpu_lines[:min_count]):
+        free_match = re.search(r"([0-9.]+)\s+MiB", line)
+        if free_match is None:
+            print(f"warning: unable to parse free memory from nvidia-smi line: {line}")
             continue
-        free_gb = free_bytes / 1024**3
-        total_gb = total_bytes / 1024**3
-        print(
-            f"gpu={index} name={torch.cuda.get_device_name(index)} "
-            f"free_gb={free_gb:.2f} total_gb={total_gb:.2f}"
-        )
-        if index < min_count and free_bytes < min_free_bytes:
+        free_gb = float(free_match.group(1)) / 1024
+        if free_gb < min_free_gb:
             raise SystemExit(
                 f"GPU {index} has only {free_gb:.2f} GiB free; need {min_free_gb:.2f} GiB."
             )
 
 
-def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path) -> int:
-    log_path = log_dir / f"seed{spec.seed}_train.log"
-    command = [
+def srun_lane_prefix(gpu_id: int, cpus: int) -> list[str]:
+    return [
         "srun",
-        "--exclusive",
+        "--overlap",
         "-N1",
         "-n1",
-        "--gres=gpu:1",
-        f"-c{args.cpus_per_run}",
+        f"-c{cpus}",
+        f"--export=ALL,CUDA_VISIBLE_DEVICES={gpu_id}",
+    ]
+
+
+def check_srun_cuda(args: argparse.Namespace, gpu_ids: list[int]) -> None:
+    for gpu_id in gpu_ids:
+        command = [
+            *srun_lane_prefix(gpu_id, 1),
+            args.python,
+            "-c",
+            (
+                "import os, sys, torch; "
+                "available=torch.cuda.is_available(); "
+                "count=torch.cuda.device_count(); "
+                "print(f\"step_cuda_visible={os.environ.get('CUDA_VISIBLE_DEVICES')}\"); "
+                "print(f'step_cuda_available={available}'); "
+                "print(f'step_device_count={count}'); "
+                "[print('step_device', i, torch.cuda.get_device_name(i)) for i in range(count)]; "
+                "sys.exit(0 if available and count >= 1 else 2)"
+            ),
+        ]
+        print(command_text(command))
+        result = subprocess.run(command, cwd=REPO_ROOT, check=False)
+        if result.returncode != 0:
+            raise SystemExit(
+                f"Slurm GPU lane probe failed for CUDA_VISIBLE_DEVICES={gpu_id}; "
+                "refusing to launch a CPU-only training run."
+            )
+
+
+def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: int) -> int:
+    log_path = log_dir / f"seed{spec.seed}_train.log"
+    command = [
+        *srun_lane_prefix(gpu_id, args.cpus_per_run),
         f"--output={log_path}",
         args.python,
         "scripts/run_train_with_config_env.py",
@@ -116,7 +156,10 @@ def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path) -> int:
         "--python",
         args.python,
     ]
-    print(f"launch seed={spec.seed} config={repo_relative(spec.config_path)}")
+    print(
+        f"launch seed={spec.seed} gpu_id={gpu_id} "
+        f"config={repo_relative(spec.config_path)}"
+    )
     print(command_text(command))
     if args.dry_run:
         return 0
@@ -125,9 +168,11 @@ def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path) -> int:
     return int(result.returncode)
 
 
-def run_telemetry(spec: RunSpec, args: argparse.Namespace, log_dir: Path) -> int:
+def run_telemetry(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: int) -> int:
     log_path = log_dir / f"seed{spec.seed}_telemetry.log"
     command = [
+        *srun_lane_prefix(gpu_id, max(1, args.cpus_per_run // 4)),
+        f"--output={log_path}",
         args.python,
         "scripts/analyze_fusion_weights.py",
         "--config",
@@ -135,18 +180,11 @@ def run_telemetry(spec: RunSpec, args: argparse.Namespace, log_dir: Path) -> int
         "--checkpoint",
         repo_relative(spec.output_dir / "best.pt"),
     ]
-    print(f"telemetry seed={spec.seed}")
+    print(f"telemetry seed={spec.seed} gpu_id={gpu_id}")
     print(command_text(command))
     if args.dry_run:
         return 0
-    with log_path.open("w", encoding="utf-8") as handle:
-        result = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
+    result = subprocess.run(command, cwd=REPO_ROOT, check=False)
     print(f"telemetry seed={spec.seed} exit={result.returncode} log={repo_relative(log_path)}")
     return int(result.returncode)
 
@@ -228,8 +266,11 @@ def main() -> int:
     print(f"CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES', 'unset')}")
     print(f"configs={[repo_relative(spec.config_path) for spec in specs]}")
     print(f"outputs={[repo_relative(spec.output_dir) for spec in specs]}")
+    gpu_ids = list(range(min(len(specs), args.max_parallel)))
+    print(f"gpu_ids={gpu_ids}")
     if not args.dry_run:
         check_visible_gpus(min(len(specs), args.max_parallel), args.min_free_gb)
+        check_srun_cuda(args, gpu_ids)
 
     preflight = [
         args.python,
@@ -246,8 +287,8 @@ def main() -> int:
     train_status = 0
     with ThreadPoolExecutor(max_workers=args.max_parallel) as executor:
         futures = {
-            executor.submit(run_config, spec, args, log_dir): spec
-            for spec in specs
+            executor.submit(run_config, spec, args, log_dir, gpu_ids[index % len(gpu_ids)]): spec
+            for index, spec in enumerate(specs)
         }
         for future in as_completed(futures):
             train_status = max(train_status, int(future.result()))
@@ -256,8 +297,11 @@ def main() -> int:
 
     telemetry_status = 0
     if not args.skip_telemetry:
-        for spec in specs:
-            telemetry_status = max(telemetry_status, run_telemetry(spec, args, log_dir))
+        for index, spec in enumerate(specs):
+            telemetry_status = max(
+                telemetry_status,
+                run_telemetry(spec, args, log_dir, gpu_ids[index % len(gpu_ids)]),
+            )
 
     results = [read_result(spec) for spec in specs]
     summarize(results, log_dir / "aggregate_summary.json")
