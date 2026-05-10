@@ -33,7 +33,9 @@
 > - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到或保持在 matched equal-weight 之上？因为它仍然是 sample-wise learned weighting，不固定平均，也不注入 noisy teacher evidence；它只移除 view-specific reliability scorer 的自由度，预期能降低 seed42 的 axial lock-in，同时保留 DFR-25 的 dominant-gate dropout 训练收益。
 > - 它是可复用 learned weighting 机制还是固定权重？是 learned weighting 机制。shared head 仍对每个样本和每个视角分别输出 reliability logit，只是三视角共享打分规则。
 
-- [ ] **DFR-46-RESNEXT-DECISION-256X8-SHARED-CONFIDENCE-HEAD-MAIN-S42**：在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD=1`，使 non-equal learned decision fusion 的三个 reliability heads 变为一个共享 `LayerNorm + Linear` scorer；运行配置为 [configs/cmp_resnext_decision_256x8_dfr46_shared_confidence_head_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr46_shared_confidence_head_formal_s42.yaml) 与当前 `configs/autoresearch_formal*.yaml`。设计思路：最小化 gate 内部结构改动，直接削弱 view-specific scorer 学出的固定 axial logit bias，而不是改变 classifier、backbone、融合语义或训练标量。预计改进效果：seed42 的 `top_weight axial=94/94` 应至少出现少量 coronal/sagittal top-weight 或 near-top routing；若 non-axial expert 的证据质量不足，accuracy 不应明显低于 matched equal-weight seed42。
+- [x] **DFR-46-RESNEXT-DECISION-256X8-SHARED-CONFIDENCE-HEAD-MAIN-S42**：commit `ba1c09d`，在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD=1`，使 non-equal learned decision fusion 的三个 reliability heads 变为一个共享 `LayerNorm + Linear` scorer；运行配置为 [configs/cmp_resnext_decision_256x8_dfr46_shared_confidence_head_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr46_shared_confidence_head_formal_s42.yaml) 与当前 `configs/autoresearch_formal*.yaml`。设计思路：最小化 gate 内部结构改动，直接削弱 view-specific scorer 学出的固定 axial logit bias，而不是改变 classifier、backbone、融合语义或训练标量。预计改进效果：seed42 的 `top_weight axial=94/94` 应至少出现少量 coronal/sagittal top-weight 或 near-top routing；若 non-axial expert 的证据质量不足，accuracy 不应明显低于 matched equal-weight seed42。实际结果：Slurm job `481809` 在 `RTXA6Kq/node16` 完成，best `val_acc=0.9255319148936170`, `val_auc=0.9754545454545455`, `val_f1=0.9156626506024096`, `peak_vram≈2.14 GiB`, `total_seconds≈1163.1` → **discard**（主指标只打平 matched equal-weight seed42 `0.9255319148936170`，低于 DFR-25 seed42 `0.9361702127659575`。）
+- **fusion-weight 结论**：[fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr46_shared_confidence_head_formal_s42/fusion_weight_analysis.json) 显示 shared head 仍未解决权重坍塌。mean fusion weight 为 `axial/coronal/sagittal = 0.8947559893131256 / 0.06149472054490383 / 0.04374929251981542`，`top_weight_view_distribution` 仍是 `axial=94, coronal=0, sagittal=0`；虽然 `top_true_margin` 中有 `coronal=4, sagittal=5` 的样本，gate 仍没有一次把 top-weight 给到 non-axial。
+- **当前判断**：DFR-46 证明只把 scorer 参数共享还不够；view pooled features 本身仍携带强 view-specific offset，shared linear scorer 仍能把 axial 排在所有样本 top。下一轮最小结构修复应进一步让 gate scorer 看 **relative view feature**（例如 `feature_i - mean(feature_all)`）或直接在 scorer 前做跨视角去均值，使 gate 排序更依赖样本内相对证据，而不是每个视角固定分布。
 
 ---
 
@@ -1042,11 +1044,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-45 gate-logit RMS limiter`：从 `DFR-25` fork，只在 decision-fusion reliability logits softmax 前新增 centered-RMS 限幅，Slurm job `481787` 已在 `RTXA6Kq/node16` 完成，权重 telemetry job `481797` 已补齐。 |
-| 上次结果 | **discard**。best `val_acc=0.9148936170212766`, `val_auc=0.9772727272727273`, `val_f1=0.9111111111111111`，低于 DFR-25 seed42 与 matched equal-weight seed42。fusion telemetry 为 mean weight `0.8802 / 0.0525 / 0.0674`，但 top-weight 仍 `axial=94/94`，说明只压 logit 尺度不能改变 residual axial lock-in 的 routing ordering。 |
-| 下一步 | DFR-46 已作为下一轮候选写入 backlog：从 `DFR-25` fork，开启 `ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD=1`，测试 shared reliability scorer 是否能在不固定平均权重、不引入 teacher evidence 的情况下改变 seed42 的 axial lock-in routing ordering。 |
+| 上次实验 | `DFR-46 shared confidence head`：从 `DFR-25` fork，只把三个 view-specific reliability heads 改成一个共享 `LayerNorm + Linear` scorer，Slurm job `481809` 已在 `RTXA6Kq/node16` 完成，权重 telemetry job `481813` 已补齐。 |
+| 上次结果 | **discard**。best `val_acc=0.9255319148936170`, `val_auc=0.9754545454545455`, `val_f1=0.9156626506024096`，只打平 matched equal-weight seed42，低于 DFR-25 seed42。fusion telemetry 为 mean weight `0.8948 / 0.0615 / 0.0437`，top-weight 仍 `axial=94/94`，说明参数共享不能去掉 pooled-feature 自带的视角偏置。 |
+| 下一步 | 继续按人类新增“权重坍塌”主线，从 `DFR-25` fork 做更小但更直接的 gate 内部结构修复：让 reliability scorer 在打分前使用 sample-wise relative view feature（例如 `feature_i - mean(feature_all)`），削弱固定视角分布 offset，而不是继续单纯共享 head 或压缩 softmax 尺度。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 20（自 `DFR-26 seed123` 起至 `DFR-45 gate-logit RMS limiter` 连续为 discard；上一轮 keep 已在 `DFR-26 seed42` 处把计数清零。虽然计数已超过 5，但当前仍有直接服务于人类新增“权重坍塌”主线的未测试结构思路，因此按规则继续执行而不暂停询问。） |
+| 连续 discard 计数 | 21（自 `DFR-26 seed123` 起至 `DFR-46 shared confidence head` 连续为 discard；上一轮 keep 已在 `DFR-26 seed42` 处把计数清零。虽然计数已超过 5，但当前仍有直接服务于人类新增“权重坍塌”主线的未测试结构思路，因此按规则继续执行而不暂停询问。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
