@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpus-per-run", type=int, default=12)
     parser.add_argument("--max-parallel", type=int, default=3)
     parser.add_argument("--min-free-gb", type=float, default=20.0)
+    parser.add_argument("--max-gpu-utilization", type=float, default=20.0)
     parser.add_argument(
         "--launcher",
         choices=("direct", "srun"),
@@ -78,7 +79,11 @@ def build_specs(configs: list[str]) -> list[RunSpec]:
     return specs
 
 
-def check_visible_gpus(min_count: int, min_free_gb: float) -> None:
+def check_visible_gpus(
+    min_count: int,
+    min_free_gb: float,
+    max_gpu_utilization: float,
+) -> None:
     command = [
         "nvidia-smi",
         "--query-gpu=index,name,memory.free,memory.total,utilization.gpu",
@@ -119,14 +124,25 @@ def check_visible_gpus(min_count: int, min_free_gb: float) -> None:
         if line is None:
             print(f"warning: nvidia-smi did not report gpu index {index}")
             continue
-        free_match = re.search(r"([0-9.]+)\s+MiB", line)
+        parts = [part.strip() for part in line.split(",")]
+        free_match = re.search(r"([0-9.]+)\s+MiB", parts[2] if len(parts) > 2 else line)
         if free_match is None:
             print(f"warning: unable to parse free memory from nvidia-smi line: {line}")
             continue
+        util_match = re.search(r"([0-9.]+)\s*%", parts[4] if len(parts) > 4 else line)
+        if util_match is None:
+            print(f"warning: unable to parse GPU utilization from nvidia-smi line: {line}")
+            continue
         free_gb = float(free_match.group(1)) / 1024
+        utilization = float(util_match.group(1))
         if free_gb < min_free_gb:
             raise SystemExit(
                 f"GPU {index} has only {free_gb:.2f} GiB free; need {min_free_gb:.2f} GiB."
+            )
+        if utilization > max_gpu_utilization:
+            raise SystemExit(
+                f"GPU {index} utilization is {utilization:.1f}%; "
+                f"need <= {max_gpu_utilization:.1f}% before launching formal validation."
             )
 
 
@@ -390,7 +406,11 @@ def main() -> int:
     gpu_ids = list(range(min(len(specs), args.max_parallel)))
     print(f"gpu_ids={gpu_ids}")
     if not args.dry_run:
-        check_visible_gpus(min(len(specs), args.max_parallel), args.min_free_gb)
+        check_visible_gpus(
+            min(len(specs), args.max_parallel),
+            args.min_free_gb,
+            args.max_gpu_utilization,
+        )
         check_cuda_lanes(args, gpu_ids)
 
     preflight = [
