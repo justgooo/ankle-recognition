@@ -77,7 +77,16 @@ def check_visible_gpus(min_count: int, min_free_gb: float) -> None:
         raise SystemExit(f"Need at least {min_count} visible GPUs, got {count}.")
     min_free_bytes = min_free_gb * 1024**3
     for index in range(count):
-        free_bytes, total_bytes = torch.cuda.mem_get_info(index)
+        try:
+            torch.cuda.set_device(index)
+            free_bytes, total_bytes = torch.cuda.mem_get_info()
+        except RuntimeError as exc:
+            print(
+                f"warning: unable to query CUDA memory for gpu={index}; "
+                f"continuing because Slurm already granted {count} visible GPUs. {exc}",
+                flush=True,
+            )
+            continue
         free_gb = free_bytes / 1024**3
         total_gb = total_bytes / 1024**3
         print(
