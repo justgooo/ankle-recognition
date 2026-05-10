@@ -1,14 +1,16 @@
 # Fast proxy config for the current main autoresearch lane.
-# Human-directed mainline: DFR-48 ResNeXt 256x8 learned decision fusion.
+# Human-directed mainline: DFR-49 ResNeXt 256x8 learned decision fusion.
 # Shortens only the epoch budget for smoke tests.
-experiment_name: autoresearch_proxy_dfr48_relative_confidence_features
-output_dir: runs/autoresearch_proxy_dfr48_relative_confidence_features
+experiment_name: autoresearch_proxy_dfr49_gate_view_prior_debias
+output_dir: runs/autoresearch_proxy_dfr49_gate_view_prior_debias
 seed: 42
 
 runtime_env:
   ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
   ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
-  ANKLE_DECISION_USE_RELATIVE_CONFIDENCE_FEATURES: "1"
+  ANKLE_DECISION_ENABLE_GATE_VIEW_PRIOR_DEBIAS: "1"
+  ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH: "1.0"
+  ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MOMENTUM: "0.1"
 
 data:
   csv_path: data/realdata/metadata.csv

@@ -714,6 +714,44 @@ class GateLogitRMSLimiter(nn.Module):
         return mean_confidence + centered * scale
 
 
+class GateViewPriorDebiaser(nn.Module):
+    """Remove persistent per-view reliability-logit offsets before softmax."""
+
+    def __init__(self, strength: float = 1.0, momentum: float = 0.1) -> None:
+        super().__init__()
+        if not (0.0 <= strength <= 1.0):
+            raise ValueError("strength must be in [0, 1].")
+        if not (0.0 < momentum <= 1.0):
+            raise ValueError("momentum must be in (0, 1].")
+        self.strength = float(strength)
+        self.momentum = float(momentum)
+        self.register_buffer("running_centered_prior", torch.zeros(1, 3, 1))
+
+    def forward(self, confidences: torch.Tensor) -> torch.Tensor:
+        if confidences.ndim != 3 or confidences.shape[-1] != 1:
+            raise ValueError("confidences must have shape (batch, views, 1).")
+        if confidences.shape[1] != self.running_centered_prior.shape[1]:
+            raise ValueError("GateViewPriorDebiaser is configured for exactly 3 views.")
+
+        if self.training:
+            view_prior = confidences.detach().mean(dim=0, keepdim=True)
+            centered_prior = view_prior - view_prior.mean(dim=1, keepdim=True)
+            self.running_centered_prior.lerp_(
+                centered_prior.to(
+                    device=self.running_centered_prior.device,
+                    dtype=self.running_centered_prior.dtype,
+                ),
+                self.momentum,
+            )
+            prior = centered_prior
+        else:
+            prior = self.running_centered_prior.to(
+                device=confidences.device,
+                dtype=confidences.dtype,
+            )
+        return confidences - self.strength * prior
+
+
 class RelativeViewReliabilityGate(nn.Module):
     """Residual reliability-logit correction from sample-wise relative view features."""
 
@@ -1044,6 +1082,17 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_LOGIT_MAX_CENTERED_RMS",
             1.3,
         )
+        self.enable_gate_view_prior_debias = _env_flag(
+            "ANKLE_DECISION_ENABLE_GATE_VIEW_PRIOR_DEBIAS"
+        )
+        self.gate_view_prior_debias_strength = _env_unit_float(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_STRENGTH",
+            1.0,
+        )
+        self.gate_view_prior_debias_momentum = _env_unit_float(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_MOMENTUM",
+            0.1,
+        )
         self.use_shared_confidence_head = _env_flag(
             "ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD"
         )
@@ -1268,6 +1317,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 if self.enable_gate_logit_rms_limit:
                     self.gate_logit_rms_limiter = GateLogitRMSLimiter(
                         max_centered_rms=self.gate_logit_max_centered_rms,
+                    )
+                if self.enable_gate_view_prior_debias:
+                    self.gate_view_prior_debiaser = GateViewPriorDebiaser(
+                        strength=self.gate_view_prior_debias_strength,
+                        momentum=self.gate_view_prior_debias_momentum,
                     )
                 if self.enable_relative_view_gate:
                     self.relative_view_gate = RelativeViewReliabilityGate(
@@ -1848,6 +1902,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 )
             if self.enable_gate_logit_rms_limit:
                 confidences = self.gate_logit_rms_limiter(confidences)
+            if self.enable_gate_view_prior_debias:
+                confidences = self.gate_view_prior_debiaser(confidences)
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
         if (
