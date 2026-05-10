@@ -1,8 +1,6 @@
-# Formal config for slot 0 (GPU index=0).
-# Mirrors the current DFR-46 ResNeXt 256x8 mainline with an independent
-# output_dir.
-experiment_name: autoresearch_formal_slot0_dfr46_shared_confidence_head
-output_dir: runs/autoresearch_formal_slot0_dfr46_shared_confidence_head
+# DFR-46 proxy smoke: same structure as formal, shortened epoch budget.
+experiment_name: cmp_resnext_decision_256x8_dfr46_shared_confidence_head_proxy_s42
+output_dir: runs/resnext_decision_256x8_mainline/dfr46_shared_confidence_head_proxy_s42
 seed: 42
 
 runtime_env:
@@ -33,7 +31,7 @@ model:
   use_attention_pooling: false
 
 train:
-  epochs: 15
+  epochs: 4
   lr: 1.0e-4
   weight_decay: 2.5e-4
   class_weight: true

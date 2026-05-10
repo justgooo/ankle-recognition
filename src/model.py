@@ -1012,6 +1012,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_LOGIT_MAX_CENTERED_RMS",
             1.3,
         )
+        self.use_shared_confidence_head = _env_flag(
+            "ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD"
+        )
         self.gate_teacher_blend = _env_unit_float(
             "ANKLE_DECISION_GATE_TEACHER_BLEND",
             0.0,
@@ -1196,15 +1199,18 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         dropout=0.1,
                         residual_scale=0.125,
                     )
-                self.confidence_heads = nn.ModuleList(
-                    [
-                        nn.Sequential(
-                            nn.LayerNorm(self.feature_dim),
-                            nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
-                        )
-                        for _ in range(3)
-                    ]
-                )
+                def make_confidence_head() -> nn.Sequential:
+                    return nn.Sequential(
+                        nn.LayerNorm(self.feature_dim),
+                        nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
+                    )
+
+                if self.use_shared_confidence_head:
+                    self.shared_confidence_head = make_confidence_head()
+                else:
+                    self.confidence_heads = nn.ModuleList(
+                        [make_confidence_head() for _ in range(3)]
+                    )
                 if not self.disable_fusion_calibrator:
                     self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
                         feature_dim=self.feature_dim,
@@ -1761,7 +1767,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
                 gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
             calibrated_confidences = []
-            for head, feature in zip(self.confidence_heads, gating_features):
+            if self.use_shared_confidence_head:
+                confidence_heads = [self.shared_confidence_head for _ in gating_features]
+            else:
+                confidence_heads = self.confidence_heads
+            for head, feature in zip(confidence_heads, gating_features):
                 raw_confidence = head(feature)
                 if self.disable_fusion_calibrator:
                     calibrated_confidences.append(raw_confidence)

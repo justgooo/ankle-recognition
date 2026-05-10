@@ -1,8 +1,7 @@
-# Formal config for slot 0 (GPU index=0).
-# Mirrors the current DFR-46 ResNeXt 256x8 mainline with an independent
-# output_dir.
-experiment_name: autoresearch_formal_slot0_dfr46_shared_confidence_head
-output_dir: runs/autoresearch_formal_slot0_dfr46_shared_confidence_head
+# DFR-46: minimal internal anti-collapse repair for decision-fusion gate bias.
+# Forks DFR-25 exactly and only shares the reliability scorer across views.
+experiment_name: cmp_resnext_decision_256x8_dfr46_shared_confidence_head_formal_s42
+output_dir: runs/resnext_decision_256x8_mainline/dfr46_shared_confidence_head_formal_s42
 seed: 42
 
 runtime_env:

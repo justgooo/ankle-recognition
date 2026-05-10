@@ -28,6 +28,13 @@
 - **fusion-weight 结论**：[fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr45_gate_logit_rms_limit_formal_s42/fusion_weight_analysis.json) 显示 DFR-45 没有解决本项目的权重坍塌。mean fusion weight 虽从 DFR-25 seed42 的近 hard axial 稍降到 `axial/coronal/sagittal = 0.8801514861431528 / 0.05246829055249691 / 0.06738022148133592`，但 `top_weight_view_distribution` 仍是 `axial=94, coronal=0, sagittal=0`；也就是说，RMS limiter 只是压缩了 logit 尺度，没有改变 routing ordering。
 - **当前判断**：DFR-45 是机制上合格但结果失败的最小内部结构修复。它证明“只限制 gate-logit concentration、保留原始 view ranking”不足以把 non-axial evidence 推入决策；下一轮若继续做最小网络改动，应直接减少 view-specific gate bias 或让 reliability scorer 在三视角之间共享判别规则，而不是继续单纯压 softmax 尺度。
 
+> **DFR-46 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-45 表明单纯压缩 confidence logits 不会改变 axial top-rank；DFR-46 改成三视角共享同一个 confidence head，让 gate 不能再靠每个视角各自的 head 参数学出固定 axial bias，只能用视角 pooled feature 本身的证据差异来排序。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到或保持在 matched equal-weight 之上？因为它仍然是 sample-wise learned weighting，不固定平均，也不注入 noisy teacher evidence；它只移除 view-specific reliability scorer 的自由度，预期能降低 seed42 的 axial lock-in，同时保留 DFR-25 的 dominant-gate dropout 训练收益。
+> - 它是可复用 learned weighting 机制还是固定权重？是 learned weighting 机制。shared head 仍对每个样本和每个视角分别输出 reliability logit，只是三视角共享打分规则。
+
+- [ ] **DFR-46-RESNEXT-DECISION-256X8-SHARED-CONFIDENCE-HEAD-MAIN-S42**：在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD=1`，使 non-equal learned decision fusion 的三个 reliability heads 变为一个共享 `LayerNorm + Linear` scorer；运行配置为 [configs/cmp_resnext_decision_256x8_dfr46_shared_confidence_head_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr46_shared_confidence_head_formal_s42.yaml) 与当前 `configs/autoresearch_formal*.yaml`。设计思路：最小化 gate 内部结构改动，直接削弱 view-specific scorer 学出的固定 axial logit bias，而不是改变 classifier、backbone、融合语义或训练标量。预计改进效果：seed42 的 `top_weight axial=94/94` 应至少出现少量 coronal/sagittal top-weight 或 near-top routing；若 non-axial expert 的证据质量不足，accuracy 不应明显低于 matched equal-weight seed42。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1037,7 +1044,7 @@
 |------|-----|
 | 上次实验 | `DFR-45 gate-logit RMS limiter`：从 `DFR-25` fork，只在 decision-fusion reliability logits softmax 前新增 centered-RMS 限幅，Slurm job `481787` 已在 `RTXA6Kq/node16` 完成，权重 telemetry job `481797` 已补齐。 |
 | 上次结果 | **discard**。best `val_acc=0.9148936170212766`, `val_auc=0.9772727272727273`, `val_f1=0.9111111111111111`，低于 DFR-25 seed42 与 matched equal-weight seed42。fusion telemetry 为 mean weight `0.8802 / 0.0525 / 0.0674`，但 top-weight 仍 `axial=94/94`，说明只压 logit 尺度不能改变 residual axial lock-in 的 routing ordering。 |
-| 下一步 | 继续按人类新增主线处理“本项目产生了权重坍塌”。下一轮仍从 `DFR-25` fork，优先测试更小但能改变 routing ordering 的 gate 内部结构，例如 **shared reliability scorer / shared confidence head**，直接削弱 view-specific gate head 学出的固定 axial 偏置，而不是继续扩大 evidence-aware residual gate 或单纯压缩 softmax 尺度。 |
+| 下一步 | DFR-46 已作为下一轮候选写入 backlog：从 `DFR-25` fork，开启 `ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD=1`，测试 shared reliability scorer 是否能在不固定平均权重、不引入 teacher evidence 的情况下改变 seed42 的 axial lock-in routing ordering。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 20（自 `DFR-26 seed123` 起至 `DFR-45 gate-logit RMS limiter` 连续为 discard；上一轮 keep 已在 `DFR-26 seed42` 处把计数清零。虽然计数已超过 5，但当前仍有直接服务于人类新增“权重坍塌”主线的未测试结构思路，因此按规则继续执行而不暂停询问。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |

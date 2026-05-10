@@ -1,15 +1,14 @@
 # Proxy config for slot 0 (GPU index=0).
-# Mirrors the current DFR-45 ResNeXt 256x8 mainline with an independent
+# Mirrors the current DFR-46 ResNeXt 256x8 mainline with an independent
 # output_dir and shortened epoch budget.
-experiment_name: autoresearch_proxy_slot0_dfr45_gate_logit_rms_limit
-output_dir: runs/autoresearch_proxy_slot0_dfr45_gate_logit_rms_limit
+experiment_name: autoresearch_proxy_slot0_dfr46_shared_confidence_head
+output_dir: runs/autoresearch_proxy_slot0_dfr46_shared_confidence_head
 seed: 42
 
 runtime_env:
   ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
   ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
-  ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT: "1"
-  ANKLE_DECISION_GATE_LOGIT_MAX_CENTERED_RMS: "1.3"
+  ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD: "1"
 
 data:
   csv_path: data/realdata/metadata.csv
