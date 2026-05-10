@@ -37,6 +37,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpus-per-run", type=int, default=12)
     parser.add_argument("--max-parallel", type=int, default=3)
     parser.add_argument("--min-free-gb", type=float, default=20.0)
+    parser.add_argument(
+        "--launcher",
+        choices=("direct", "srun"),
+        default="direct",
+        help=(
+            "Launch per-seed processes directly inside the Slurm allocation, "
+            "or as nested srun steps."
+        ),
+    )
     parser.add_argument("--log-dir", default="autoresearch_logs/dfr44_evidence_gate_multiseed")
     parser.add_argument("--skip-telemetry", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -126,35 +135,100 @@ def srun_lane_prefix(gpu_id: int, cpus: int, output_path: Path | None = None) ->
     return command
 
 
-def check_srun_cuda(args: argparse.Namespace, gpu_ids: list[int]) -> None:
+def cuda_lane_env(gpu_id: int) -> dict[str, str]:
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    return env
+
+
+def cuda_probe_command(args: argparse.Namespace) -> list[str]:
+    return [
+        args.python,
+        "-c",
+        (
+            "import os, sys, torch; "
+            "available=torch.cuda.is_available(); "
+            "count=torch.cuda.device_count(); "
+            "print(f\"step_cuda_visible={os.environ.get('CUDA_VISIBLE_DEVICES')}\"); "
+            "print(f'step_cuda_available={available}'); "
+            "print(f'step_device_count={count}'); "
+            "sys.exit(0 if available and count >= 1 else 2)"
+        ),
+    ]
+
+
+def lane_command(
+    args: argparse.Namespace,
+    gpu_id: int,
+    cpus: int,
+    output_path: Path | None,
+    payload: list[str],
+) -> tuple[list[str], dict[str, str] | None]:
+    if args.launcher == "srun":
+        return [*srun_lane_prefix(gpu_id, cpus, output_path), *payload], None
+    return payload, cuda_lane_env(gpu_id)
+
+
+def check_cuda_lanes(args: argparse.Namespace, gpu_ids: list[int]) -> None:
     for gpu_id in gpu_ids:
-        command = [
-            *srun_lane_prefix(gpu_id, 1),
-            args.python,
-            "-c",
-            (
-                "import os, sys, torch; "
-                "available=torch.cuda.is_available(); "
-                "count=torch.cuda.device_count(); "
-                "print(f\"step_cuda_visible={os.environ.get('CUDA_VISIBLE_DEVICES')}\"); "
-                "print(f'step_cuda_available={available}'); "
-                "print(f'step_device_count={count}'); "
-                "sys.exit(0 if available and count >= 1 else 2)"
-            ),
-        ]
-        print(command_text(command))
-        result = subprocess.run(command, cwd=REPO_ROOT, check=False)
+        command, env = lane_command(
+            args=args,
+            gpu_id=gpu_id,
+            cpus=1,
+            output_path=None,
+            payload=cuda_probe_command(args),
+        )
+        print(
+            command_text(
+                command
+                if args.launcher == "srun"
+                else ["env", f"CUDA_VISIBLE_DEVICES={gpu_id}", *command]
+            )
+        )
+        result = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            env=env,
+            check=False,
+        )
         if result.returncode != 0:
             raise SystemExit(
-                f"Slurm GPU lane probe failed for CUDA_VISIBLE_DEVICES={gpu_id}; "
+                f"CUDA lane probe failed for CUDA_VISIBLE_DEVICES={gpu_id}; "
                 "refusing to launch a CPU-only training run."
             )
 
 
+def print_launch_command(command: list[str], gpu_id: int, launcher: str) -> None:
+    if launcher == "srun":
+        print(command_text(command))
+    else:
+        print(command_text(["env", f"CUDA_VISIBLE_DEVICES={gpu_id}", *command]))
+
+
+def run_with_optional_log(
+    command: list[str],
+    env: dict[str, str] | None,
+    log_path: Path,
+    launcher: str,
+) -> int:
+    if launcher == "srun":
+        result = subprocess.run(command, cwd=REPO_ROOT, check=False)
+    else:
+        with log_path.open("w", encoding="utf-8") as handle:
+            result = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                env=env,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+    return int(result.returncode)
+
+
 def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: int) -> int:
     log_path = log_dir / f"seed{spec.seed}_train.log"
-    command = [
-        *srun_lane_prefix(gpu_id, args.cpus_per_run, log_path),
+    payload = [
         args.python,
         "scripts/run_train_with_config_env.py",
         "--config",
@@ -162,22 +236,28 @@ def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: i
         "--python",
         args.python,
     ]
+    command, env = lane_command(
+        args=args,
+        gpu_id=gpu_id,
+        cpus=args.cpus_per_run,
+        output_path=log_path,
+        payload=payload,
+    )
     print(
         f"launch seed={spec.seed} gpu_id={gpu_id} "
         f"config={repo_relative(spec.config_path)}"
     )
-    print(command_text(command))
+    print_launch_command(command, gpu_id, args.launcher)
     if args.dry_run:
         return 0
-    result = subprocess.run(command, cwd=REPO_ROOT, check=False)
-    print(f"train seed={spec.seed} exit={result.returncode} log={repo_relative(log_path)}")
-    return int(result.returncode)
+    status = run_with_optional_log(command, env, log_path, args.launcher)
+    print(f"train seed={spec.seed} exit={status} log={repo_relative(log_path)}")
+    return status
 
 
 def run_telemetry(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: int) -> int:
     log_path = log_dir / f"seed{spec.seed}_telemetry.log"
-    command = [
-        *srun_lane_prefix(gpu_id, max(1, args.cpus_per_run // 4), log_path),
+    payload = [
         args.python,
         "scripts/analyze_fusion_weights.py",
         "--config",
@@ -185,13 +265,20 @@ def run_telemetry(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id
         "--checkpoint",
         repo_relative(spec.output_dir / "best.pt"),
     ]
+    command, env = lane_command(
+        args=args,
+        gpu_id=gpu_id,
+        cpus=max(1, args.cpus_per_run // 4),
+        output_path=log_path,
+        payload=payload,
+    )
     print(f"telemetry seed={spec.seed} gpu_id={gpu_id}")
-    print(command_text(command))
+    print_launch_command(command, gpu_id, args.launcher)
     if args.dry_run:
         return 0
-    result = subprocess.run(command, cwd=REPO_ROOT, check=False)
-    print(f"telemetry seed={spec.seed} exit={result.returncode} log={repo_relative(log_path)}")
-    return int(result.returncode)
+    status = run_with_optional_log(command, env, log_path, args.launcher)
+    print(f"telemetry seed={spec.seed} exit={status} log={repo_relative(log_path)}")
+    return status
 
 
 def read_result(spec: RunSpec) -> dict[str, Any]:
@@ -275,7 +362,7 @@ def main() -> int:
     print(f"gpu_ids={gpu_ids}")
     if not args.dry_run:
         check_visible_gpus(min(len(specs), args.max_parallel), args.min_free_gb)
-        check_srun_cuda(args, gpu_ids)
+        check_cuda_lanes(args, gpu_ids)
 
     preflight = [
         args.python,
