@@ -1,8 +1,6 @@
-# Fast proxy config for the current main autoresearch lane.
-# Human-directed mainline: DFR-47 ResNeXt 256x8 learned decision fusion.
-# Shortens only the epoch budget for smoke tests.
-experiment_name: autoresearch_proxy_dfr47_relative_view_gate
-output_dir: runs/autoresearch_proxy_dfr47_relative_view_gate
+# DFR-47 proxy: same relative-view gate repair, shorter diagnostic lane.
+experiment_name: cmp_resnext_decision_256x8_dfr47_relative_view_gate_proxy_s42
+output_dir: runs/resnext_decision_256x8_mainline/dfr47_relative_view_gate_proxy_s42
 seed: 42
 
 runtime_env:

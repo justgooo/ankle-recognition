@@ -37,6 +37,13 @@
 - **fusion-weight 结论**：[fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr46_shared_confidence_head_formal_s42/fusion_weight_analysis.json) 显示 shared head 仍未解决权重坍塌。mean fusion weight 为 `axial/coronal/sagittal = 0.8947559893131256 / 0.06149472054490383 / 0.04374929251981542`，`top_weight_view_distribution` 仍是 `axial=94, coronal=0, sagittal=0`；虽然 `top_true_margin` 中有 `coronal=4, sagittal=5` 的样本，gate 仍没有一次把 top-weight 给到 non-axial。
 - **当前判断**：DFR-46 证明只把 scorer 参数共享还不够；view pooled features 本身仍携带强 view-specific offset，shared linear scorer 仍能把 axial 排在所有样本 top。下一轮最小结构修复应进一步让 gate scorer 看 **relative view feature**（例如 `feature_i - mean(feature_all)`）或直接在 scorer 前做跨视角去均值，使 gate 排序更依赖样本内相对证据，而不是每个视角固定分布。
 
+> **DFR-47 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-46 表明 gate 的坍塌不只来自 view-specific head 参数，还来自 pooled feature 的固定视角分布 offset；DFR-47 在 reliability path 里加入 `feature_i - mean(feature_all)` 的相对特征 residual，让 gate correction 专门看同一样本内哪个视角相对更有证据。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到或保持在 matched equal-weight 之上？因为它仍保留 DFR-25 原始 learned logits 和 dominant-gate dropout，只用 identity-initialized 小 residual 修正 routing ordering；预期在 non-axial true-margin 样本上给 coronal/sagittal 少量 top/near-top 机会，同时不把全部样本机械拉平均。
+> - 它是可复用 learned weighting 机制还是固定权重？是 learned weighting 机制。relative-view gate 对每个样本、每个视角输出 residual reliability logit，权重仍由 softmax 学出，不指定固定 axial/coronal/sagittal 比例。
+
+- [ ] **DFR-47-RESNEXT-DECISION-256X8-RELATIVE-VIEW-GATE-MAIN-S42**：在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE=1`，对 gating features 做 sample-wise 去均值后用低容量、零初始化 residual gate 输出 reliability-logit correction；运行配置为 [configs/cmp_resnext_decision_256x8_dfr47_relative_view_gate_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr47_relative_view_gate_formal_s42.yaml) 与当前 `configs/autoresearch_formal*.yaml`。设计思路：最小化 gate 内部结构改动，直接削弱固定视角 feature offset 造成的 axial 排序优势，而不是改变 backbone、classifier、融合语义或训练标量。预计改进效果：seed42 的 `top_weight axial=94/94` 应至少出现少量 non-axial top/near-top routing；若 non-axial feature 质量不足，accuracy 至少应守住 matched equal-weight seed42 附近。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1046,7 +1053,7 @@
 |------|-----|
 | 上次实验 | `DFR-46 shared confidence head`：从 `DFR-25` fork，只把三个 view-specific reliability heads 改成一个共享 `LayerNorm + Linear` scorer，Slurm job `481809` 已在 `RTXA6Kq/node16` 完成，权重 telemetry job `481813` 已补齐。 |
 | 上次结果 | **discard**。best `val_acc=0.9255319148936170`, `val_auc=0.9754545454545455`, `val_f1=0.9156626506024096`，只打平 matched equal-weight seed42，低于 DFR-25 seed42。fusion telemetry 为 mean weight `0.8948 / 0.0615 / 0.0437`，top-weight 仍 `axial=94/94`，说明参数共享不能去掉 pooled-feature 自带的视角偏置。 |
-| 下一步 | 继续按人类新增“权重坍塌”主线，从 `DFR-25` fork 做更小但更直接的 gate 内部结构修复：让 reliability scorer 在打分前使用 sample-wise relative view feature（例如 `feature_i - mean(feature_all)`），削弱固定视角分布 offset，而不是继续单纯共享 head 或压缩 softmax 尺度。 |
+| 下一步 | DFR-47 已作为下一轮候选写入 backlog：从 `DFR-25` fork，开启 `ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE=1`，测试 sample-wise relative view feature residual 是否能削弱固定视角分布 offset，并改变 seed42 的 axial lock-in routing ordering。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 21（自 `DFR-26 seed123` 起至 `DFR-46 shared confidence head` 连续为 discard；上一轮 keep 已在 `DFR-26 seed42` 处把计数清零。虽然计数已超过 5，但当前仍有直接服务于人类新增“权重坍塌”主线的未测试结构思路，因此按规则继续执行而不暂停询问。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |

@@ -714,6 +714,38 @@ class GateLogitRMSLimiter(nn.Module):
         return mean_confidence + centered * scale
 
 
+class RelativeViewReliabilityGate(nn.Module):
+    """Residual reliability-logit correction from sample-wise relative view features."""
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        bottleneck_dim: int = 32,
+        residual_limit: float = 0.75,
+        dropout: float = 0.05,
+    ) -> None:
+        super().__init__()
+        if residual_limit <= 0.0:
+            raise ValueError("residual_limit must be > 0.")
+        self.norm = nn.LayerNorm(feature_dim)
+        self.adapter = nn.Sequential(
+            nn.Linear(feature_dim, bottleneck_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(bottleneck_dim, 1),
+        )
+        self.residual_limit = float(residual_limit)
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        relative_features = view_features - view_features.mean(dim=1, keepdim=True)
+        residual = self.adapter(self.norm(relative_features))
+        return self.residual_limit * torch.tanh(residual)
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -1015,6 +1047,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.use_shared_confidence_head = _env_flag(
             "ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD"
         )
+        self.enable_relative_view_gate = _env_flag(
+            "ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE"
+        )
+        self.relative_view_gate_residual_limit = _env_positive_float(
+            "ANKLE_DECISION_RELATIVE_VIEW_GATE_RESIDUAL_LIMIT",
+            0.75,
+        )
         self.gate_teacher_blend = _env_unit_float(
             "ANKLE_DECISION_GATE_TEACHER_BLEND",
             0.0,
@@ -1226,6 +1265,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 if self.enable_gate_logit_rms_limit:
                     self.gate_logit_rms_limiter = GateLogitRMSLimiter(
                         max_centered_rms=self.gate_logit_max_centered_rms,
+                    )
+                if self.enable_relative_view_gate:
+                    self.relative_view_gate = RelativeViewReliabilityGate(
+                        feature_dim=self.feature_dim,
+                        residual_limit=self.relative_view_gate_residual_limit,
                     )
         if self.enable_view_logit_temperature:
             self.view_logit_temperature_calibrator = PerViewLogitTemperatureCalibrator(
@@ -1785,6 +1829,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 confidences = confidences + self.evidence_aware_gate(
                     evidence_gate_features,
                     view_logits,
+                )
+            if self.enable_relative_view_gate:
+                relative_gate_features = torch.stack(gating_features, dim=1)
+                confidences = confidences + self.relative_view_gate(
+                    relative_gate_features
                 )
             if self.enable_gate_logit_rms_limit:
                 confidences = self.gate_logit_rms_limiter(confidences)

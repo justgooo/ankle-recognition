@@ -1,8 +1,7 @@
-# Fast proxy config for the current main autoresearch lane.
-# Human-directed mainline: DFR-47 ResNeXt 256x8 learned decision fusion.
-# Shortens only the epoch budget for smoke tests.
-experiment_name: autoresearch_proxy_dfr47_relative_view_gate
-output_dir: runs/autoresearch_proxy_dfr47_relative_view_gate
+# DFR-47: minimal internal anti-collapse repair using relative view features.
+# Forks DFR-25 exactly and adds an identity-initialized relative-view gate residual.
+experiment_name: cmp_resnext_decision_256x8_dfr47_relative_view_gate_formal_s42
+output_dir: runs/resnext_decision_256x8_mainline/dfr47_relative_view_gate_formal_s42
 seed: 42
 
 runtime_env:
@@ -34,7 +33,7 @@ model:
   use_attention_pooling: false
 
 train:
-  epochs: 4
+  epochs: 15
   lr: 1.0e-4
   weight_decay: 2.5e-4
   class_weight: true
