@@ -29,6 +29,28 @@ BUNDLED_PYTHON_CANDIDATES = [
 DEFAULT_FAILED_SCORE = -1.0
 VALID_TRIAL_STATUSES = {"completed"}
 VALID_TAIL_FILL_MODES = {"auto", "always", "never"}
+STUDY_CONTROL_KEYS = {
+    "base_config",
+    "direction",
+    "enqueue_current_template",
+    "enqueue_trials",
+    "env",
+    "failed_score",
+    "name",
+    "n_trials",
+    "objective_metric",
+    "phase",
+    "pruner",
+    "rewrite_dataset_csv",
+    "sampler",
+    "sampler_seed",
+    "startup_trials",
+    "study_root",
+    "tail_fill",
+    "timeout_minutes",
+    "trial_timeout_minutes",
+    "validate_dataset",
+}
 FAILURE_PATTERNS = {
     "oom": (
         "out of memory",
@@ -1315,6 +1337,50 @@ def enqueue_source_trials(study, source_study_dir: Path, top_k: int, search_spac
             study.enqueue_trial(filtered)
 
 
+def normalize_enqueued_trial(raw_trial: Any, trial_index: int) -> dict[str, Any]:
+    if not isinstance(raw_trial, dict):
+        raise ValueError(
+            f"study.enqueue_trials[{trial_index}] must be a mapping, got {type(raw_trial).__name__}."
+        )
+    if "params" in raw_trial:
+        raw_params = raw_trial["params"]
+        if not isinstance(raw_params, dict):
+            raise ValueError(
+                f"study.enqueue_trials[{trial_index}].params must be a mapping, "
+                f"got {type(raw_params).__name__}."
+            )
+        return dict(raw_params)
+    return dict(raw_trial)
+
+
+def enqueue_configured_trials(study, study_cfg: dict[str, Any], search_space: dict[str, Any]) -> None:
+    raw_trials = study_cfg.get("enqueue_trials") or []
+    if not isinstance(raw_trials, list):
+        raise ValueError(f"study.enqueue_trials must be a list, got {type(raw_trials).__name__}.")
+
+    search_keys = set(search_space)
+    allowed_keys = search_keys | STUDY_CONTROL_KEYS | {"params", "note", "description"}
+    for trial_index, raw_trial in enumerate(raw_trials):
+        params = normalize_enqueued_trial(raw_trial, trial_index)
+        unknown_keys = set(params) - search_keys
+        if unknown_keys:
+            raise ValueError(
+                f"study.enqueue_trials[{trial_index}] contains key(s) not present in search_space: "
+                f"{sorted(unknown_keys)}. Add them to search_space or move metadata outside params."
+            )
+        if params:
+            study.enqueue_trial(params)
+
+        if not isinstance(raw_trial, dict):
+            continue
+        unknown_metadata = set(raw_trial) - allowed_keys
+        if unknown_metadata:
+            raise ValueError(
+                f"study.enqueue_trials[{trial_index}] contains unsupported metadata key(s): "
+                f"{sorted(unknown_metadata)}."
+            )
+
+
 def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     valid = [
         record
@@ -1476,6 +1542,8 @@ def prepare_study(
     )
     if bool(study_cfg.get("enqueue_current_template", True)) and existing_trials == 0:
         enqueue_template_trial(study, preflight_config, search_space)
+    if existing_trials == 0:
+        enqueue_configured_trials(study, study_cfg, search_space)
     if resolved_source_study and top_k > 0 and existing_trials == 0:
         enqueue_source_trials(study, resolved_source_study, top_k, search_space)
     save_json(
