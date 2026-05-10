@@ -831,6 +831,65 @@ class RelativeViewReliabilityGate(nn.Module):
         return self.residual_limit * torch.tanh(residual)
 
 
+class GateTransformerContextualizer(nn.Module):
+    """Gate-only Transformer context over the three view tokens.
+
+    The residual projection starts at zero, so enabling the module initially
+    preserves the DFR-25 gate path and only learns a small cross-view correction
+    for reliability scoring.
+    """
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        attention_dim: int = 128,
+        num_heads: int = 4,
+        num_layers: int = 1,
+        dropout: float = 0.05,
+        residual_scale: float = 0.2,
+    ) -> None:
+        super().__init__()
+        if attention_dim <= 0:
+            raise ValueError("attention_dim must be > 0.")
+        if num_heads <= 0:
+            raise ValueError("num_heads must be > 0.")
+        if num_layers <= 0:
+            raise ValueError("num_layers must be > 0.")
+        if attention_dim % num_heads != 0:
+            raise ValueError("attention_dim must be divisible by num_heads.")
+        if residual_scale <= 0.0:
+            raise ValueError("residual_scale must be > 0.")
+
+        self.input_norm = nn.LayerNorm(feature_dim)
+        self.input_proj = nn.Linear(feature_dim, attention_dim)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=attention_dim,
+            nhead=num_heads,
+            dim_feedforward=attention_dim * 2,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_layers,
+        )
+        self.output_proj = nn.Linear(attention_dim, feature_dim)
+        self.residual_scale = float(residual_scale)
+        nn.init.zeros_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        relative_features = view_features - view_features.mean(dim=1, keepdim=True)
+        tokens = self.input_proj(self.input_norm(relative_features))
+        contextual_tokens = self.encoder(tokens)
+        residual = self.output_proj(contextual_tokens)
+        return view_features + self.residual_scale * residual
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -1165,6 +1224,29 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_RELATIVE_VIEW_GATE_RESIDUAL_LIMIT",
             0.75,
         )
+        self.enable_gate_transformer_context = _env_flag(
+            "ANKLE_DECISION_ENABLE_GATE_TRANSFORMER_CONTEXT"
+        )
+        self.gate_transformer_attention_dim = _env_positive_int(
+            "ANKLE_DECISION_GATE_TRANSFORMER_ATTENTION_DIM",
+            128,
+        )
+        self.gate_transformer_num_heads = _env_positive_int(
+            "ANKLE_DECISION_GATE_TRANSFORMER_NUM_HEADS",
+            4,
+        )
+        self.gate_transformer_num_layers = _env_positive_int(
+            "ANKLE_DECISION_GATE_TRANSFORMER_NUM_LAYERS",
+            1,
+        )
+        self.gate_transformer_dropout = _env_unit_float(
+            "ANKLE_DECISION_GATE_TRANSFORMER_DROPOUT",
+            0.05,
+        )
+        self.gate_transformer_residual_scale = _env_positive_float(
+            "ANKLE_DECISION_GATE_TRANSFORMER_RESIDUAL_SCALE",
+            0.2,
+        )
         self.gate_teacher_blend = _env_unit_float(
             "ANKLE_DECISION_GATE_TEACHER_BLEND",
             0.0,
@@ -1389,6 +1471,15 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     self.relative_view_gate = RelativeViewReliabilityGate(
                         feature_dim=self.feature_dim,
                         residual_limit=self.relative_view_gate_residual_limit,
+                    )
+                if self.enable_gate_transformer_context:
+                    self.gate_transformer_contextualizer = GateTransformerContextualizer(
+                        feature_dim=self.feature_dim,
+                        attention_dim=self.gate_transformer_attention_dim,
+                        num_heads=self.gate_transformer_num_heads,
+                        num_layers=self.gate_transformer_num_layers,
+                        dropout=self.gate_transformer_dropout,
+                        residual_scale=self.gate_transformer_residual_scale,
                     )
         if self.enable_view_logit_temperature:
             self.view_logit_temperature_calibrator = PerViewLogitTemperatureCalibrator(
@@ -1929,6 +2020,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             else:
                 stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
                 gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
+            if self.enable_gate_transformer_context:
+                stacked_gate_features = torch.stack(gating_features, dim=1)
+                gating_features = list(
+                    self.gate_transformer_contextualizer(stacked_gate_features).unbind(dim=1)
+                )
             confidence_features = gating_features
             if self.use_relative_confidence_features:
                 stacked_confidence_features = torch.stack(gating_features, dim=1)
