@@ -19,4 +19,4 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
 
-.venv/bin/python train.py --config "$TRAIN_CONFIG"
+.venv/bin/python scripts/run_train_with_config_env.py --config "$TRAIN_CONFIG" --python .venv/bin/python

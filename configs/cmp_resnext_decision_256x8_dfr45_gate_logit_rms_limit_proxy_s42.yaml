@@ -1,8 +1,6 @@
-# Canonical proxy config for the current DFR-45 ResNeXt-only 256x8 learned
-# decision-fusion mainline. Keeps the DFR-25 geometry/scalars and shortens
-# only the training budget for smoke tests.
-experiment_name: autoresearch_proxy_resnext_decision_256x8_dfr45_gate_logit_rms_limit
-output_dir: runs/autoresearch_proxy_resnext_decision_256x8_dfr45_gate_logit_rms_limit
+# DFR-45 proxy smoke: same structure as formal, shortened epoch budget.
+experiment_name: cmp_resnext_decision_256x8_dfr45_gate_logit_rms_limit_proxy_s42
+output_dir: runs/resnext_decision_256x8_mainline/dfr45_gate_logit_rms_limit_proxy_s42
 seed: 42
 
 runtime_env:

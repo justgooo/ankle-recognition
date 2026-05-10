@@ -12,6 +12,56 @@
 
 ---
 
+## 2026-05-10：人类主线追加（weight collapse → minimal internal structure repair）
+
+> **任务说明**
+> - 人类要求把当前 Auto Research 主线明确补上：**针对本项目特点，decision-fusion 中产生了权重坍塌**；后续改进应围绕这个要点，在网络内部处理中增加最小结构改动，以提高准确率。
+> - 本项目的具体坍塌形态不是抽象 regularization 问题，而是 `DFR-25` telemetry 暴露出的 residual axial lock-in：虽然 `DFR-25` 已经以 3-seed mean `val_acc=0.9397163120567376` 明确超过 matched equal-weight mean `0.9219858156028368`，但 `seed42/456` 仍保持 `top_weight axial=94/94`；`DFR-44` 进一步证明直接把 detached per-view evidence 注入 gate 会产生 noisy routing，不能稳定提高准确率。
+> - 因此新的主线记录为：**从 DFR-25 fork，只做 gate 内部、低容量、可开关的反坍塌结构修复**；不改 backbone family、不改 `256x8` geometry、不改 decision-fusion 语义、不改 DFR-25 winning scalar。
+
+> **自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。它直接作用于 learned reliability logits 的过度集中问题，限制单个视角在 softmax 前形成近 hard-selection 的尺度优势，目标是让 coronal/sagittal 在已有证据时不被 gate-logit 尺度压死。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到或保持在 matched equal-weight 之上？因为它不把权重固定平均，也不改 view classifier；排序仍由 learned gate 决定，只削掉过度自信的尾部坍塌。预期是保留 DFR-25 的 learned routing 收益，同时降低 `seed42/456` 的 residual axial lock-in，使 non-axial view 在少量关键样本上进入决策。
+> - 它是可复用 learned weighting 机制还是固定权重？是 learned weighting 机制。`GateLogitRMSLimiter` 只约束 gate-logit 相对尺度，不指定 axial/coronal/sagittal 的固定比例。
+
+- [ ] **DFR-45-RESNEXT-DECISION-256X8-GATE-LOGIT-RMS-LIMIT-MAIN-S42**：在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `GateLogitRMSLimiter`，通过 `ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT=1` 与 `ANKLE_DECISION_GATE_LOGIT_MAX_CENTERED_RMS=1.3` 开启；运行配置为 [configs/cmp_resnext_decision_256x8_dfr45_gate_logit_rms_limit_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr45_gate_logit_rms_limit_formal_s42.yaml) 与当前 `configs/autoresearch_formal*.yaml`。设计思路：只在 reliability logits softmax 前限制 centered RMS，保留 mean logit 与 view ranking，减少本项目中 axial gate logit 尺度过大造成的权重坍塌。预计改进效果：seed42 的 `top_weight axial` 不应再机械保持 `94/94`，但 mean axial weight 仍可保持主导；理想形态是少量 non-axial evidence 样本获得 top/near-top gate weight，从而在不退回 equal-weight 的前提下守住或超过 DFR-25 seed42 `val_acc=0.9361702127659575`。
+
+---
+
+## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
+
+> **实验说明**
+> - 本轮严格从当前 operational mainline `DFR-25 ResNeXt 256x8 learned decision fusion` fork：不改 backbone family、不改 geometry、不切 feature fusion、不改 DFR-25 winning scalar；唯一结构变量是在 decision-fusion reliability path 上新增 **evidence-aware residual gate**。
+> - 代码落点是 [src/model.py](/dataset/HH/ankle-ct/src/model.py)：新增 `EvidenceAwareReliabilityGate`，用 detached per-view logits 派生 `max_prob / margin / entropy / abnormal_prob` 及其跨视角 centered evidence，再与每个视角的 gating feature 拼接，输出一个 identity-initialized residual reliability-logit correction。初始时 residual 为 0，等价于 DFR-25；训练中才学习 evidence-to-routing correction。
+> - runtime env 保持 DFR-25 的 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25`，只额外开启 `ANKLE_DECISION_ENABLE_EVIDENCE_AWARE_GATE=1` 与 `ANKLE_DECISION_EVIDENCE_AWARE_GATE_RESIDUAL_LIMIT=0.25`。
+> - 设计思路 / 预计改进效果：DFR-25 已完成 learned full-fusion > matched equal-weight 的 3-seed 主指标目标，但 telemetry 仍显示 seed42/456 存在 residual axial lock-in。相比继续加训练期 floor / teacher redistribution，本轮把改动收敛成一个可解释的网络结构模块，让 gate 在推理期也能读到 per-view classifier evidence，目标是让非 axial 视角在自身 margin / confidence 明确更强时获得更稳定的 routing 权重，同时不把权重机械拉平均。
+> - 执行记录：先逐节点排查 `V100q` 的 3-GPU 空闲资源；`node19` 只剩 2 张空闲 GPU，`node21` 已被 3-GPU 作业占满，唯一 strict idle 的 `node20` 在 Slurm 可分配但 PyTorch CUDA probe 失败（单卡也 `torch.cuda.is_available=False`）。因此改用已验证可用的 `RTXA6Kq/node16` Slurm 3-GPU allocation（visible physical GPU `5,6,7`），不是整节点独占，但三张卡空闲、lane probe 通过。
+> - Slurm job `481492`：`COMPLETED 0:0`，elapsed `00:12:29`；三条 seed 训练和三条 `fusion_weight_analysis` telemetry 均 exit 0。聚合文件：[autoresearch_logs/dfr44_evidence_gate_multiseed/aggregate_summary.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr44_evidence_gate_multiseed/aggregate_summary.json)。
+
+- [x] **DFR-44-RESNEXT-DECISION-256X8-EVIDENCE-AWARE-RESIDUAL-GATE-MULTISEED-FORMAL**：commit `5da110b`，formal seeds `42/123/456`，保持 DFR-25 anchor scalar 与 runtime，只新增 inference-time evidence-aware residual gate → `seed42=0.882979/0.943636/0.873563`, `seed123=0.914894/0.958636/0.911111`, `seed456=0.882979/0.949545/0.867470`，3-seed mean `val_acc=0.8936170212765958`, `val_auc=0.9506060606060606`, `val_f1=0.8840480696733293`, `peak_vram≈2.20 GiB` → **discard**（低于 DFR-25 3-seed mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`，`val_acc / val_auc / val_f1` 分别回落 `0.0460992907801418 / 0.0171212121212122 / 0.0518453472545704`；也低于 matched equal-weight 3-seed mean `0.9219858156028368 / 0.9606060606060606 / 0.9112221100424511`。）
+- **fusion-weight 结论**：DFR-44 没有稳定解决 DFR-25 的 residual axial lock-in。`seed42` 与 `seed123` 仍是 `top_weight axial=94/94`，mean axial weight 分别为 `0.9878` 与 `0.9122`；只有 `seed456` 出现 `top_weight axial/coronal=42/52`、mean weight `0.4756/0.4542/0.0702`，但该 seed accuracy 仍只有 `0.882979`。也就是说，evidence-aware residual gate 能改变部分 seed 的 routing，但目前改变没有转化为主指标收益。
+- **当前判断**：这条结构创新方向作为“论文可解释模块”是成立的，但作为当前主线优化失败；它证明“直接把 per-view classifier evidence 注入 gate”不够，需要更强约束或更干净的监督信号，否则容易把 gate 改动变成 noisy routing 而不是稳定 contribution。下一轮若继续结构创新，应优先做 `teacher/evidence supervised gate auxiliary loss` 或 `monotonic evidence-calibrated gate`，而不是继续增大 residual gate 容量。
+
+---
+
+## 2026-05-10：人类主线同步（DFR-25 ResNeXt minimal-variable）
+
+> **本次动作**
+> - 按人类要求，先完成 GitHub 同步，再把当前 operational mainline 改为 **DFR-25 ResNeXt 256x8 learned decision fusion**。
+> - 本次只更新配置与协议，不启动训练、不启动 Optuna、不写入新的实验结果。
+>
+> **当前 DFR-25 锚点**
+> - model / geometry：`backbone=resnext`, `fusion_type=decision`, `use_attention_pooling=false`, `image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`。
+> - runtime env：`ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25`。
+> - winning scalar：`seed=42`, `freeze_layers=3`, `lr=1e-4`, `weight_decay=2.5e-4`, `dropout=0.25`, `gradient_clip_norm=2.5`。
+> - formal / proxy 真值来源：`configs/autoresearch_formal.yaml`, `configs/autoresearch_proxy.yaml`, `configs/autoresearch_formal_resnext_decision_256x8.yaml`, `configs/autoresearch_proxy_resnext_decision_256x8.yaml`。
+> - 默认 Optuna 入口现在是 fixed anchor：`configs/optuna_main_search.yaml`, `configs/optuna_proxy_search.yaml`, `configs/optuna_main_search_resnext_decision_256x8.yaml`, `configs/optuna_proxy_search_resnext_decision_256x8.yaml` 的 `search_space` 均为空。
+>
+> **后续 ResNeXt 改进约束**
+> - 后续任何 “ResNeXt 改进” 必须从 DFR-25 锚点 fork，只改一个明确声明的变量。
+> - 默认不得同时改变 backbone family、geometry、fusion family、runtime repair 和训练标量；如果需要改搜索空间，必须说明它是哪一个变量轴，以及为什么直接服务于 DFR-25 的 decision-routing 机制。
+> - 直接训练入口必须经 `scripts/run_train_with_config_env.py` 或等价方式注入 `runtime_env`，避免 YAML 表达的是 DFR-25、实际运行却漏掉 dominant-gate dropout。
+
 ## 2026-04-23：人类最新主线锁定（最高优先级，覆盖旧规则）
 
 > **主方向硬约束**
@@ -983,9 +1033,9 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-43 fallback-disagreement-only teacher dropout redistribution`：在 commit `2c803ab` 的 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增 `ANKLE_DECISION_TRAIN_TARGET_TEACHER_DROPOUT_ONLY_ON_FALLBACK_DISAGREEMENT`，并用 fresh adaptive `main-study` [runs/optuna_main_autoloop/iter_0008_20260423_191146](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0008_20260423_191146) 验证“保留 `DFR-37` hard mismatch coverage，只在 gate fallback 与 detached teacher fallback 分歧的 dropped 样本上启用 teacher-targeted redistribution，是否能修正 residual fallback misrouting 并恢复 `0.9362` ceiling”。 |
-| 上次结果 | **discard**。best completed trial `0` 为 `val_acc=0.9255319148936170`, `val_auc=0.9654545454545456`, `val_f1=0.9213483146067416`；`6/6` completed trial 全部停在 `0.9043 / 0.9149 / 0.9255` 三档，没有任何 trial 回到 `DFR-25/26/37` 的 `0.9362` ceiling。best trial 的权重 telemetry 为 `mean fusion weight axial/coronal/sagittal = 0.9227 / 0.0739 / 0.0034`、`top-weight axial/coronal/sagittal = 94/0/0`，说明 disagreement-only redistribution 仍把 routing 拉回近乎完全的 axial re-collapse，未形成额外的 non-axial 决策收益。 |
-| 下一步 | 保持 `256x8 ResNeXt decision + L3-no-mixer + DFR-25` 主线不变，但**不要继续沿 teacher-targeted dropout redistribution family** 前进。若外层 loop 继续，优先做 sample-level telemetry / offline threshold study，对比 `DFR-25 / DFR-37 / DFR-43` 的 disagreement 样本，先验证 detached teacher fallback 优势是否真的对应 `true_margin` 增益；没有这层证据前，不应再提新的 redistribution 训练修复。 |
+| 上次实验 | `DFR-44 evidence-aware residual gate`：从 `DFR-25` fork，只在 decision-fusion reliability path 上新增 inference-time evidence-aware residual gate，formal seeds `42/123/456` 已在 Slurm job `481492` 完成。 |
+| 上次结果 | **discard**。3-seed mean `val_acc=0.8936170212765958`, `val_auc=0.9506060606060606`, `val_f1=0.8840480696733293`，低于 DFR-25 3-seed mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`，也低于 matched equal-weight mean。fusion telemetry 显示 seed42/123 仍偏 axial，seed456 虽发生 axial/coronal 迁移但 accuracy 明显回落，说明直接 evidence injection 容易变成 noisy routing。 |
+| 下一步 | 按人类新增要求，把“本项目产生了权重坍塌”作为当前 Auto Research 主线要点；继续从 `DFR-25` fork，优先测试 **DFR-45 gate-logit RMS limiter**：只在 gate 内部限制 reliability logits 的过度集中，作为最小网络结构改进来缓解 axial lock-in，不再继续扩大 evidence-aware residual gate 容量。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
 | 连续 discard 计数 | 18（`DFR-26 seed123`、`DFR-27 conditional axial-dominance floor`、`DFR-28 continuous axial-dominance-scaled rescue`、`DFR-29 reduced continuous rescue scale`、`DFR-30 axial top1-top2 margin trigger`、`DFR-31 continuous top1-top2 margin-scaled rescue`、`DFR-32 axial low-entropy trigger`、`DFR-33 continuous low-entropy scaling`、`DFR-34 targeted strongest-fallback rescue redistribution`、`DFR-35 detached teacher-evidence targeted rescue`、`DFR-36 teacher-guided dominant-gate dropout redistribution`、`DFR-37 evidence-misalignment-conditioned dominant-gate dropout`、`DFR-38 continuous evidence-misalignment-scaled dominant-gate dropout`、`DFR-39 hard-gated misalignment-excess-scaled dominant-gate dropout`、`DFR-40 teacher-nonaxial-top hard mismatch eligibility`、`DFR-41 teacher-nonaxial competitiveness-gap hard mismatch eligibility`、`DFR-42 additive mismatch dropout boost` 与本轮 `DFR-43 fallback-disagreement-only teacher dropout redistribution` 连续为 discard；上一轮 keep 已在 `DFR-26 seed42` 处把计数清零。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
@@ -1833,16 +1883,20 @@
 ## 阶段 10：当前主线校准与可复现实验 🔴 当前最高优先级
 
 > **当前主线定义（canonical baseline）**
-> - 单张 CT 切片先进入以 ResNet18 为编码器的 `ResUNet`
-> - 3 个 `Attention Gate` 突出病灶区域
-> - 单视角 16 张切片经 `AttentionPooling` 聚合为视角特征
-> - 3 个视角通过 `VRG` / `decision fusion` 做可靠度加权融合
+> - 2026-05-10 起，operational baseline 改为 `DFR-25 ResNeXt 256x8 learned decision fusion`
+> - `ResNeXt + decision fusion + L3 no-mixer + train-time dominant-gate dropout`
+> - `image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`, `use_attention_pooling=false`
+> - runtime env 固定为 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25`
+> - winning scalar 固定为 `freeze_layers=3`, `lr=1e-4`, `weight_decay=2.5e-4`, `dropout=0.25`, `gradient_clip_norm=2.5`
 > - 主指标是 `summary.json -> best_val.accuracy`
 > - 若 `val_acc` 持平，按 `best_val.auc` 决胜
 >
 > **当前流程约束**
 > - `model.freeze_layers` 必须由 YAML 显式声明，不再通过修改 `src/model.py` 常量切换
 > - Optuna 必须优先使用项目 `.venv`
+> - 默认 Optuna search config 只表达 DFR-25 fixed anchor；`search_space: {}` 是有意收敛，不代表要开始宽搜
+> - 任何后续 ResNeXt 改进都必须从 DFR-25 fork，并且一次只改一个明确声明的变量
+> - 直接训练必须使用 `scripts/run_train_with_config_env.py` 或等价注入，保证 `runtime_env` 生效
 > - fresh study 默认不得复用旧 `study.sqlite3`；只有显式 `--resume` 才续跑
 > - resume 语义是补足剩余 budget，而不是再次追加完整 `n_trials`
 > - `threshold_eval` 仅作辅助输出；失败时记录 warning，不应判定整个 study 失败
@@ -1853,6 +1907,7 @@
 > - 二者仍持平：优先更简单的配置 / 代码路径
 >
 > **2026-04-21 主线追加约束**
+> - 该节是历史约束；若与 2026-05-10 DFR-25 mainline 冲突，以 DFR-25 minimal-variable 约束为准
 > - canonical 主线下一阶段不再先做更激进的 weighting-ratio / gating 优化
 > - 必须先完成一轮 matched **模块贡献分析**，回答“当前 decision-fusion 路径里到底是哪一层在提供净收益，哪一层在引入方差”
 > - 模块分析至少优先覆盖：`equal-weight` 控制、`minimal learned` 路径、`current learned` 路径；必要时再继续拆 richer reliability path
@@ -1870,7 +1925,7 @@
 
 ### 2026-04-21：Canonical Mainline 研究顺序重排（模块贡献优先）
 
-- [ ] **MAIN-MODULE-CONTRIB-01**：对当前 canonical `ResUNet + AttentionPooling + decision fusion` 主线做 matched 模块贡献分析，先回答 `equal-weight`、`minimal learned`、`current learned` 三档的净贡献与方差差异，再决定是否继续拆 richer reliability module。
+- [ ] **MAIN-MODULE-CONTRIB-01**：如需继续模块贡献分析，必须以当前 canonical `DFR-25 ResNeXt 256x8 decision fusion` 为锚点，先回答 `equal-weight`、`minimal learned`、`current learned` 三档的净贡献与方差差异，再决定是否继续拆 richer reliability module。
 - [ ] **MAIN-WEIGHT-OPT-01**：仅在 `MAIN-MODULE-CONTRIB-01` 给出明确正信号后，才进入训练中自动优化 weighting 比例；若模块分析未显示净收益，则维持更简单的 weighting baseline，不把“更复杂 gating”当默认方向。
 
 ### 2026-04-13：一轮基线校准 + capped fresh proxy Optuna + formal confirmation

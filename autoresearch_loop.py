@@ -135,11 +135,11 @@ def build_prompt(
     )
     formal_command = (
         f"CUDA_VISIBLE_DEVICES={fallback_gpu_id} timeout 10800 "
-        f"{shell_join([python_cmd, 'train.py', '--config', formal_config])} > run.log 2>&1"
+        f"{shell_join([python_cmd, 'scripts/run_train_with_config_env.py', '--config', formal_config, '--python', python_cmd])} > run.log 2>&1"
     )
     proxy_command = (
         f"CUDA_VISIBLE_DEVICES={fallback_gpu_id} timeout 3600 "
-        f"{shell_join([python_cmd, 'train.py', '--config', proxy_config])} > proxy.log 2>&1"
+        f"{shell_join([python_cmd, 'scripts/run_train_with_config_env.py', '--config', proxy_config, '--python', python_cmd])} > proxy.log 2>&1"
     )
 
     lane_labels = {

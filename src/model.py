@@ -693,6 +693,27 @@ class EvidenceAwareReliabilityGate(nn.Module):
         return self.residual_limit * torch.tanh(self.adapter(residual_input))
 
 
+class GateLogitRMSLimiter(nn.Module):
+    """Bound decision-gate logit concentration while preserving view ranking."""
+
+    def __init__(self, max_centered_rms: float = 1.3, eps: float = 1e-6) -> None:
+        super().__init__()
+        if max_centered_rms <= 0.0:
+            raise ValueError("max_centered_rms must be > 0.")
+        self.max_centered_rms = float(max_centered_rms)
+        self.eps = float(eps)
+
+    def forward(self, confidences: torch.Tensor) -> torch.Tensor:
+        if confidences.ndim != 3 or confidences.shape[-1] != 1:
+            raise ValueError("confidences must have shape (batch, views, 1).")
+        mean_confidence = confidences.mean(dim=1, keepdim=True)
+        centered = confidences - mean_confidence
+        centered_rms = centered.pow(2).mean(dim=1, keepdim=True).add(self.eps).sqrt()
+        max_rms = centered_rms.new_tensor(self.max_centered_rms)
+        scale = (max_rms / centered_rms).clamp(max=1.0)
+        return mean_confidence + centered * scale
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -984,6 +1005,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_EVIDENCE_AWARE_GATE_RESIDUAL_LIMIT",
             0.25,
         )
+        self.enable_gate_logit_rms_limit = _env_flag(
+            "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
+        )
+        self.gate_logit_max_centered_rms = _env_positive_float(
+            "ANKLE_DECISION_GATE_LOGIT_MAX_CENTERED_RMS",
+            1.3,
+        )
         self.gate_teacher_blend = _env_unit_float(
             "ANKLE_DECISION_GATE_TEACHER_BLEND",
             0.0,
@@ -1188,6 +1216,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     self.evidence_aware_gate = EvidenceAwareReliabilityGate(
                         feature_dim=self.feature_dim,
                         residual_limit=self.evidence_aware_gate_residual_limit,
+                    )
+                if self.enable_gate_logit_rms_limit:
+                    self.gate_logit_rms_limiter = GateLogitRMSLimiter(
+                        max_centered_rms=self.gate_logit_max_centered_rms,
                     )
         if self.enable_view_logit_temperature:
             self.view_logit_temperature_calibrator = PerViewLogitTemperatureCalibrator(
@@ -1744,6 +1776,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     evidence_gate_features,
                     view_logits,
                 )
+            if self.enable_gate_logit_rms_limit:
+                confidences = self.gate_logit_rms_limiter(confidences)
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
         if (

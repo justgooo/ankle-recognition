@@ -15,6 +15,7 @@ from script_runtime import (
     detect_python_executable,
     disk_free_gb,
     query_nvidia_smi,
+    read_yaml,
     read_output_dir,
     remove_nonbest_checkpoints,
     repo_relative,
@@ -78,12 +79,18 @@ def launch_slot(
         "timeout",
         str(timeout_seconds),
         python_executable,
-        "train.py",
+        "scripts/run_train_with_config_env.py",
         "--config",
         repo_relative(config_path),
+        "--python",
+        python_executable,
     ]
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    runtime_env = read_yaml(config_path).get("runtime_env") or {}
+    if not isinstance(runtime_env, dict):
+        raise SystemExit(f"config.runtime_env must be a mapping: {repo_relative(config_path)}")
+    env.update({str(key): str(value) for key, value in runtime_env.items()})
 
     handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(

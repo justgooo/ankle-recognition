@@ -1,37 +1,35 @@
 study:
-  name: autoresearch_resnext_decision_256x8_main_tuning
+  name: autoresearch_resnext_decision_256x8_dfr45_gate_logit_rms_limit_main
   phase: main
   base_config: configs/autoresearch_formal_resnext_decision_256x8.yaml
-  study_root: runs/optuna_main_resnext_decision_256x8
+  study_root: runs/optuna_main_resnext_decision_256x8_dfr45_gate_logit_rms_limit
   direction: maximize
-  n_trials: 4
-  timeout_minutes: 360
+  n_trials: 1
+  timeout_minutes: 240
   trial_timeout_minutes: 120
   failed_score: -1.0
   sampler: tpe
   sampler_seed: 42
-  startup_trials: 2
+  startup_trials: 1
   pruner: none
   objective_metric: val_accuracy
-  enqueue_current_template: true
+  enqueue_current_template: false
+  env:
+    ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: 1
+    ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: 0.25
+    ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT: 1
+    ANKLE_DECISION_GATE_LOGIT_MAX_CENTERED_RMS: 1.3
 
 python_candidates:
   - .venv/bin/python
   - .venv/Scripts/python.exe
 
-search_space:
-  model.freeze_layers:
-    type: categorical
-    choices: [3]
-  train.lr:
-    type: categorical
-    choices: [7.5e-5, 1.0e-4, 1.25e-4]
-  train.weight_decay:
-    type: categorical
-    choices: [2.5e-4, 5.0e-4, 7.5e-4]
-  model.dropout:
-    type: categorical
-    choices: [0.2, 0.25, 0.3]
-  train.gradient_clip_norm:
-    type: categorical
-    choices: [1.5, 2.0, 2.5]
+fixed_overrides:
+  seed: 42
+  model.freeze_layers: 3
+  train.lr: 1.0e-4
+  train.weight_decay: 2.5e-4
+  model.dropout: 0.25
+  train.gradient_clip_norm: 2.5
+
+search_space: {}
