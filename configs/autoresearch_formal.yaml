@@ -1,15 +1,14 @@
 # Slower confirmation config for the current main autoresearch lane.
-# Human-directed mainline: DFR-47 ResNeXt 256x8 learned decision fusion.
-# DFR-47 keeps DFR-25 and adds a relative-view gate residual.
-experiment_name: autoresearch_formal_dfr47_relative_view_gate
-output_dir: runs/autoresearch_formal_dfr47_relative_view_gate
+# Human-directed mainline: DFR-48 ResNeXt 256x8 learned decision fusion.
+# DFR-48 keeps DFR-25 and feeds centered relative features into the confidence scorer.
+experiment_name: autoresearch_formal_dfr48_relative_confidence_features
+output_dir: runs/autoresearch_formal_dfr48_relative_confidence_features
 seed: 42
 
 runtime_env:
   ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
   ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
-  ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE: "1"
-  ANKLE_DECISION_RELATIVE_VIEW_GATE_RESIDUAL_LIMIT: "0.75"
+  ANKLE_DECISION_USE_RELATIVE_CONFIDENCE_FEATURES: "1"
 
 data:
   csv_path: data/realdata/metadata.csv

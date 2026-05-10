@@ -1047,6 +1047,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.use_shared_confidence_head = _env_flag(
             "ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD"
         )
+        self.use_relative_confidence_features = _env_flag(
+            "ANKLE_DECISION_USE_RELATIVE_CONFIDENCE_FEATURES"
+        )
         self.enable_relative_view_gate = _env_flag(
             "ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE"
         )
@@ -1810,12 +1813,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             else:
                 stacked_features = torch.stack(view_features, dim=1)  # (B, 3, 512)
                 gating_features = list(self.cross_view_mixer(stacked_features).unbind(dim=1))
+            confidence_features = gating_features
+            if self.use_relative_confidence_features:
+                stacked_confidence_features = torch.stack(gating_features, dim=1)
+                relative_confidence_features = (
+                    stacked_confidence_features
+                    - stacked_confidence_features.mean(dim=1, keepdim=True)
+                )
+                confidence_features = list(relative_confidence_features.unbind(dim=1))
             calibrated_confidences = []
             if self.use_shared_confidence_head:
-                confidence_heads = [self.shared_confidence_head for _ in gating_features]
+                confidence_heads = [self.shared_confidence_head for _ in confidence_features]
             else:
                 confidence_heads = self.confidence_heads
-            for head, feature in zip(confidence_heads, gating_features):
+            for head, feature in zip(confidence_heads, confidence_features):
                 raw_confidence = head(feature)
                 if self.disable_fusion_calibrator:
                     calibrated_confidences.append(raw_confidence)
