@@ -259,6 +259,18 @@
 - **sample-level 结论**：相对 DFR-25，DFR-66 是 `fixed=6 / broken=16 / net=-10`。seed42 仅修复 1 个阴性 FP，但新增 2 个阴性 FP；seed123 修复 5 个样本却打坏 13 个，主要因为 coronal 独占把多例 DFR-25 强阳性样本压成 FN（如 `CT2412yang120/165/176/47/54/58`）；seed456 只新增 1 个阳性 FN（`CT2412yang58`）。这说明 auxiliary CE 的主要副作用是训练期改变 per-view/gate 平衡并制造单视图捷径。
 - **当前判断**：DFR-66 是 negative result。低权重 per-view auxiliary CE 仍复现了 DFR-02 family 的核心问题：它约束了 view classifiers，却没有提供稳定的 sample-wise routing 改善，并且会把 fusion gate 推成 seed-specific single-plane lock-in。下一轮不应继续加大或调小 auxiliary CE，也不应回到 prior-debias/role replacement。更合理的 DFR-67 是只做更轻的训练期 view robustness：保留 DFR-25 inference gate 和 scalar，使用比 DFR-03 更温和的 `ANKLE_DECISION_TRAIN_VIEW_DROPOUT_PROB=0.05`，不加 axial blur，检验“轻微视角缺失”是否能减少单视图捷径而不破坏 per-view probability calibration。
 
+### DFR-67 light view dropout（2026-05-11）
+
+> **实验说明**
+> - 本轮是 DFR-66 后的 autonomous continuation；不改模型代码，回到 DFR-25 inference-time gate，只加入更轻的训练期 view robustness。
+> - 结构假设：DFR-66 说明 auxiliary CE 会改变 per-view/gate 训练平衡并制造 seed-specific 单视图捷径；DFR-67 因此停用 auxiliary CE、prior-debias、role replacement 和晚期 probability rule，只启用 `ANKLE_DECISION_TRAIN_VIEW_DROPOUT_PROB=0.05`。
+> - 预计改进效果：轻微视角缺失应削弱训练期单视图捷径，让 seed42/456 的 `top_weight axial=94/94` 至少出现少量 non-axial near-top/top routing，同时保持 DFR-25 的强 axial-positive 通道和 winning scalar。
+
+- [x] **DFR-67-RESNEXT-DECISION-256X8-LIGHT-VIEW-DROPOUT-MULTISEED-FORMAL**：commit `ad31836`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr67_light_view_dropout_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr67_light_view_dropout_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr67_light_view_dropout_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr67_light_view_dropout_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr67_light_view_dropout_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr67_light_view_dropout_formal_s456.yaml)。实验实际结果：Slurm job `482734` 在 `RTXA6Kq/node16` 完成，`seed42=0.9361702127659575/0.9622727272727273/0.9285714285714286`，`seed123=0.9042553191489362/0.9522727272727273/0.8988764044943820`，`seed456=0.9468085106382979/0.9672727272727273/0.9411764705882353`；3-seed mean `val_acc=0.9290780141843972`，`val_auc=0.9606060606060606`，`val_f1=0.9228747678846819`，`peak_vram≈2.18 GiB` → **discard**（高于 DFR-66，但低于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`；主指标虽高于 matched equal-weight mean `0.9219858156028368`，但本轮目标是超过当前 retained DFR-25。）
+- **fusion-weight 结论**：轻微 view dropout 没有修复 routing collapse。三个 seed 的 top-weight 都仍是 `axial=94, coronal=0, sagittal=0`；mean weight 分别为 seed42 `0.9249/0.0486/0.0265`、seed123 `0.8785/0.0675/0.0540`、seed456 `0.9209/0.0183/0.0608`。`top_true_margin` 仍包含 non-axial 样本（seed42 `84/6/4`，seed123 `85/4/5`，seed456 `74/8/12`），但 gate 没有给 non-axial 一次 top-weight。
+- **sample-level 结论**：相对 DFR-25，DFR-67 是 `fixed=4 / broken=7 / net=-3`。seed42 `fixed=3 / broken=3`，主要是修复部分阴性 FP 但新增阳性 FN；seed123 `fixed=0 / broken=3` 是本轮均值回落的核心；seed456 `fixed=1 / broken=1` 基本持平。说明 light view dropout 主要是概率/分类正则化，不是有效的 learned routing repair。
+- **当前判断**：DFR-67 是 diagnostic discard。它比 DFR-66/63~65 稳，但没有改变 `top_weight axial=94/94` 的坍塌形态；下一轮不应继续加大 view dropout 或叠 axial blur。更直接的 DFR-68 是回到 DFR-25 训练语义，只在推理期加极小 `ANKLE_DECISION_FUSION_WEIGHT_FLOOR=0.02`，检验比旧 `floor=0.05` 更保守的 non-axial minimum mass 是否能保住 seed123，同时给 seed42/456 的 non-axial evidence 留出最小贡献。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1266,11 +1278,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-66 low auxiliary view loss multiseed formal`：回到 DFR-25 inference-time gate，只额外启用低权重训练期 per-view auxiliary CE；完成 seeds `42/123/456`。 |
-| 上次结果 | 3-seed mean `val_acc=0.9042553191489362`，`val_auc=0.9580303030303030`，`val_f1=0.8992513085536341` → discard。相对 DFR-25 是 fixed `6` / broken `16` / net `-10`；telemetry 显示 seed42/456 近全 axial、seed123 全 coronal，低权重 auxiliary CE 反而制造 seed-specific 单视图捷径。 |
-| 下一步 | 立即继续 DFR-67：停止 auxiliary CE、prior-debias、role replacement 与晚期 probability rule 方向；保留 DFR-25 inference gate/scalar，只做更轻的训练期 view robustness（`ANKLE_DECISION_TRAIN_VIEW_DROPOUT_PROB=0.05`，不加 axial blur），验证轻微视角缺失是否能减少单视图捷径而不破坏校准。 |
+| 上次实验 | `DFR-67 light view dropout multiseed formal`：停用 auxiliary CE、prior-debias、role replacement 与晚期 probability rule，保留 DFR-25 inference gate/scalar，只启用轻微训练期 view dropout；完成 seeds `42/123/456`。 |
+| 上次结果 | 3-seed mean `val_acc=0.9290780141843972`，`val_auc=0.9606060606060606`，`val_f1=0.9228747678846819` → discard。相对 DFR-25 是 fixed `4` / broken `7` / net `-3`；telemetry 显示三个 seed 仍全部 `top_weight axial=94/94`，light view dropout 没有修复 routing collapse。 |
+| 下一步 | 立即继续 DFR-68：回到 DFR-25 训练语义，不再加 view dropout/aux CE/blur/prior/role，只在推理期设置极小 `ANKLE_DECISION_FUSION_WEIGHT_FLOOR=0.02`，验证比旧 `floor=0.05` 更保守的 non-axial minimum mass 是否能缓解 axial lock-in 且不打坏 seed123。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 41（自 `DFR-26 seed123` 起至 `DFR-66 low auxiliary view loss multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 42（自 `DFR-26 seed123` 起至 `DFR-67 light view dropout multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
