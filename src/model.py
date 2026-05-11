@@ -1027,6 +1027,107 @@ class ViewRoleConfidenceScorer(nn.Module):
         return self.logit_limit * torch.tanh(raw_scores / self.logit_limit)
 
 
+class EvidenceMarginResidualFusion(nn.Module):
+    """Bounded residual on the binary fused margin from detached view evidence."""
+
+    def __init__(
+        self,
+        num_views: int = 3,
+        hidden_dim: int = 48,
+        residual_limit: float = 1.5,
+        dropout: float = 0.05,
+    ) -> None:
+        super().__init__()
+        if num_views <= 0:
+            raise ValueError("num_views must be > 0.")
+        if hidden_dim <= 0:
+            raise ValueError("hidden_dim must be > 0.")
+        if residual_limit <= 0.0:
+            raise ValueError("residual_limit must be > 0.")
+
+        self.num_views = int(num_views)
+        self.residual_limit = float(residual_limit)
+        input_dim = self.num_views * 6 + 7
+        self.norm = nn.LayerNorm(input_dim)
+        self.adapter = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def forward(
+        self,
+        fused_logits: torch.Tensor,
+        view_logits: torch.Tensor,
+        fusion_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        if fused_logits.shape[-1] != 2 or view_logits.shape[-1] != 2:
+            return fused_logits
+        if view_logits.ndim != 3 or fusion_weights.ndim != 3:
+            raise ValueError("view_logits and fusion_weights must have shape (batch, views, ...).")
+        if view_logits.shape[1] != self.num_views or fusion_weights.shape[1] != self.num_views:
+            raise ValueError(
+                f"EvidenceMarginResidualFusion configured for {self.num_views} views."
+            )
+
+        detached_view_logits = view_logits.detach()
+        detached_weights = fusion_weights.detach().squeeze(-1)
+        detached_fused_logits = fused_logits.detach()
+
+        view_probs = torch.softmax(detached_view_logits, dim=-1)
+        abnormal_probs = view_probs[..., 1]
+        view_margins = detached_view_logits[..., 1] - detached_view_logits[..., 0]
+        weighted_abnormal = detached_weights * abnormal_probs
+        centered_abnormal = abnormal_probs - abnormal_probs.mean(dim=1, keepdim=True)
+        centered_margins = view_margins - view_margins.mean(dim=1, keepdim=True)
+
+        fused_probs = torch.softmax(detached_fused_logits, dim=-1)
+        fused_abnormal = fused_probs[:, 1:2]
+        fused_margin = detached_fused_logits[:, 1:2] - detached_fused_logits[:, 0:1]
+        safe_weights = detached_weights.clamp_min(1e-8)
+        weight_entropy = -(safe_weights * safe_weights.log()).sum(dim=1, keepdim=True)
+        weight_entropy = weight_entropy / math.log(float(self.num_views))
+        global_features = torch.cat(
+            [
+                fused_abnormal,
+                fused_margin,
+                abnormal_probs.amax(dim=1, keepdim=True),
+                abnormal_probs.amin(dim=1, keepdim=True),
+                view_margins.amax(dim=1, keepdim=True),
+                view_margins.amin(dim=1, keepdim=True),
+                weight_entropy,
+            ],
+            dim=1,
+        )
+        evidence_features = torch.cat(
+            [
+                detached_weights,
+                abnormal_probs,
+                centered_abnormal,
+                view_margins,
+                centered_margins,
+                weighted_abnormal,
+                global_features,
+            ],
+            dim=1,
+        )
+        raw_residual = self.adapter(self.norm(evidence_features))
+        margin_residual = self.residual_limit * torch.tanh(raw_residual / self.residual_limit)
+
+        center = fused_logits.mean(dim=-1, keepdim=True)
+        margin = fused_logits[:, 1:2] - fused_logits[:, 0:1] + margin_residual
+        return torch.cat(
+            [
+                center - 0.5 * margin,
+                center + 0.5 * margin,
+            ],
+            dim=-1,
+        )
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -1407,6 +1508,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_POSITIVE_FLOOR",
             0.7,
         )
+        self.enable_evidence_margin_residual_fusion = _env_flag(
+            "ANKLE_DECISION_ENABLE_EVIDENCE_MARGIN_RESIDUAL_FUSION"
+        )
+        self.evidence_margin_residual_hidden_dim = _env_positive_int(
+            "ANKLE_DECISION_EVIDENCE_MARGIN_RESIDUAL_HIDDEN_DIM",
+            48,
+        )
+        self.evidence_margin_residual_limit = _env_positive_float(
+            "ANKLE_DECISION_EVIDENCE_MARGIN_RESIDUAL_LIMIT",
+            1.5,
+        )
+        self.evidence_margin_residual_dropout = _env_unit_float(
+            "ANKLE_DECISION_EVIDENCE_MARGIN_RESIDUAL_DROPOUT",
+            0.05,
+        )
         self.enable_relative_view_gate = _env_flag(
             "ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE"
         )
@@ -1712,6 +1828,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         bottleneck_dim=self.pairwise_reliability_bottleneck_dim,
                         residual_limit=self.pairwise_reliability_residual_limit,
                         dropout=self.pairwise_reliability_dropout,
+                    )
+                if self.enable_evidence_margin_residual_fusion:
+                    self.evidence_margin_residual_fusion = EvidenceMarginResidualFusion(
+                        num_views=3,
+                        hidden_dim=self.evidence_margin_residual_hidden_dim,
+                        residual_limit=self.evidence_margin_residual_limit,
+                        dropout=self.evidence_margin_residual_dropout,
                     )
         if self.enable_view_logit_temperature:
             self.view_logit_temperature_calibrator = PerViewLogitTemperatureCalibrator(
@@ -2515,7 +2638,18 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
         if active_view_mask is not None:
             fusion_weights = self._apply_fusion_weight_floor(fusion_weights, active_view_mask)
-        return (view_logits * fusion_weights).sum(dim=1)
+        fused_logits = (view_logits * fusion_weights).sum(dim=1)
+        if (
+            self.enable_evidence_margin_residual_fusion
+            and hasattr(self, "evidence_margin_residual_fusion")
+            and active_view_mask is None
+        ):
+            fused_logits = self.evidence_margin_residual_fusion(
+                fused_logits,
+                view_logits,
+                fusion_weights,
+            )
+        return fused_logits
 
     def forward_with_decision_info(self, images: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Return the usual fused logits plus intermediate tensors for matched controls."""
