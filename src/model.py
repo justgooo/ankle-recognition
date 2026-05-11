@@ -890,6 +890,81 @@ class GateTransformerContextualizer(nn.Module):
         return view_features + self.residual_scale * residual
 
 
+class PairwiseReliabilityGate(nn.Module):
+    """Low-capacity pairwise view-context correction for reliability logits.
+
+    This module keeps the late decision-fusion semantics intact.  It only adds a
+    zero-initialized residual to each per-view reliability logit after comparing
+    that view token with the other view tokens in the same sample.
+    """
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        pair_dim: int = 64,
+        bottleneck_dim: int = 64,
+        residual_limit: float = 0.25,
+        dropout: float = 0.05,
+    ) -> None:
+        super().__init__()
+        if pair_dim <= 0:
+            raise ValueError("pair_dim must be > 0.")
+        if bottleneck_dim <= 0:
+            raise ValueError("bottleneck_dim must be > 0.")
+        if residual_limit <= 0.0:
+            raise ValueError("residual_limit must be > 0.")
+
+        self.feature_norm = nn.LayerNorm(feature_dim)
+        self.pair_norm = nn.LayerNorm(feature_dim * 3)
+        self.pair_encoder = nn.Sequential(
+            nn.Linear(feature_dim * 3, pair_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+        )
+        self.adapter = nn.Sequential(
+            nn.Linear(feature_dim + pair_dim, bottleneck_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(bottleneck_dim, 1),
+        )
+        self.residual_limit = float(residual_limit)
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        batch_size, num_views, _ = view_features.shape
+        if num_views <= 1:
+            return view_features.new_zeros(batch_size, num_views, 1)
+
+        relative_features = view_features - view_features.mean(dim=1, keepdim=True)
+        pair_contexts = []
+        for view_index in range(num_views):
+            encoded_pairs = []
+            anchor = relative_features[:, view_index]
+            for other_index in range(num_views):
+                if other_index == view_index:
+                    continue
+                other = relative_features[:, other_index]
+                pair_input = torch.cat(
+                    [
+                        anchor,
+                        anchor - other,
+                        anchor * other,
+                    ],
+                    dim=-1,
+                )
+                encoded_pairs.append(self.pair_encoder(self.pair_norm(pair_input)))
+            pair_contexts.append(torch.stack(encoded_pairs, dim=1).mean(dim=1))
+
+        pair_context = torch.stack(pair_contexts, dim=1)
+        features = self.feature_norm(view_features)
+        residual_input = torch.cat([features, pair_context], dim=-1)
+        residual = self.adapter(residual_input)
+        return self.residual_limit * torch.tanh(residual)
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -1227,6 +1302,25 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.enable_gate_transformer_context = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_TRANSFORMER_CONTEXT"
         )
+        self.enable_pairwise_reliability_gate = _env_flag(
+            "ANKLE_DECISION_ENABLE_PAIRWISE_RELIABILITY_GATE"
+        )
+        self.pairwise_reliability_pair_dim = _env_positive_int(
+            "ANKLE_DECISION_PAIRWISE_RELIABILITY_PAIR_DIM",
+            64,
+        )
+        self.pairwise_reliability_bottleneck_dim = _env_positive_int(
+            "ANKLE_DECISION_PAIRWISE_RELIABILITY_BOTTLENECK_DIM",
+            64,
+        )
+        self.pairwise_reliability_residual_limit = _env_positive_float(
+            "ANKLE_DECISION_PAIRWISE_RELIABILITY_RESIDUAL_LIMIT",
+            0.25,
+        )
+        self.pairwise_reliability_dropout = _env_unit_float(
+            "ANKLE_DECISION_PAIRWISE_RELIABILITY_DROPOUT",
+            0.05,
+        )
         self.gate_transformer_attention_dim = _env_positive_int(
             "ANKLE_DECISION_GATE_TRANSFORMER_ATTENTION_DIM",
             128,
@@ -1480,6 +1574,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         num_layers=self.gate_transformer_num_layers,
                         dropout=self.gate_transformer_dropout,
                         residual_scale=self.gate_transformer_residual_scale,
+                    )
+                if self.enable_pairwise_reliability_gate:
+                    self.pairwise_reliability_gate = PairwiseReliabilityGate(
+                        feature_dim=self.feature_dim,
+                        pair_dim=self.pairwise_reliability_pair_dim,
+                        bottleneck_dim=self.pairwise_reliability_bottleneck_dim,
+                        residual_limit=self.pairwise_reliability_residual_limit,
+                        dropout=self.pairwise_reliability_dropout,
                     )
         if self.enable_view_logit_temperature:
             self.view_logit_temperature_calibrator = PerViewLogitTemperatureCalibrator(
@@ -2057,6 +2159,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 relative_gate_features = torch.stack(gating_features, dim=1)
                 confidences = confidences + self.relative_view_gate(
                     relative_gate_features
+                )
+            if self.enable_pairwise_reliability_gate:
+                pairwise_gate_features = torch.stack(gating_features, dim=1)
+                confidences = confidences + self.pairwise_reliability_gate(
+                    pairwise_gate_features
                 )
             if self.enable_gate_logit_rms_limit:
                 confidences = self.gate_logit_rms_limiter(confidences)
