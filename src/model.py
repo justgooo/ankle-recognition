@@ -1357,6 +1357,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.use_view_role_confidence_head = _env_flag(
             "ANKLE_DECISION_USE_VIEW_ROLE_CONFIDENCE_HEAD"
         )
+        self.detach_view_role_gate_features = _env_flag(
+            "ANKLE_DECISION_DETACH_VIEW_ROLE_GATE_FEATURES"
+        )
         self.view_role_confidence_role_dim = _env_positive_int(
             "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_ROLE_DIM",
             32,
@@ -2313,6 +2316,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             role_confidences = None
             if self.use_view_role_confidence_head:
                 role_gate_features = torch.stack(gating_features, dim=1)
+                if self.detach_view_role_gate_features:
+                    role_gate_features = role_gate_features.detach()
                 role_confidences = self.view_role_confidence_head(role_gate_features)
             base_confidences = None
             if (
