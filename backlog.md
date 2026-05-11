@@ -344,6 +344,17 @@
 - **sample-level 结论**：相对 DFR-25，DFR-73 是 `fixed=6 / broken=9 / net=-3`；seed42 `fixed=3 / broken=4`，seed123 `fixed=2 / broken=3`，seed456 `fixed=1 / broken=2`。fixed 主要是阴性 FP（总计 `5` 个阴性、`1` 个阳性），broken 全部是阳性 FN（`9` 个阳性），说明 bounded role scorer 继续以损伤 positive-evidence channel 为代价修复一部分阴性 FP。
 - **当前判断**：DFR-73 是 negative result，并基本关闭继续盲调 view-role confidence-logit amplitude 的路径。更严格 bound 能降低 over-routing，但不能解决 role family 的核心问题：阳性样本上 axial/sagittal positive evidence 仍会被 coronal/role negative evidence 稀释。下一轮不应继续把 limit 从 `1.0` 往下扫；应回到尚未 3-seed formal 确认的 DFR-37 hard mismatch dominant-dropout，验证这个更保守的训练期 mismatch repair 是否有跨 seed 稳定性。
 
+### DFR-74 hard mismatch dominant-gate dropout confirmation（2026-05-12）
+
+> **实验说明**
+> - 本轮按人类要求从 DFR-25 anchor 出发，对 DFR-37 hard mismatch dominant-gate dropout 做 formal 3-seed confirmation；保持 ResNeXt 256x8、decision fusion、L3 no-mixer、dominant-gate dropout prob=0.25 与 winning scalar 不变，只额外启用 `ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD=0.1`。
+> - 设计思路：DFR-37 的 seed42 positive-but-not-promoted 信号说明，把 dominant-gate dropout 限定到 learned gate 过度相信 axial、而 detached per-view evidence teacher 明确不同意的样本，可能比 view-role/floor/prior-debias family 更保守地修复 single-view dependence。
+> - 预计改进效果：seed42/456 的 residual axial lock-in 应不再完全 `top_weight axial=94/94`；预期 axial 仍在强 axial-evidence 样本主导，但 coronal/sagittal 在 teacher/evidence 支持的样本上获得 top/near-top routing，使 learned full-fusion mean `val_acc` 保持或超过 DFR-25，并明确高于 matched equal-weight，而不是机械平均。
+
+- [x] **DFR-74-RESNEXT-DECISION-256X8-HARD-MISMATCH-DOMINANT-DROPOUT-MULTISEED-FORMAL**：commit `ac64885`，fresh adaptive `main-study` 使用 [autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260512_031151.yaml](/dataset/HH/ankle-ct/autoresearch_logs/generated_search_configs/optuna_main_search_iter_0001_20260512_031151.yaml)，study root [runs/optuna_main_autoloop/iter_0001_20260512_031151](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0001_20260512_031151)，GPU policy `--gpu-ids 0,2,3 --max-workers 3`，完成 seeds `42/123/456`。实验实际结果：`seed42=0.9148936170212766/0.9754545454545454/0.9090909090909091`，`seed123=0.9042553191489362/0.9536363636363637/0.9010989010989011`，`seed456=0.9468085106382979/0.9668181818181818/0.9425287356321839`；3-seed mean `val_acc=0.9219858156028369`，`val_auc=0.9653030303030303`，`val_f1=0.9175728486073313`，`peak_vram≈2.19 GiB` → **discard**（seed456 是单 seed spike，但 3-seed mean 低于 DFR-25 mean，且 `val_acc` 只等于 matched equal-weight mean，没有证明 learned full-fusion 超过 matched equal-weight。）
+- **fusion-weight 结论**：hard mismatch trigger 没有修复 routing collapse。`seed42` mean weight `0.9748/0.0140/0.0112`，top-weight `94/0/0`；`seed123` mean weight `0.9210/0.0486/0.0304`，top-weight `94/0/0`；`seed456` mean weight `0.9676/0.0137/0.0188`，top-weight `94/0/0`。三 seed 合计 top-weight `282/0/0`，multi-seed mean weight `0.9545/0.0254/0.0201`；即使 true-margin telemetry 中存在 non-axial 支持样本，最终 routing 仍全部选择 axial。
+- **当前判断**：DFR-74 正式关闭 DFR-37 hard mismatch threshold 作为可推广主线修复的假设。它没有把 weak-view contribution 转化成稳定 routing，也没有让 learned full-fusion 明确超过 matched equal-weight；后续不应继续调这个 threshold。下一轮若继续 DFR-25 anchor，应优先做一项 positive-signal 机制或样本级 trigger audit，聚焦“哪些样本确实需要 non-axial routing、当前 trigger 为什么没有覆盖/转化”，而不是再做 broad amplitude sweep。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1351,11 +1362,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-73 bounded view-role scorer logit limit 1.0 multiseed formal`：回到 DFR-57 view-role scorer，但把 `ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_LOGIT_LIMIT` 收紧到 `1.0`，验证更严格 bounded role scorer 是否减少 weak-view over-routing。 |
-| 上次结果 | 3-seed mean `val_acc=0.9290780141843972`，`val_auc=0.9671212121212122`，`val_f1=0.9206270459991225` → discard。相对 DFR-25 是 fixed `6` / broken `9` / net `-3`；top-weight 为 seed42 `90/4/0`、seed123 `94/0/0`、seed456 `89/5/0`，说明更严格 bound 只带来有限 coronal migration，仍以阳性 FN 作为主要代价。 |
-| 下一步 | 立即继续 DFR-74：对 DFR-37 hard mismatch dominant-gate dropout 做 formal seeds `42/123/456` 确认。DFR-37 曾在 seed42 回到 DFR-25 同主指标且优于 matched equal-weight，但没有完整多 seed 验证；这比继续扫 view-role amplitude 更像一个未正式关闭的主线假设。 |
+| 上次实验 | `DFR-74 hard mismatch dominant-gate dropout multiseed formal`：从 DFR-25 anchor 出发，只启用 `ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD=0.1`，对 DFR-37 seed42 positive signal 做 seeds `42/123/456` confirmation。 |
+| 上次结果 | 3-seed mean `val_acc=0.9219858156028369`，`val_auc=0.9653030303030303`，`val_f1=0.9175728486073313` → discard。best seed456 达到 `0.9468085106382979`，但 seed42/123 明显回落；fusion telemetry 为 seed42 `94/0/0`、seed123 `94/0/0`、seed456 `94/0/0`，mean weights `0.9545/0.0254/0.0201`，说明 hard mismatch dropout 没有减少 axial top-weight collapse。 |
+| 下一步 | 不继续调 DFR-37 threshold。若外层 loop 继续，应仍从 DFR-25 anchor 出发，优先选择一项能直接解释“right view at right sample”的 positive-signal 机制或样本级 trigger audit；可考虑 lightweight hierarchical/candidate view selection 或 supervised/prototype alignment 的 seed42 3-candidate study，但不要回到 broad view-role amplitude、plain floor、direct teacher blend 或 scalar temperature family。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 48（自 `DFR-26 seed123` 起至 `DFR-73 bounded view-role scorer logit limit 1.0 multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 49（自 `DFR-26 seed123` 起至 `DFR-74 hard mismatch dominant-gate dropout multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
