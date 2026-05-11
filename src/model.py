@@ -2019,6 +2019,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_WEIGHT_SCALE",
             1.5,
         )
+        self.gate_view_correctness_aux_require_disagreement = _env_flag(
+            "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_REQUIRE_DISAGREEMENT"
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -3346,9 +3349,19 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     "Gate view-correctness auxiliary loss expects fusion weights with "
                     "shape (batch, views, 1) matching view logits."
                 )
+            aux_fusion_weights = fusion_weights
+            if self.gate_view_correctness_aux_require_disagreement:
+                detached_predictions = view_logits.detach().argmax(dim=-1)
+                disagreement_mask = detached_predictions.ne(
+                    detached_predictions[:, :1]
+                ).any(dim=1, keepdim=True)
+                aux_fusion_weights = fusion_weights * disagreement_mask.to(
+                    device=fusion_weights.device,
+                    dtype=fusion_weights.dtype,
+                ).unsqueeze(-1)
             view_scales = (
                 self.gate_view_correctness_aux_base_scale
-                + self.gate_view_correctness_aux_weight_scale * fusion_weights
+                + self.gate_view_correctness_aux_weight_scale * aux_fusion_weights
             )
             aux_logits = view_logits.detach() * view_scales
             aux_weight = self.gate_view_correctness_aux_weight
