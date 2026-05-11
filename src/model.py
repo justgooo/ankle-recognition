@@ -724,6 +724,10 @@ class GateViewPriorDebiaser(nn.Module):
         max_strength: float | None = None,
         evidence_close_gap: float = 0.0,
         evidence_close_window: float = 0.0,
+        positive_safe: bool = False,
+        positive_safe_abnormal_gap: float = 0.0,
+        positive_safe_fused_floor: float = 0.6,
+        positive_safe_window: float = 0.0,
     ) -> None:
         super().__init__()
         if not (0.0 <= strength <= 1.0):
@@ -740,17 +744,79 @@ class GateViewPriorDebiaser(nn.Module):
             raise ValueError("evidence_close_gap must be >= 0.")
         if evidence_close_window < 0.0:
             raise ValueError("evidence_close_window must be >= 0.")
+        if positive_safe_abnormal_gap < 0.0:
+            raise ValueError("positive_safe_abnormal_gap must be >= 0.")
+        if not (0.0 <= positive_safe_fused_floor <= 1.0):
+            raise ValueError("positive_safe_fused_floor must be in [0, 1].")
+        if positive_safe_window < 0.0:
+            raise ValueError("positive_safe_window must be >= 0.")
         self.strength = float(strength)
         self.max_strength = float(max_strength)
         self.momentum = float(momentum)
         self.evidence_close_gap = float(evidence_close_gap)
         self.evidence_close_window = float(evidence_close_window)
+        self.positive_safe = bool(positive_safe)
+        self.positive_safe_abnormal_gap = float(positive_safe_abnormal_gap)
+        self.positive_safe_fused_floor = float(positive_safe_fused_floor)
+        self.positive_safe_window = float(positive_safe_window)
         self.register_buffer("running_centered_prior", torch.zeros(1, 3, 1))
+
+    def _positive_safe_scale(
+        self,
+        confidences: torch.Tensor,
+        view_logits: torch.Tensor,
+        prior: torch.Tensor,
+    ) -> torch.Tensor:
+        if view_logits.shape[-1] < 2:
+            return confidences.new_ones(confidences.shape[0], 1, 1)
+
+        detached_logits = view_logits.detach()
+        abnormal_probs = torch.softmax(detached_logits, dim=-1)[..., 1]
+        axial_abnormal = abnormal_probs[:, :1]
+        best_non_axial_abnormal = abnormal_probs[:, 1:].amax(dim=1, keepdim=True)
+        abnormal_delta = (
+            best_non_axial_abnormal
+            - axial_abnormal
+            + self.positive_safe_abnormal_gap
+        )
+        if self.positive_safe_window > 0.0:
+            abnormal_safe = (
+                abnormal_delta / self.positive_safe_window
+            ).clamp(min=0.0, max=1.0)
+        else:
+            abnormal_safe = (abnormal_delta >= 0.0).to(dtype=confidences.dtype)
+
+        max_debiased_confidences = confidences - self.max_strength * prior.to(
+            device=confidences.device,
+            dtype=confidences.dtype,
+        )
+        max_debiased_weights = torch.softmax(
+            max_debiased_confidences.squeeze(-1),
+            dim=1,
+        )
+        max_debiased_abnormal = (max_debiased_weights * abnormal_probs).sum(
+            dim=1,
+            keepdim=True,
+        )
+        floor_delta = max_debiased_abnormal - self.positive_safe_fused_floor
+        if self.positive_safe_window > 0.0:
+            fused_safe = (
+                floor_delta / self.positive_safe_window
+            ).clamp(min=0.0, max=1.0)
+        else:
+            fused_safe = (floor_delta >= 0.0).to(dtype=confidences.dtype)
+
+        safe_scale = torch.maximum(abnormal_safe, fused_safe)
+        return safe_scale.to(
+            device=confidences.device,
+            dtype=confidences.dtype,
+        ).unsqueeze(-1)
 
     def _sample_strength(
         self,
         confidences: torch.Tensor,
         view_logits: torch.Tensor | None,
+        prior: torch.Tensor,
     ) -> float | torch.Tensor:
         if self.max_strength <= self.strength or view_logits is None:
             return self.strength
@@ -766,6 +832,12 @@ class GateViewPriorDebiaser(nn.Module):
         else:
             scale = (close_delta >= 0.0).to(dtype=confidences.dtype)
         scale = scale.to(device=confidences.device, dtype=confidences.dtype)
+        if self.positive_safe:
+            scale = scale * self._positive_safe_scale(
+                confidences,
+                view_logits,
+                prior,
+            ).squeeze(-1)
         strength = self.strength + (self.max_strength - self.strength) * scale
         return strength.unsqueeze(-1)
 
@@ -795,7 +867,7 @@ class GateViewPriorDebiaser(nn.Module):
                 device=confidences.device,
                 dtype=confidences.dtype,
             )
-        strength = self._sample_strength(confidences, view_logits)
+        strength = self._sample_strength(confidences, view_logits, prior)
         return confidences - strength * prior
 
 
@@ -1576,6 +1648,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_EVIDENCE_CLOSE_WINDOW",
             0.0,
         )
+        self.gate_view_prior_debias_positive_safe = _env_flag(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_POSITIVE_SAFE"
+        )
+        self.gate_view_prior_debias_positive_safe_abnormal_gap = _env_unit_float(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_POSITIVE_SAFE_ABNORMAL_GAP",
+            0.0,
+        )
+        self.gate_view_prior_debias_positive_safe_fused_floor = _env_unit_float(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_POSITIVE_SAFE_FUSED_FLOOR",
+            0.6,
+        )
+        self.gate_view_prior_debias_positive_safe_window = _env_unit_float(
+            "ANKLE_DECISION_GATE_VIEW_PRIOR_DEBIAS_POSITIVE_SAFE_WINDOW",
+            0.0,
+        )
         self.use_shared_confidence_head = _env_flag(
             "ANKLE_DECISION_USE_SHARED_CONFIDENCE_HEAD"
         )
@@ -1964,6 +2051,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         max_strength=self.gate_view_prior_debias_max_strength,
                         evidence_close_gap=self.gate_view_prior_debias_evidence_close_gap,
                         evidence_close_window=self.gate_view_prior_debias_evidence_close_window,
+                        positive_safe=self.gate_view_prior_debias_positive_safe,
+                        positive_safe_abnormal_gap=self.gate_view_prior_debias_positive_safe_abnormal_gap,
+                        positive_safe_fused_floor=self.gate_view_prior_debias_positive_safe_fused_floor,
+                        positive_safe_window=self.gate_view_prior_debias_positive_safe_window,
                     )
                 if self.enable_relative_view_gate:
                     self.relative_view_gate = RelativeViewReliabilityGate(
