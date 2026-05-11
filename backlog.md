@@ -332,6 +332,18 @@
 - **sample-level 结论**：相对 DFR-25，DFR-72 是 `fixed=3 / broken=9 / net=-6`；seed42 `fixed=1 / broken=3`，seed123 `fixed=1 / broken=1`，seed456 `fixed=1 / broken=5`。fixed 包含 `2` 个阴性样本和 `1` 个阳性样本，broken 包含 `6` 个阴性样本和 `3` 个阳性样本；seed456 新增 `5` 个阴性 FP，说明 temperature 的轻微训练扰动没有带来可靠校准。
 - **当前判断**：DFR-72 是 negative result。低容量 scalar / temperature / calibration 变量在 DFR-25 anchor 下不足以修复 residual axial lock-in；DFR-70/71/72 共同关闭了 direct teacher blend 与 per-view logit temperature 这两条低容量证据校准路径。下一轮不应继续调 teacher blend 或 scalar temperature，而应回到近期唯一有正向 routing signal 的 DFR-57 view-role scorer，测试更严格 bounded role scorer 是否能保留 anti-collapse 同时减少 weak-view over-routing。
 
+### DFR-73 bounded view-role scorer logit limit 1.0（2026-05-12）
+
+> **实验说明**
+> - 本轮从 DFR-57 view-role scorer 回来，但把 `ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_LOGIT_LIMIT` 从 `1.5` 收紧到 `1.0`，其余保持 DFR-25 anchor：ResNeXt 256x8、decision fusion、L3 no-mixer、dominant-gate dropout 与 winning scalar 不变。
+> - 结构假设：DFR-57/60 是近期唯一能稳定提供 anti-collapse routing signal 的 family，但会产生 weak-view over-routing 和 positive-evidence dilution；更严格的 confidence-logit bound 可能保留 axial/coronal split，同时削弱低置信弱视角对阳性样本的过度稀释。
+> - 预计改进效果：seed42/456 应避免完全 hard axial lock-in，同时 seed123 不应像 DFR-57 一样出现过强 coronal routing；理想形态是 axial 仍为多数 top-weight，但 coronal 在有 true-margin 支持的样本上获得少量 top/near-top routing，从而把 DFR-57 的 FP 修复收益转成超过 DFR-25 的净收益。
+
+- [x] **DFR-73-RESNEXT-DECISION-256X8-BOUNDED-VIEW-ROLE-LIMIT10-MULTISEED-FORMAL**：commit `4f3fa00`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr73_bounded_view_role_limit10_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr73_bounded_view_role_limit10_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr73_bounded_view_role_limit10_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr73_bounded_view_role_limit10_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr73_bounded_view_role_limit10_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr73_bounded_view_role_limit10_formal_s456.yaml)。实验实际结果：Slurm job `482792` 在 `V100q/node21` 完成，`seed42=0.9255319148936170/0.9540909090909091/0.9156626506024096`，`seed123=0.9255319148936170/0.9690909090909092/0.9176470588235294`，`seed456=0.9361702127659575/0.9781818181818182/0.9285714285714286`；3-seed mean `val_acc=0.9290780141843972`，`val_auc=0.9671212121212122`，`val_f1=0.9206270459991225`，`peak_vram≈2.15 GiB` → **discard**（高于 matched equal-weight mean 的 `val_acc`，但仍低于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997` 的主指标和 F1。）
+- **fusion-weight 结论**：limit `1.0` 确实把 DFR-57/60 的 routing 变得更保守，但没有形成正确净收益。`seed42` mean weight `0.4686/0.4653/0.0662`，top-weight `90/4/0`；`seed123` mean weight `0.4722/0.4626/0.0653`，top-weight 仍 `94/0/0`；`seed456` mean weight `0.6229/0.2724/0.1048`，top-weight `89/5/0`。也就是说，coronal 获得了接近 axial 的平均质量，但 top-routing 仍主要由 axial 控制，且 sagittal 仍没有稳定进入 top-weight。
+- **sample-level 结论**：相对 DFR-25，DFR-73 是 `fixed=6 / broken=9 / net=-3`；seed42 `fixed=3 / broken=4`，seed123 `fixed=2 / broken=3`，seed456 `fixed=1 / broken=2`。fixed 主要是阴性 FP（总计 `5` 个阴性、`1` 个阳性），broken 全部是阳性 FN（`9` 个阳性），说明 bounded role scorer 继续以损伤 positive-evidence channel 为代价修复一部分阴性 FP。
+- **当前判断**：DFR-73 是 negative result，并基本关闭继续盲调 view-role confidence-logit amplitude 的路径。更严格 bound 能降低 over-routing，但不能解决 role family 的核心问题：阳性样本上 axial/sagittal positive evidence 仍会被 coronal/role negative evidence 稀释。下一轮不应继续把 limit 从 `1.0` 往下扫；应回到尚未 3-seed formal 确认的 DFR-37 hard mismatch dominant-dropout，验证这个更保守的训练期 mismatch repair 是否有跨 seed 稳定性。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1339,11 +1351,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-72 view-logit temperature on DFR-25 gate multiseed formal`：关闭 direct teacher gate blend，回到 DFR-25 learned gate，只启用 `ANKLE_DECISION_ENABLE_VIEW_LOGIT_TEMPERATURE=1` 做 per-view classifier logit temperature calibration。 |
-| 上次结果 | 3-seed mean `val_acc=0.9184397163120567`，`val_auc=0.9674242424242424`，`val_f1=0.9141830912273523` → discard。相对 DFR-25 是 fixed `3` / broken `9` / net `-6`；learned temperatures 接近 identity（约 `0.993-1.006`），seed42/123 仍 top-weight `94/0/0`，seed456 也只有 `92/2/0`，说明 view-logit temperature 没有提供可用的视角尺度校准。 |
-| 下一步 | 立即继续 DFR-73：回到近期唯一有正向 routing signal 的 DFR-57 view-role scorer，但把 `ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_LOGIT_LIMIT` 从 `1.5` 降到 `1.0`，验证更严格 bounded role scorer 是否能保留 axial/coronal anti-collapse，同时减少 DFR-57/60 的 weak-view over-routing 和 positive-evidence dilution。 |
+| 上次实验 | `DFR-73 bounded view-role scorer logit limit 1.0 multiseed formal`：回到 DFR-57 view-role scorer，但把 `ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_LOGIT_LIMIT` 收紧到 `1.0`，验证更严格 bounded role scorer 是否减少 weak-view over-routing。 |
+| 上次结果 | 3-seed mean `val_acc=0.9290780141843972`，`val_auc=0.9671212121212122`，`val_f1=0.9206270459991225` → discard。相对 DFR-25 是 fixed `6` / broken `9` / net `-3`；top-weight 为 seed42 `90/4/0`、seed123 `94/0/0`、seed456 `89/5/0`，说明更严格 bound 只带来有限 coronal migration，仍以阳性 FN 作为主要代价。 |
+| 下一步 | 立即继续 DFR-74：对 DFR-37 hard mismatch dominant-gate dropout 做 formal seeds `42/123/456` 确认。DFR-37 曾在 seed42 回到 DFR-25 同主指标且优于 matched equal-weight，但没有完整多 seed 验证；这比继续扫 view-role amplitude 更像一个未正式关闭的主线假设。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 47（自 `DFR-26 seed123` 起至 `DFR-72 view-logit temperature on DFR-25 gate multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 48（自 `DFR-26 seed123` 起至 `DFR-73 bounded view-role scorer logit limit 1.0 multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
