@@ -2022,6 +2022,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.gate_view_correctness_aux_require_disagreement = _env_flag(
             "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_REQUIRE_DISAGREEMENT"
         )
+        self.gate_view_correctness_aux_nonaxial_only = _env_flag(
+            "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_NONAXIAL_ONLY"
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -3359,6 +3362,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     device=fusion_weights.device,
                     dtype=fusion_weights.dtype,
                 ).unsqueeze(-1)
+            if self.gate_view_correctness_aux_nonaxial_only:
+                view_mask = torch.ones_like(aux_fusion_weights)
+                view_mask[:, :1] = 0.0
+                aux_fusion_weights = aux_fusion_weights * view_mask
             view_scales = (
                 self.gate_view_correctness_aux_base_scale
                 + self.gate_view_correctness_aux_weight_scale * aux_fusion_weights
