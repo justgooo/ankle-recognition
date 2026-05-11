@@ -320,6 +320,18 @@
 - **sample-level 结论**：相对 DFR-25，DFR-71 是 `fixed=4 / broken=11 / net=-7`；seed42 `fixed=2 / broken=5`，seed123 `fixed=1 / broken=4`，seed456 `fixed=1 / broken=2`。fixed 全部是阴性样本，broken 包含 `7` 个阳性样本和 `4` 个阴性样本，说明 eval-only teacher 主要以损伤阳性通道为代价换来少量 FP 修复。
 - **当前判断**：DFR-71 是 negative result，并基本关闭“直接把 detached evidence teacher 混入 gate weights”的路径。DFR-70/71 共同说明 teacher-rank signal 能改变 routing，但无法区分有益迁移和弱视角误迁移；下一轮不应继续调 teacher blend 强度或 train/eval 时机，而应转向不直接改 gate 权重的低容量校准变量。DFR-72 因此回到 DFR-25 gate，只启用 per-view logit temperature calibration，验证是否能通过视角 logits 的置信度校准缓解 positive-evidence dilution。
 
+### DFR-72 view-logit temperature on DFR-25 gate（2026-05-11）
+
+> **实验说明**
+> - 本轮从 DFR-25 anchor fork，关闭 DFR-70/71 的 direct teacher gate blend，保持 ResNeXt 256x8、decision fusion、L3 no-mixer、dominant-gate dropout 与 winning scalar 不变。
+> - 结构假设：如果 DFR-70/71 的失败来自直接改 gate weights 太 noisy，那么更低容量的 per-view classifier logit temperature calibration 可能通过校准各视角置信度来减少 positive-evidence dilution，同时不直接改变 learned gate routing。
+> - 预计改进效果：learned temperatures 应明显偏离 `[1,1,1]`，在保持 DFR-25 routing 主体的同时改善 seed42/456 的边界样本；不要求大量 non-axial top migration，但 per-view logits 应校准到足以提升 full fusion。
+
+- [x] **DFR-72-RESNEXT-DECISION-256X8-VIEW-LOGIT-TEMPERATURE-DFR25-MULTISEED-FORMAL**：commit `4601482`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr72_view_logit_temperature_dfr25_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr72_view_logit_temperature_dfr25_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr72_view_logit_temperature_dfr25_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr72_view_logit_temperature_dfr25_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr72_view_logit_temperature_dfr25_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr72_view_logit_temperature_dfr25_formal_s456.yaml)。实验实际结果：Slurm job `482783` 在 `V100q/node21` 完成，`seed42=0.9148936170212766/0.9800000000000000/0.9090909090909091`，`seed123=0.9361702127659575/0.9568181818181819/0.9302325581395349`，`seed456=0.9042553191489362/0.9654545454545455/0.9032258064516129`；3-seed mean `val_acc=0.9184397163120567`，`val_auc=0.9674242424242424`，`val_f1=0.9141830912273523`，`peak_vram≈2.15 GiB` → **discard**（低于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`，也低于 matched equal-weight mean 的 `val_acc / val_f1`。）
+- **fusion-weight 结论**：view-logit temperature 没有实质改变 DFR-25 的 routing。`seed42` mean weight `0.8325/0.0826/0.0850`，top-weight `94/0/0`；`seed123` mean weight `0.9327/0.0482/0.0191`，top-weight `94/0/0`；`seed456` mean weight `0.7790/0.1334/0.0876`，top-weight `92/2/0`。checkpoint 中 learned temperatures 近似 identity：seed42 `0.9930/1.0031/1.0047`，seed123 `0.9969/1.0056/1.0038`，seed456 `0.9962/1.0017/1.0029`，说明该变量几乎没有学到可用的视角尺度修正。
+- **sample-level 结论**：相对 DFR-25，DFR-72 是 `fixed=3 / broken=9 / net=-6`；seed42 `fixed=1 / broken=3`，seed123 `fixed=1 / broken=1`，seed456 `fixed=1 / broken=5`。fixed 包含 `2` 个阴性样本和 `1` 个阳性样本，broken 包含 `6` 个阴性样本和 `3` 个阳性样本；seed456 新增 `5` 个阴性 FP，说明 temperature 的轻微训练扰动没有带来可靠校准。
+- **当前判断**：DFR-72 是 negative result。低容量 scalar / temperature / calibration 变量在 DFR-25 anchor 下不足以修复 residual axial lock-in；DFR-70/71/72 共同关闭了 direct teacher blend 与 per-view logit temperature 这两条低容量证据校准路径。下一轮不应继续调 teacher blend 或 scalar temperature，而应回到近期唯一有正向 routing signal 的 DFR-57 view-role scorer，测试更严格 bounded role scorer 是否能保留 anti-collapse 同时减少 weak-view over-routing。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1327,11 +1339,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-71 eval-only teacher blend 0.05 multiseed formal`：保留 DFR-25 L3-no-mixer + dominant-gate dropout + winning scalar，训练时保持原始 learned gate，只在 eval/validation 路径启用 `ANKLE_DECISION_GATE_TEACHER_BLEND=0.05` + `ANKLE_DECISION_GATE_TEACHER_BLEND_EVAL_ONLY=1`。 |
-| 上次结果 | 3-seed mean `val_acc=0.9148936170212766`，`val_auc=0.9659090909090908`，`val_f1=0.9069673097787630` → discard。相对 DFR-25 是 fixed `4` / broken `11` / net `-7`；fixed 全部为阴性样本，broken 包含 `7` 个阳性样本和 `4` 个阴性样本。seed42/123 仍是 top-weight `94/0/0`，seed456 虽迁移到 `44/50/0` 但仍低于 DFR-25，说明 eval-only teacher calibration 也会造成 noisy boundary drift。 |
-| 下一步 | 立即继续 DFR-72：关闭 direct teacher gate blend，回到 DFR-25 gate，只启用 `ANKLE_DECISION_ENABLE_VIEW_LOGIT_TEMPERATURE=1` 做 per-view logit calibration。目标是验证不直接改 gate 权重、只校准各视角 classifier 置信度，能否缓解 positive-evidence dilution 并保住 DFR-25 learned routing。 |
+| 上次实验 | `DFR-72 view-logit temperature on DFR-25 gate multiseed formal`：关闭 direct teacher gate blend，回到 DFR-25 learned gate，只启用 `ANKLE_DECISION_ENABLE_VIEW_LOGIT_TEMPERATURE=1` 做 per-view classifier logit temperature calibration。 |
+| 上次结果 | 3-seed mean `val_acc=0.9184397163120567`，`val_auc=0.9674242424242424`，`val_f1=0.9141830912273523` → discard。相对 DFR-25 是 fixed `3` / broken `9` / net `-6`；learned temperatures 接近 identity（约 `0.993-1.006`），seed42/123 仍 top-weight `94/0/0`，seed456 也只有 `92/2/0`，说明 view-logit temperature 没有提供可用的视角尺度校准。 |
+| 下一步 | 立即继续 DFR-73：回到近期唯一有正向 routing signal 的 DFR-57 view-role scorer，但把 `ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_LOGIT_LIMIT` 从 `1.5` 降到 `1.0`，验证更严格 bounded role scorer 是否能保留 axial/coronal anti-collapse，同时减少 DFR-57/60 的 weak-view over-routing 和 positive-evidence dilution。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 46（自 `DFR-26 seed123` 起至 `DFR-71 eval-only teacher blend 0.05 multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 47（自 `DFR-26 seed123` 起至 `DFR-72 view-logit temperature on DFR-25 gate multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
