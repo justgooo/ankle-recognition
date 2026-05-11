@@ -2004,6 +2004,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_CANDIDATE_VIEW_PROTOTYPE_AUX_TEMPERATURE",
             0.2,
         )
+        self.enable_gate_view_correctness_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS"
+        )
+        self.gate_view_correctness_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_WEIGHT",
+            0.01,
+        )
+        self.gate_view_correctness_aux_base_scale = _env_positive_float(
+            "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_BASE_SCALE",
+            0.5,
+        )
+        self.gate_view_correctness_aux_weight_scale = _env_positive_float(
+            "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_WEIGHT_SCALE",
+            1.5,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2331,10 +2346,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS requires "
                 "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_GATE."
             )
-        if self.enable_candidate_view_prototype_aux_loss and self.enable_aux_view_loss:
+        enabled_aux_modes = [
+            self.enable_aux_view_loss,
+            self.enable_candidate_view_prototype_aux_loss,
+            self.enable_gate_view_correctness_aux_loss,
+        ]
+        if sum(bool(flag) for flag in enabled_aux_modes) > 1:
             raise ValueError(
-                "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS and "
-                "ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS are mutually exclusive."
+                "ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS, "
+                "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS are mutually exclusive."
             )
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
@@ -3300,6 +3321,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     def _set_aux_view_loss_state(
         self,
         view_logits: torch.Tensor,
+        fusion_weights: torch.Tensor | None = None,
         candidate_prototype_logits: torch.Tensor | None = None,
     ) -> None:
         """Expose optional per-view auxiliary logits through the existing train.py hook."""
@@ -3313,6 +3335,23 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 )
             aux_logits = candidate_prototype_logits
             aux_weight = self.candidate_view_prototype_aux_weight
+        elif self.enable_gate_view_correctness_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Gate view-correctness auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Gate view-correctness auxiliary loss expects fusion weights with "
+                    "shape (batch, views, 1) matching view logits."
+                )
+            view_scales = (
+                self.gate_view_correctness_aux_base_scale
+                + self.gate_view_correctness_aux_weight_scale * fusion_weights
+            )
+            aux_logits = view_logits.detach() * view_scales
+            aux_weight = self.gate_view_correctness_aux_weight
         elif self.enable_aux_view_loss:
             aux_logits = view_logits
 
@@ -3428,6 +3467,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         decision_outputs = self._compute_decision_outputs(images)
         self._set_aux_view_loss_state(
             decision_outputs["view_logits"],
+            fusion_weights=decision_outputs.get(
+                "raw_fusion_weights",
+                decision_outputs["fusion_weights"],
+            ),
             candidate_prototype_logits=decision_outputs.get("candidate_prototype_logits"),
         )
         active_view_mask = None
