@@ -693,6 +693,75 @@ class EvidenceAwareReliabilityGate(nn.Module):
         return self.residual_limit * torch.tanh(self.adapter(residual_input))
 
 
+class CandidateViewReliabilityGate(nn.Module):
+    """Candidate-limited reliability residual for evidence-supported non-axial views."""
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        evidence_dim: int = 8,
+        bottleneck_dim: int = 32,
+        residual_limit: float = 0.35,
+        margin_gap: float = 0.5,
+        margin_window: float = 0.25,
+        dropout: float = 0.05,
+    ) -> None:
+        super().__init__()
+        if residual_limit <= 0.0:
+            raise ValueError("residual_limit must be > 0.")
+        if margin_gap < 0.0:
+            raise ValueError("margin_gap must be >= 0.")
+        if margin_window < 0.0:
+            raise ValueError("margin_window must be >= 0.")
+        self.feature_norm = nn.LayerNorm(feature_dim)
+        self.evidence_norm = nn.LayerNorm(evidence_dim)
+        self.adapter = nn.Sequential(
+            nn.Linear(feature_dim + evidence_dim, bottleneck_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(bottleneck_dim, 1),
+        )
+        self.residual_limit = float(residual_limit)
+        self.margin_gap = float(margin_gap)
+        self.margin_window = float(margin_window)
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def _candidate_scale(self, view_logits: torch.Tensor) -> torch.Tensor:
+        if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        detached_logits = view_logits.detach()
+        pred_margins = detached_logits.max(dim=-1).values - detached_logits.min(dim=-1).values
+        axial_margin = pred_margins[:, :1]
+        candidate_delta = pred_margins - axial_margin - self.margin_gap
+        if self.margin_window > 0.0:
+            candidate_scale = (candidate_delta / self.margin_window).clamp(0.0, 1.0)
+        else:
+            candidate_scale = candidate_delta.ge(0.0).to(dtype=view_logits.dtype)
+        candidate_scale = candidate_scale.clone()
+        candidate_scale[:, 0] = 0.0
+        return candidate_scale
+
+    def forward(
+        self,
+        view_features: torch.Tensor,
+        view_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        evidence = EvidenceAwareReliabilityGate._evidence_from_logits(view_logits).to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        features = self.feature_norm(view_features)
+        evidence = self.evidence_norm(evidence)
+        residual_input = torch.cat([features, evidence], dim=-1)
+        residual = self.residual_limit * torch.tanh(self.adapter(residual_input))
+        candidate_scale = self._candidate_scale(view_logits).to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        return residual * candidate_scale.unsqueeze(-1)
+
+
 class GateLogitRMSLimiter(nn.Module):
     """Bound decision-gate logit concentration while preserving view ranking."""
 
@@ -1618,6 +1687,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_EVIDENCE_AWARE_GATE_RESIDUAL_LIMIT",
             0.25,
         )
+        self.enable_candidate_view_gate = _env_flag(
+            "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_GATE"
+        )
+        self.candidate_view_gate_residual_limit = _env_positive_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_RESIDUAL_LIMIT",
+            0.35,
+        )
+        self.candidate_view_gate_margin_gap = _env_unit_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_MARGIN_GAP",
+            0.5,
+        )
+        self.candidate_view_gate_margin_window = _env_unit_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_MARGIN_WINDOW",
+            0.25,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2042,6 +2126,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     self.evidence_aware_gate = EvidenceAwareReliabilityGate(
                         feature_dim=self.feature_dim,
                         residual_limit=self.evidence_aware_gate_residual_limit,
+                    )
+                if self.enable_candidate_view_gate:
+                    self.candidate_view_gate = CandidateViewReliabilityGate(
+                        feature_dim=self.feature_dim,
+                        residual_limit=self.candidate_view_gate_residual_limit,
+                        margin_gap=self.candidate_view_gate_margin_gap,
+                        margin_window=self.candidate_view_gate_margin_window,
                     )
                 if self.enable_gate_logit_rms_limit:
                     self.gate_logit_rms_limiter = GateLogitRMSLimiter(
@@ -2742,6 +2833,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 evidence_gate_features = torch.stack(gating_features, dim=1)
                 confidences = confidences + self.evidence_aware_gate(
                     evidence_gate_features,
+                    view_logits,
+                )
+            if self.enable_candidate_view_gate:
+                candidate_gate_features = torch.stack(gating_features, dim=1)
+                confidences = confidences + self.candidate_view_gate(
+                    candidate_gate_features,
                     view_logits,
                 )
             if self.enable_relative_view_gate:
