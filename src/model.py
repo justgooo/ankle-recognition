@@ -1128,6 +1128,133 @@ class EvidenceMarginResidualFusion(nn.Module):
         )
 
 
+class PositiveEvidenceFloorFusion(nn.Module):
+    """One-way abnormal-margin boost from detached high-confidence view evidence."""
+
+    def __init__(
+        self,
+        num_views: int = 3,
+        hidden_dim: int = 48,
+        residual_limit: float = 1.0,
+        dropout: float = 0.05,
+        evidence_threshold: float = 0.75,
+        support_threshold: float = 0.2,
+        fused_ceiling: float = 0.5,
+        init_bias: float = -6.0,
+    ) -> None:
+        super().__init__()
+        if num_views <= 0:
+            raise ValueError("num_views must be > 0.")
+        if hidden_dim <= 0:
+            raise ValueError("hidden_dim must be > 0.")
+        if residual_limit <= 0.0:
+            raise ValueError("residual_limit must be > 0.")
+        for name, value in {
+            "evidence_threshold": evidence_threshold,
+            "support_threshold": support_threshold,
+            "fused_ceiling": fused_ceiling,
+        }.items():
+            if not (0.0 <= value <= 1.0):
+                raise ValueError(f"{name} must be in [0, 1].")
+
+        self.num_views = int(num_views)
+        self.residual_limit = float(residual_limit)
+        self.evidence_threshold = float(evidence_threshold)
+        self.support_threshold = float(support_threshold)
+        self.fused_ceiling = float(fused_ceiling)
+        input_dim = self.num_views * 6 + 7
+        self.norm = nn.LayerNorm(input_dim)
+        self.adapter = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.constant_(self.adapter[-1].bias, float(init_bias))
+
+    def forward(
+        self,
+        fused_logits: torch.Tensor,
+        view_logits: torch.Tensor,
+        fusion_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        if fused_logits.shape[-1] != 2 or view_logits.shape[-1] != 2:
+            return fused_logits
+        if view_logits.ndim != 3 or fusion_weights.ndim != 3:
+            raise ValueError("view_logits and fusion_weights must have shape (batch, views, ...).")
+        if view_logits.shape[1] != self.num_views or fusion_weights.shape[1] != self.num_views:
+            raise ValueError(
+                f"PositiveEvidenceFloorFusion configured for {self.num_views} views."
+            )
+
+        detached_view_logits = view_logits.detach()
+        detached_weights = fusion_weights.detach().squeeze(-1)
+        detached_fused_logits = fused_logits.detach()
+
+        view_probs = torch.softmax(detached_view_logits, dim=-1)
+        abnormal_probs = view_probs[..., 1]
+        view_margins = detached_view_logits[..., 1] - detached_view_logits[..., 0]
+        weighted_abnormal = detached_weights * abnormal_probs
+        centered_abnormal = abnormal_probs - abnormal_probs.mean(dim=1, keepdim=True)
+        centered_margins = view_margins - view_margins.mean(dim=1, keepdim=True)
+
+        fused_probs = torch.softmax(detached_fused_logits, dim=-1)
+        fused_abnormal = fused_probs[:, 1:2]
+        fused_margin = detached_fused_logits[:, 1:2] - detached_fused_logits[:, 0:1]
+        top2_abnormal = abnormal_probs.topk(k=min(2, self.num_views), dim=1).values
+        max_abnormal = top2_abnormal[:, :1]
+        second_abnormal = (
+            top2_abnormal[:, 1:2]
+            if top2_abnormal.shape[1] > 1
+            else top2_abnormal[:, :1]
+        )
+        safe_weights = detached_weights.clamp_min(1e-8)
+        weight_entropy = -(safe_weights * safe_weights.log()).sum(dim=1, keepdim=True)
+        weight_entropy = weight_entropy / math.log(float(self.num_views))
+        global_features = torch.cat(
+            [
+                fused_abnormal,
+                fused_margin,
+                max_abnormal,
+                second_abnormal,
+                view_margins.amax(dim=1, keepdim=True),
+                view_margins.amin(dim=1, keepdim=True),
+                weight_entropy,
+            ],
+            dim=1,
+        )
+        evidence_features = torch.cat(
+            [
+                detached_weights,
+                abnormal_probs,
+                centered_abnormal,
+                view_margins,
+                centered_margins,
+                weighted_abnormal,
+                global_features,
+            ],
+            dim=1,
+        )
+        eligible = (
+            max_abnormal.ge(self.evidence_threshold)
+            & second_abnormal.ge(self.support_threshold)
+            & fused_abnormal.lt(self.fused_ceiling)
+        ).to(dtype=fused_logits.dtype)
+        raw_boost = self.adapter(self.norm(evidence_features))
+        margin_boost = self.residual_limit * torch.sigmoid(raw_boost) * eligible
+
+        center = fused_logits.mean(dim=-1, keepdim=True)
+        margin = fused_logits[:, 1:2] - fused_logits[:, 0:1] + margin_boost
+        return torch.cat(
+            [
+                center - 0.5 * margin,
+                center + 0.5 * margin,
+            ],
+            dim=-1,
+        )
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -1523,6 +1650,33 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_EVIDENCE_MARGIN_RESIDUAL_DROPOUT",
             0.05,
         )
+        self.enable_positive_evidence_floor_fusion = _env_flag(
+            "ANKLE_DECISION_ENABLE_POSITIVE_EVIDENCE_FLOOR_FUSION"
+        )
+        self.positive_evidence_floor_hidden_dim = _env_positive_int(
+            "ANKLE_DECISION_POSITIVE_EVIDENCE_FLOOR_HIDDEN_DIM",
+            48,
+        )
+        self.positive_evidence_floor_residual_limit = _env_positive_float(
+            "ANKLE_DECISION_POSITIVE_EVIDENCE_FLOOR_RESIDUAL_LIMIT",
+            1.0,
+        )
+        self.positive_evidence_floor_dropout = _env_unit_float(
+            "ANKLE_DECISION_POSITIVE_EVIDENCE_FLOOR_DROPOUT",
+            0.05,
+        )
+        self.positive_evidence_floor_evidence_threshold = _env_unit_float(
+            "ANKLE_DECISION_POSITIVE_EVIDENCE_FLOOR_EVIDENCE_THRESHOLD",
+            0.75,
+        )
+        self.positive_evidence_floor_support_threshold = _env_unit_float(
+            "ANKLE_DECISION_POSITIVE_EVIDENCE_FLOOR_SUPPORT_THRESHOLD",
+            0.2,
+        )
+        self.positive_evidence_floor_fused_ceiling = _env_unit_float(
+            "ANKLE_DECISION_POSITIVE_EVIDENCE_FLOOR_FUSED_CEILING",
+            0.5,
+        )
         self.enable_relative_view_gate = _env_flag(
             "ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE"
         )
@@ -1835,6 +1989,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         hidden_dim=self.evidence_margin_residual_hidden_dim,
                         residual_limit=self.evidence_margin_residual_limit,
                         dropout=self.evidence_margin_residual_dropout,
+                    )
+                if self.enable_positive_evidence_floor_fusion:
+                    self.positive_evidence_floor_fusion = PositiveEvidenceFloorFusion(
+                        num_views=3,
+                        hidden_dim=self.positive_evidence_floor_hidden_dim,
+                        residual_limit=self.positive_evidence_floor_residual_limit,
+                        dropout=self.positive_evidence_floor_dropout,
+                        evidence_threshold=self.positive_evidence_floor_evidence_threshold,
+                        support_threshold=self.positive_evidence_floor_support_threshold,
+                        fused_ceiling=self.positive_evidence_floor_fused_ceiling,
                     )
         if self.enable_view_logit_temperature:
             self.view_logit_temperature_calibrator = PerViewLogitTemperatureCalibrator(
@@ -2645,6 +2809,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             and active_view_mask is None
         ):
             fused_logits = self.evidence_margin_residual_fusion(
+                fused_logits,
+                view_logits,
+                fusion_weights,
+            )
+        if (
+            self.enable_positive_evidence_floor_fusion
+            and hasattr(self, "positive_evidence_floor_fusion")
+            and active_view_mask is None
+        ):
+            fused_logits = self.positive_evidence_floor_fusion(
                 fused_logits,
                 view_logits,
                 fusion_weights,
