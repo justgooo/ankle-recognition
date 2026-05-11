@@ -308,6 +308,18 @@
 - **sample-level 结论**：相对 DFR-25，DFR-70 是 `fixed=6 / broken=9 / net=-3`。seed42 `fixed=1 / broken=2`，seed123 `fixed=5 / broken=7`，seed456 `fixed=0 / broken=0`；fixed 包含 `4` 个阴性样本和 `2` 个阳性样本，broken 包含 `5` 个阳性样本和 `4` 个阴性样本。seed123 的大幅 routing migration 同时修复和打坏样本，净结果为负。
 - **当前判断**：DFR-70 是 diagnostic discard。它证明 detached evidence ranking 作为路由信号确实能影响 gate，但把 teacher blend 放进训练/验证全路径会造成 seed-specific routing drift。下一轮应保留同一 evidence-rank signal，但只在 eval/validation 路径作为极低强度 gate calibration，训练梯度完全回到 DFR-25 learned gate，从而隔离 teacher signal 本身是否有 post-hoc calibration 价值。
 
+### DFR-71 eval-only teacher blend 0.05（2026-05-11）
+
+> **实验说明**
+> - 本轮从 DFR-70 的 negative diagnosis 继续，保持 DFR-25 anchor 的 ResNeXt 256x8、decision fusion、L3 no-mixer、dominant-gate dropout 与 winning scalar 不变。
+> - 结构假设：DFR-70 失败可能来自 teacher blend 参与训练后改变 gate/classifier 平衡，而不是 detached evidence-rank teacher 本身完全无用；DFR-71 因此新增 `ANKLE_DECISION_GATE_TEACHER_BLEND_EVAL_ONLY=1`，训练时保持 DFR-25 learned gate，只有 eval/validation 时把 5% teacher weights 混入 gate。
+> - 预计改进效果：如果 evidence teacher 只适合作为 post-hoc calibration，seed42/456 应出现少量 evidence-aligned non-axial top/near-top routing，同时避免 DFR-70 seed123 的训练期 noisy routing drift，并保住 DFR-25 的强阳性样本。
+
+- [x] **DFR-71-RESNEXT-DECISION-256X8-EVALONLY-TEACHER-BLEND05-MULTISEED-FORMAL**：commit `e848eef`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr71_evalonly_teacher_blend05_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr71_evalonly_teacher_blend05_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr71_evalonly_teacher_blend05_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr71_evalonly_teacher_blend05_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr71_evalonly_teacher_blend05_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr71_evalonly_teacher_blend05_formal_s456.yaml)。实验实际结果：Slurm job `482773` 在 `V100q/node21` 完成，`seed42=0.9042553191489362/0.9822727272727273/0.8941176470588236`，`seed123=0.9042553191489362/0.9600000000000000/0.8965517241379310`，`seed456=0.9361702127659575/0.9554545454545454/0.9302325581395349`；3-seed mean `val_acc=0.9148936170212766`，`val_auc=0.9659090909090908`，`val_f1=0.9069673097787630`，`peak_vram≈2.15 GiB` → **discard**（低于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`，也低于 matched equal-weight mean 的 `val_acc / val_f1`。）
+- **fusion-weight 结论**：eval-only teacher blend 没有把 evidence signal 转成稳定贡献。`seed42` mean weight `0.7995/0.0787/0.1218` 但 top-weight 仍 `94/0/0`；`seed123` mean weight `0.9684/0.0106/0.0209`，top-weight 也仍 `94/0/0`；`seed456` mean weight `0.4919/0.4527/0.0554`，top-weight `44/50/0`，但 accuracy 只有 `0.9362`，低于 DFR-25 seed456 `0.9468`。说明 teacher 只在 eval 混入时仍会造成边界漂移，且 non-axial migration 并不可靠。
+- **sample-level 结论**：相对 DFR-25，DFR-71 是 `fixed=4 / broken=11 / net=-7`；seed42 `fixed=2 / broken=5`，seed123 `fixed=1 / broken=4`，seed456 `fixed=1 / broken=2`。fixed 全部是阴性样本，broken 包含 `7` 个阳性样本和 `4` 个阴性样本，说明 eval-only teacher 主要以损伤阳性通道为代价换来少量 FP 修复。
+- **当前判断**：DFR-71 是 negative result，并基本关闭“直接把 detached evidence teacher 混入 gate weights”的路径。DFR-70/71 共同说明 teacher-rank signal 能改变 routing，但无法区分有益迁移和弱视角误迁移；下一轮不应继续调 teacher blend 强度或 train/eval 时机，而应转向不直接改 gate 权重的低容量校准变量。DFR-72 因此回到 DFR-25 gate，只启用 per-view logit temperature calibration，验证是否能通过视角 logits 的置信度校准缓解 positive-evidence dilution。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1315,11 +1327,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-70 ultralow teacher blend 0.05 multiseed formal`：保留 DFR-25 L3-no-mixer + dominant-gate dropout + winning scalar，只启用 `ANKLE_DECISION_GATE_TEACHER_BLEND=0.05` 与 `ANKLE_DECISION_GATE_TEACHER_TEMPERATURE=1.0`，把 detached per-view logit-margin teacher 以 5% 混入 learned gate；完成 seeds `42/123/456`。 |
-| 上次结果 | 3-seed mean `val_acc=0.9290780141843972`，`val_auc=0.9721212121212122`，`val_f1=0.9236179314749906` → discard。相对 DFR-25 是 fixed `6` / broken `9` / net `-3`；seed123 routing 被打散到 top-weight `19/46/29` 但 accuracy 只有 `0.9149`，seed42/456 仍是 `94/0/0` hard axial，说明 teacher blend 进入训练全路径后会产生 seed-specific noisy routing。 |
-| 下一步 | 立即继续 DFR-71：新增 `ANKLE_DECISION_GATE_TEACHER_BLEND_EVAL_ONLY=1`，仍用 5% detached evidence-rank teacher blend，但只在 eval/validation 路径校准 gate；训练损失保持 DFR-25 learned gate，验证 DFR-70 的失败是否来自训练期 routing drift，而不是 evidence teacher signal 本身。 |
+| 上次实验 | `DFR-71 eval-only teacher blend 0.05 multiseed formal`：保留 DFR-25 L3-no-mixer + dominant-gate dropout + winning scalar，训练时保持原始 learned gate，只在 eval/validation 路径启用 `ANKLE_DECISION_GATE_TEACHER_BLEND=0.05` + `ANKLE_DECISION_GATE_TEACHER_BLEND_EVAL_ONLY=1`。 |
+| 上次结果 | 3-seed mean `val_acc=0.9148936170212766`，`val_auc=0.9659090909090908`，`val_f1=0.9069673097787630` → discard。相对 DFR-25 是 fixed `4` / broken `11` / net `-7`；fixed 全部为阴性样本，broken 包含 `7` 个阳性样本和 `4` 个阴性样本。seed42/123 仍是 top-weight `94/0/0`，seed456 虽迁移到 `44/50/0` 但仍低于 DFR-25，说明 eval-only teacher calibration 也会造成 noisy boundary drift。 |
+| 下一步 | 立即继续 DFR-72：关闭 direct teacher gate blend，回到 DFR-25 gate，只启用 `ANKLE_DECISION_ENABLE_VIEW_LOGIT_TEMPERATURE=1` 做 per-view logit calibration。目标是验证不直接改 gate 权重、只校准各视角 classifier 置信度，能否缓解 positive-evidence dilution 并保住 DFR-25 learned routing。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 45（自 `DFR-26 seed123` 起至 `DFR-70 ultralow teacher blend 0.05 multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 46（自 `DFR-26 seed123` 起至 `DFR-71 eval-only teacher blend 0.05 multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
