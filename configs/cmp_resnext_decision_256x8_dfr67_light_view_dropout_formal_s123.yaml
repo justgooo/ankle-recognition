@@ -1,0 +1,43 @@
+# DFR-67: mild train-time view dropout on top of the DFR-25 anchor.
+# Keeps inference-time gate unchanged; no auxiliary CE and no axial blur.
+experiment_name: cmp_resnext_decision_256x8_dfr67_light_view_dropout_formal_s123
+output_dir: runs/resnext_decision_256x8_mainline/dfr67_light_view_dropout_formal_s123
+seed: 123
+
+runtime_env:
+  ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
+  ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
+  ANKLE_DECISION_TRAIN_VIEW_DROPOUT_PROB: "0.05"
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 256
+  num_slices_per_view: 8
+  trim_edge_slices: 2
+  batch_size: 6
+  num_workers: 12
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnext
+  fusion_type: decision
+  share_backbone: false
+  use_pretrained: true
+  freeze_layers: 3
+  fusion_hidden_dim: 256
+  dropout: 0.25
+  use_attention_pooling: false
+
+train:
+  epochs: 15
+  lr: 1.0e-4
+  weight_decay: 2.5e-4
+  class_weight: true
+  device: auto
+  augmentation: true
+  scheduler: none
+  label_smoothing: 0.0
+  gradient_clip_norm: 2.5
