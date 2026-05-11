@@ -175,6 +175,18 @@
 - **fusion-weight 结论**：DFR-59 没有保住 DFR-57 的 anti-collapse signal。三个 seed 的 top-weight 都是 `axial/coronal/sagittal=94/0/0`；mean weights 分别为 seed42 `0.9423/0.0564/0.0013`，seed123 `0.8582/0.0736/0.0682`，seed456 `0.7731/0.1061/0.1207`。虽然平均权重比 DFR-25 略有非轴向质量，但 top-routing 完全回到 axial lock-in，说明 residual gate 触发过窄或 positive guard 过强，没能让 role-aware scorer 在关键样本上改变排序。
 - **当前判断**：DFR-59 是 negative result。离线分析给出的“条件化 residual”方向没有直接转化为稳定收益；下一步如果继续 view-role family，不应再只靠 inference-time scorer residual，而应先做 sample-level trigger audit，统计每个 DFR57 fixed/broken case 在 DFR59 中是否实际触发 residual，以及 residual 对 confidence rank 的改变量。当前最优仍是 DFR-25 3-seed formal mean。
 
+### DFR-60 detached view-role confidence（2026-05-11）
+
+> **实验说明**
+> - 本轮是用户要求继续 5 轮 3-seed research 的第 `1/5` 轮；在启动前先审查 autoresearch workflow，确认 `scripts/autoresearch_main.py` 只是 `optuna_main.py` 的兼容包装，不适合直接表达“连续 5 轮、每轮 3-seed formal、样本审计驱动”的当前目标。因此新增 generic 3-seed formal Slurm 入口 [scripts/run_resnext_decision_multiseed.py](/dataset/HH/ankle-ct/scripts/run_resnext_decision_multiseed.py) 与 [scripts/slurm_resnext_decision_multiseed.sbatch](/dataset/HH/ankle-ct/scripts/slurm_resnext_decision_multiseed.sbatch)，并把 autoresearch/formal/proxy/Optuna 默认配置恢复到 DFR-25 anchor，避免后续 loop 意外从已 discard 的 DFR54/DFR47 配置继续。
+> - 结构假设：DFR-57 的 positive signal 是 role-aware scorer 能明显打破 hard axial collapse，但它完全替换 DFR-25 scorer 后会改变 per-view classifier/head 训练平衡；DFR-60 因此仍使用 DFR-57 replacement，但通过 `ANKLE_DECISION_DETACH_VIEW_ROLE_GATE_FEATURES=1` 将进入 `ViewRoleConfidenceScorer` 的 gate features detach，阻断 role gate loss 对 encoder/classifier 表征的反向塑形。
+> - 预计改进效果：保留 DFR-57 seed42/123 的 axial/coronal 双路由与阴性 FP 修复，同时减少 `54/58/147/176` 这类阳性 axial-positive 样本被 coronal negative evidence 稀释成 FN，并降低 seed456 classifier drift。
+
+- [x] **DFR-60-RESNEXT-DECISION-256X8-DETACHED-VIEW-ROLE-CONFIDENCE-MULTISEED-FORMAL**：commit `4d33bfa`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr60_detached_view_role_confidence_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr60_detached_view_role_confidence_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr60_detached_view_role_confidence_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr60_detached_view_role_confidence_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr60_detached_view_role_confidence_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr60_detached_view_role_confidence_formal_s456.yaml)。实验实际结果：Slurm job `482504` 在 `RTXA6Kq/node16` 完成，`seed42=0.9148936170212766/0.9750000000000000/0.9047619047619048`，`seed123=0.9361702127659575/0.9781818181818183/0.9285714285714286`，`seed456=0.9361702127659575/0.9700000000000000/0.9268292682926830`；3-seed mean `val_acc=0.9290780141843972`，`val_auc=0.9743939393939395`，`val_f1=0.9200542005420055`，`peak_vram≈2.20 GiB` → **discard**（低于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997` 的主指标和 F1，也没有超过 DFR-57 的 F1。）
+- **fusion-weight 结论**：detach 没有稳定保留 DFR-57 的 useful routing。`seed42` mean weight `0.4847/0.4276/0.0877`，top-weight `48/46/0`；`seed123` mean weight `0.5020/0.4256/0.0723`，top-weight `45/49/0`；`seed456` mean weight `0.5851/0.2617/0.1532`，top-weight `94/0/0`。也就是说，seed42/123 仍有 role-aware axial/coronal split，但 seed456 re-collapse，而且 split 没带来 DFR-25 级别 accuracy。
+- **sample-level 结论**：相对 DFR-25，DFR-60 仍是 `fixed=7 / broken=10 / net=-3`，与 DFR-57 的净变化相同。fixed 样本主要仍是阴性 FP（例如 `CTyin__CT24yin21/95/109/113`），broken 样本仍集中在阳性 FN（例如 `CTyang__CT24yang1__CT2412yang29/54/58/176/142`）。典型失败不是单纯 top-weight 变成 coronal，而是 role replacement 后 axial abnormal probability 本身也经常下降，再叠加 coronal 低异常概率，导致阳性证据被融合门稀释。
+- **当前判断**：DFR-60 是 negative result。单纯 detach role-gate features 不足以防止 DFR-57 family 的 positive-evidence dilution；下一轮应优先保护阳性证据通道，而不是继续调 role scorer 的梯度或 blend。更合理的 DFR-61 假设是从 DFR-57/60 replacement 出发，在 fusion probability 层加入 learned-routing-compatible 的 positive-evidence floor/guard：当任一 view 给出高置信 abnormal evidence 时，融合结果不能被低异常 view 权重拉到该证据以下过多，同时仍保留 learned non-equal weights用于阴性 FP 修复。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1182,11 +1194,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-59 conditional view-role residual multiseed formal`：保留 DFR-25 base scorer/classifier，把 DFR-57 role-aware scorer 作为 bounded residual，仅在 low-gap 或 FP-risk 样本上启用，并加入 axial-positive guard；完成 seeds `42/123/456`。 |
-| 上次结果 | 3-seed mean `val_acc=0.9078014184397163`，`val_auc=0.9753030303030302`，`val_f1=0.8968952308960664` → discard。三个 seed 的 top-weight 都回到 `axial/coronal/sagittal=94/0/0`，低于 DFR-25 mean，也低于 matched equal-weight mean 的 `val_acc / val_f1`。 |
-| 下一步 | 若继续 view-role family，应先做 DFR59 sample-level trigger audit：逐个核对 DFR57 fixed/broken case 在 DFR59 中是否触发 residual、residual 是否改变 confidence rank，再决定是否改 trigger/guard；不要继续盲调 blend 比例或扩大 axial 依赖。 |
+| 上次实验 | `DFR-60 detached view-role confidence multiseed formal`：从 DFR-57 replacement 出发，将进入 role-aware confidence scorer 的 gate features detach，阻断 role gate 对 encoder/classifier 表征的反向塑形；完成 seeds `42/123/456`。 |
+| 上次结果 | 3-seed mean `val_acc=0.9290780141843972`，`val_auc=0.9743939393939395`，`val_f1=0.9200542005420055` → discard。seed42/123 仍有 axial/coronal split，但 seed456 re-collapse；相对 DFR-25 的样本级变化仍是 fixed `7` / broken `10` / net `-3`。 |
+| 下一步 | 继续用户要求的第 `2/5` 轮 3-seed research：不要再只调 role scorer 的梯度或 blend；从 DFR-57/60 replacement 出发加入 positive-evidence floor/guard，保护任一高置信 abnormal view 不被低异常 view 权重稀释成 FN，同时保留 learned non-equal routing 对阴性 FP 的修复能力。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 34（自 `DFR-26 seed123` 起至 `DFR-59 conditional view-role residual multiseed formal` 连续为 discard；DFR-57 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 35（自 `DFR-26 seed123` 起至 `DFR-60 detached view-role confidence multiseed formal` 连续为 discard；DFR-57/60 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
