@@ -1,5 +1,5 @@
 study:
-  name: autoresearch_resnext_decision_256x8_3seed_main
+  name: autoresearch_resnext_decision_256x8_dfr74_mismatch_3seed_main
   phase: main
   base_config: configs/autoresearch_formal.yaml
   study_root: runs/optuna_main_resnext_decision_256x8_3seed
@@ -21,6 +21,8 @@ study:
         seed: 123
     - params:
         seed: 456
+  env:
+    ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD: "0.1"
 
 python_candidates:
   - .venv/bin/python
