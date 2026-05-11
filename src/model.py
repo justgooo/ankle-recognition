@@ -1373,6 +1373,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_LOGIT_LIMIT",
             1.5,
         )
+        self.view_role_confidence_blend = _env_unit_float(
+            "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_BLEND",
+            1.0,
+        )
         self.enable_relative_view_gate = _env_flag(
             "ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE"
         )
@@ -1621,12 +1625,17 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         dropout=self.view_role_confidence_dropout,
                         logit_limit=self.view_role_confidence_logit_limit,
                     )
-                elif self.use_shared_confidence_head:
-                    self.shared_confidence_head = make_confidence_head()
-                else:
-                    self.confidence_heads = nn.ModuleList(
-                        [make_confidence_head() for _ in range(3)]
-                    )
+                needs_base_confidence_head = (
+                    not self.use_view_role_confidence_head
+                    or self.view_role_confidence_blend < 1.0
+                )
+                if needs_base_confidence_head:
+                    if self.use_shared_confidence_head:
+                        self.shared_confidence_head = make_confidence_head()
+                    else:
+                        self.confidence_heads = nn.ModuleList(
+                            [make_confidence_head() for _ in range(3)]
+                        )
                 if not self.disable_fusion_calibrator:
                     self.confidence_calibrator = SharedLowRankReliabilityCalibrator(
                         feature_dim=self.feature_dim,
@@ -2225,10 +2234,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     - stacked_confidence_features.mean(dim=1, keepdim=True)
                 )
                 confidence_features = list(relative_confidence_features.unbind(dim=1))
+            role_confidences = None
             if self.use_view_role_confidence_head:
                 role_gate_features = torch.stack(gating_features, dim=1)
-                confidences = self.view_role_confidence_head(role_gate_features)
-            else:
+                role_confidences = self.view_role_confidence_head(role_gate_features)
+            base_confidences = None
+            if role_confidences is None or self.view_role_confidence_blend < 1.0:
                 calibrated_confidences = []
                 if self.use_shared_confidence_head:
                     confidence_heads = [self.shared_confidence_head for _ in confidence_features]
@@ -2242,7 +2253,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         calibrated_confidences.append(
                             self.confidence_calibrator(feature, raw_confidence)
                         )
-                confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
+                base_confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
+            if role_confidences is None:
+                confidences = base_confidences
+            elif self.view_role_confidence_blend >= 1.0:
+                confidences = role_confidences
+            else:
+                blend = self.view_role_confidence_blend
+                confidences = (1.0 - blend) * base_confidences + blend * role_confidences
             if self.enable_evidence_aware_gate:
                 evidence_gate_features = torch.stack(gating_features, dim=1)
                 confidences = confidences + self.evidence_aware_gate(
