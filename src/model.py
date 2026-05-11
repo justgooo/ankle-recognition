@@ -1588,6 +1588,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.detach_view_role_gate_features = _env_flag(
             "ANKLE_DECISION_DETACH_VIEW_ROLE_GATE_FEATURES"
         )
+        self.decouple_role_gate_classifier_gradient = _env_flag(
+            "ANKLE_DECISION_DECOUPLE_ROLE_GATE_CLASSIFIER_GRADIENT"
+        )
         self.view_role_confidence_role_dim = _env_positive_int(
             "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_ROLE_DIM",
             32,
@@ -1929,6 +1932,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     not self.use_view_role_confidence_head
                     or self.view_role_confidence_blend < 1.0
                     or self.enable_conditional_view_role_residual
+                    or self.decouple_role_gate_classifier_gradient
                 )
                 if needs_base_confidence_head:
                     if self.use_shared_confidence_head:
@@ -2572,6 +2576,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         dominant_gate_dropout_strength = dominant_gate_dropout_mask.to(dtype=view_logits.dtype)
         teacher_fusion_weights = None
         teacher_rescue_weights = None
+        role_confidences = None
+        base_confidences = None
 
         if self.minimal_fusion_baseline:
             confidences = torch.stack(
@@ -2600,17 +2606,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     - stacked_confidence_features.mean(dim=1, keepdim=True)
                 )
                 confidence_features = list(relative_confidence_features.unbind(dim=1))
-            role_confidences = None
             if self.use_view_role_confidence_head:
                 role_gate_features = torch.stack(gating_features, dim=1)
                 if self.detach_view_role_gate_features:
                     role_gate_features = role_gate_features.detach()
                 role_confidences = self.view_role_confidence_head(role_gate_features)
-            base_confidences = None
             if (
                 role_confidences is None
                 or self.view_role_confidence_blend < 1.0
                 or self.enable_conditional_view_role_residual
+                or self.decouple_role_gate_classifier_gradient
             ):
                 calibrated_confidences = []
                 if self.use_shared_confidence_head:
@@ -2661,6 +2666,19 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 confidences = self.gate_view_prior_debiaser(confidences, view_logits)
         scaled_confidences = confidences / self.fusion_temperature
         raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)  # (B, 3, 1)
+        classifier_gradient_confidences = None
+        classifier_gradient_fusion_weights = None
+        if (
+            self.training
+            and self.decouple_role_gate_classifier_gradient
+            and role_confidences is not None
+            and base_confidences is not None
+        ):
+            classifier_gradient_confidences = base_confidences
+            classifier_gradient_fusion_weights = torch.softmax(
+                classifier_gradient_confidences / self.fusion_temperature,
+                dim=1,
+            )
         if (
             self.gate_teacher_blend > 0.0
             or self.train_target_teacher_non_dominant_rescue
@@ -2692,8 +2710,19 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     drop_mask=dominant_gate_dropout_mask,
                     drop_strength=dominant_gate_dropout_strength,
                 )
+                if classifier_gradient_confidences is not None:
+                    classifier_gradient_confidences = self._apply_train_dominant_gate_dropout(
+                        classifier_gradient_confidences,
+                        drop_mask=dominant_gate_dropout_mask,
+                        drop_strength=dominant_gate_dropout_strength,
+                    )
                 scaled_confidences = confidences / self.fusion_temperature
                 raw_fusion_weights = torch.softmax(scaled_confidences, dim=1)
+                if classifier_gradient_confidences is not None:
+                    classifier_gradient_fusion_weights = torch.softmax(
+                        classifier_gradient_confidences / self.fusion_temperature,
+                        dim=1,
+                    )
 
         blended_fusion_weights = raw_fusion_weights
         if self.gate_teacher_blend > 0.0:
@@ -2719,6 +2748,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             rescue_target_weights=teacher_rescue_weights,
         )
         fusion_weights = self._apply_fusion_weight_floor(blended_fusion_weights)
+        if classifier_gradient_fusion_weights is not None:
+            classifier_gradient_fusion_weights = self._apply_fusion_weight_floor(
+                classifier_gradient_fusion_weights
+            )
         view_logit_temperatures = None
         if self.enable_view_logit_temperature:
             view_logit_temperatures = self.view_logit_temperature_calibrator.temperatures().detach()
@@ -2730,6 +2763,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "teacher_fusion_weights": teacher_fusion_weights,
             "blended_fusion_weights": blended_fusion_weights,
             "fusion_weights": fusion_weights,
+            "classifier_gradient_fusion_weights": classifier_gradient_fusion_weights,
             "view_logit_temperatures": view_logit_temperatures,
         }
 
@@ -2776,6 +2810,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         view_logits: torch.Tensor,
         fusion_weights: torch.Tensor,
         active_view_mask: torch.Tensor | None = None,
+        classifier_gradient_fusion_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Fuse per-view logits, optionally renormalizing over an active view subset."""
         if active_view_mask is not None:
@@ -2802,7 +2837,23 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
 
         if active_view_mask is not None:
             fusion_weights = self._apply_fusion_weight_floor(fusion_weights, active_view_mask)
-        fused_logits = (view_logits * fusion_weights).sum(dim=1)
+        if (
+            self.training
+            and classifier_gradient_fusion_weights is not None
+            and active_view_mask is None
+        ):
+            if classifier_gradient_fusion_weights.shape != fusion_weights.shape:
+                raise ValueError(
+                    "classifier_gradient_fusion_weights must match fusion_weights shape."
+                )
+            fused_logits = (view_logits * classifier_gradient_fusion_weights).sum(dim=1)
+            role_residual = (
+                view_logits.detach()
+                * (fusion_weights - classifier_gradient_fusion_weights.detach())
+            ).sum(dim=1)
+            fused_logits = fused_logits + role_residual
+        else:
+            fused_logits = (view_logits * fusion_weights).sum(dim=1)
         if (
             self.enable_evidence_margin_residual_fusion
             and hasattr(self, "evidence_margin_residual_fusion")
@@ -2836,6 +2887,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             decision_outputs["view_logits"],
             decision_outputs["fusion_weights"],
             active_view_mask=active_view_mask,
+            classifier_gradient_fusion_weights=decision_outputs.get(
+                "classifier_gradient_fusion_weights"
+            ),
         )
         if active_view_mask is not None:
             decision_outputs["active_view_mask"] = active_view_mask
