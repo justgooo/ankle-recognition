@@ -163,6 +163,18 @@
 - **per-view 诊断**：DFR-57 显著提升 coronal 单视角准确率（seed42 `+0.106383`，seed123 `+0.308511`，seed456 `+0.234043`），但同时压低 sagittal（`-0.063830 / -0.276596 / -0.138298`），并在 seed42/456 压低 axial（`-0.031915 / -0.074468`）。因此 DFR-57 的失败不是简单的 gate 权重分布不好，而是 role-aware confidence replacement 改变了多视角头部训练平衡：coronal 更可用，但 axial/sagittal 稳定性受损。
 - **当前判断**：后续不应继续做 DFR-58 式无条件 logit blend，也不应直接把 DFR-57 replacement 当成新 base。更合格的下一轮应保留 DFR-25 scorer/classifier 的强样本 ranking，只在 `DFR-25 高异常阴性 FP 风险` 或 `top gate confidence gap 小且 coronal 低异常证据强` 的样本上启用 role-aware residual；并且必须限制对阳性样本的 coronal negative override，避免 `54/58/147/176` 这类 axial-positive case 被稀释成 FN。
 
+### DFR-59 conditional view-role residual（2026-05-11）
+
+> **实验说明**
+> - 本轮按 DFR-57 follow-up 的建议继续 1 轮 3-seed formal，并先取消旧 Slurm 作业 `482369`；随后在 `V100q/node20` 提交失败后修复 base-confidence path，再用 Slurm job `482484` 在 `RTXA6Kq/node16` 完成 seeds `42/123/456`。
+> - 严格保持 ResNeXt 256x8、decision fusion、DFR-25 scalar、3-seed formal 与数据划分不变；代码只改 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 的网络决策融合结构，并新增 DFR59 三个 formal config 与 multiseed runner。
+> - 结构假设：保留 DFR-25 原 scorer/classifier 的强样本 ranking，把 DFR-57 `ViewRoleConfidenceScorer` 降级为 bounded residual；只有在 base confidence top1-top2 gap 小，或 fused abnormal prob 高且 axial 高异常/coronal 低异常的 FP-risk 样本上启用 residual，并用 axial-positive guard 限制 coronal negative override。
+> - 预计改进效果：继承 DFR-57 修复阴性 FP 的 role-aware routing signal，同时避免 DFR-57 在阳性 axial-positive 样本上被 coronal negative evidence 稀释成 FN；因此应至少回到 matched equal-weight mean 之上，并接近 DFR-25 3-seed mean。
+
+- [x] **DFR-59-RESNEXT-DECISION-256X8-CONDITIONAL-VIEW-ROLE-RESIDUAL-MULTISEED-FORMAL**：commit `9570164`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr59_conditional_view_role_residual_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr59_conditional_view_role_residual_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr59_conditional_view_role_residual_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr59_conditional_view_role_residual_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr59_conditional_view_role_residual_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr59_conditional_view_role_residual_formal_s456.yaml)。实验实际结果：`seed42=0.9148936170212766/0.9704545454545455/0.9130434782608695`，`seed123=0.9042553191489362/0.9740909090909090/0.8915662650602410`，`seed456=0.9042553191489362/0.9813636363636363/0.8860759493670886`；3-seed mean `val_acc=0.9078014184397163`，`val_auc=0.9753030303030302`，`val_f1=0.8968952308960664`，`peak_vram≈2.15 GiB` → **discard**（低于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`，也低于 matched equal-weight mean 的 `val_acc / val_f1`。）
+- **fusion-weight 结论**：DFR-59 没有保住 DFR-57 的 anti-collapse signal。三个 seed 的 top-weight 都是 `axial/coronal/sagittal=94/0/0`；mean weights 分别为 seed42 `0.9423/0.0564/0.0013`，seed123 `0.8582/0.0736/0.0682`，seed456 `0.7731/0.1061/0.1207`。虽然平均权重比 DFR-25 略有非轴向质量，但 top-routing 完全回到 axial lock-in，说明 residual gate 触发过窄或 positive guard 过强，没能让 role-aware scorer 在关键样本上改变排序。
+- **当前判断**：DFR-59 是 negative result。离线分析给出的“条件化 residual”方向没有直接转化为稳定收益；下一步如果继续 view-role family，不应再只靠 inference-time scorer residual，而应先做 sample-level trigger audit，统计每个 DFR57 fixed/broken case 在 DFR59 中是否实际触发 residual，以及 residual 对 confidence rank 的改变量。当前最优仍是 DFR-25 3-seed formal mean。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1170,11 +1182,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-57 follow-up offline sample-level analysis`：新增 `scripts/analyze_dfr57_followup.py`，对 DFR-25 与 DFR-57 的 seeds `42/123/456` 读取既有 fusion telemetry 并做 patient-level join；没有启动训练，没有修改数据划分。 |
-| 上次结果 | DFR-57 相比 DFR-25 共 `fixed=7 / broken=10 / net=-3`。seed123 的收益来自 coronal role routing 修复 FP/FN（`fixed=4 / broken=3`），但 seed42/456 各净损 `2` 个样本；失败模式是阳性 axial-positive case 被 coronal negative evidence 稀释成 FN，以及 seed456 阴性样本的 axial/coronal classifier 漂移成强阳性。 |
-| 下一步 | 若继续 view-role 方向，应做条件化而非无条件 blend：保留 DFR-25 scorer/classifier 的强样本 ranking，只在 DFR-25 高异常阴性 FP 风险或 top-gate confidence gap 小且 coronal 低异常证据强时启用 bounded role-aware residual，并限制阳性样本的 coronal negative override。 |
+| 上次实验 | `DFR-59 conditional view-role residual multiseed formal`：保留 DFR-25 base scorer/classifier，把 DFR-57 role-aware scorer 作为 bounded residual，仅在 low-gap 或 FP-risk 样本上启用，并加入 axial-positive guard；完成 seeds `42/123/456`。 |
+| 上次结果 | 3-seed mean `val_acc=0.9078014184397163`，`val_auc=0.9753030303030302`，`val_f1=0.8968952308960664` → discard。三个 seed 的 top-weight 都回到 `axial/coronal/sagittal=94/0/0`，低于 DFR-25 mean，也低于 matched equal-weight mean 的 `val_acc / val_f1`。 |
+| 下一步 | 若继续 view-role family，应先做 DFR59 sample-level trigger audit：逐个核对 DFR57 fixed/broken case 在 DFR59 中是否触发 residual、residual 是否改变 confidence rank，再决定是否改 trigger/guard；不要继续盲调 blend 比例或扩大 axial 依赖。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 33（自 `DFR-26 seed123` 起至 `DFR-58 view-role confidence blend multiseed formal` 连续为 discard；本次 DFR-57 follow-up 是离线分析，不改变 discard 计数。） |
+| 连续 discard 计数 | 34（自 `DFR-26 seed123` 起至 `DFR-59 conditional view-role residual multiseed formal` 连续为 discard；DFR-57 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
