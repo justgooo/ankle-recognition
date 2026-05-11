@@ -1820,6 +1820,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_TEACHER_BLEND",
             0.0,
         )
+        self.gate_teacher_blend_eval_only = _env_flag(
+            "ANKLE_DECISION_GATE_TEACHER_BLEND_EVAL_ONLY"
+        )
         self.gate_teacher_temperature = _env_positive_float(
             "ANKLE_DECISION_GATE_TEACHER_TEMPERATURE",
             1.0,
@@ -2770,8 +2773,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 classifier_gradient_confidences / self.fusion_temperature,
                 dim=1,
             )
+        apply_gate_teacher_blend = self.gate_teacher_blend > 0.0 and not (
+            self.training and self.gate_teacher_blend_eval_only
+        )
         if (
-            self.gate_teacher_blend > 0.0
+            apply_gate_teacher_blend
             or self.train_target_teacher_non_dominant_rescue
             or self.train_target_teacher_dropout_redistribution
             or self.train_axial_teacher_misalignment_scale_threshold > 0.0
@@ -2816,7 +2822,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     )
 
         blended_fusion_weights = raw_fusion_weights
-        if self.gate_teacher_blend > 0.0:
+        if apply_gate_teacher_blend:
             blended_fusion_weights = (
                 (1.0 - self.gate_teacher_blend) * raw_fusion_weights
                 + self.gate_teacher_blend * teacher_fusion_weights
