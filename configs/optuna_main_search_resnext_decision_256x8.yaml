@@ -1,8 +1,8 @@
 study:
-  name: autoresearch_resnext_decision_256x8_dfr47_relative_view_gate_main
+  name: autoresearch_resnext_decision_256x8_dfr25_main
   phase: main
   base_config: configs/autoresearch_formal_resnext_decision_256x8.yaml
-  study_root: runs/optuna_main_resnext_decision_256x8_dfr47_relative_view_gate
+  study_root: runs/optuna_main_resnext_decision_256x8_dfr25
   direction: maximize
   n_trials: 1
   timeout_minutes: 240
@@ -17,8 +17,6 @@ study:
   env:
     ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: 1
     ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: 0.25
-    ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE: 1
-    ANKLE_DECISION_RELATIVE_VIEW_GATE_RESIDUAL_LIMIT: 0.75
 
 python_candidates:
   - .venv/bin/python

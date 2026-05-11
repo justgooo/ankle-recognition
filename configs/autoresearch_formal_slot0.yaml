@@ -1,15 +1,12 @@
 # Formal config for slot 0 (GPU index=0).
-# Mirrors the current DFR-47 ResNeXt 256x8 mainline with an independent
-# output_dir.
-experiment_name: autoresearch_formal_slot0_dfr47_relative_view_gate
-output_dir: runs/autoresearch_formal_slot0_dfr47_relative_view_gate
+# Mirrors the current DFR-25 ResNeXt 256x8 mainline with an independent output_dir.
+experiment_name: autoresearch_formal_slot0_dfr25_resnext_decision_256x8
+output_dir: runs/autoresearch_formal_slot0_dfr25_resnext_decision_256x8
 seed: 42
 
 runtime_env:
   ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
   ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
-  ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE: "1"
-  ANKLE_DECISION_RELATIVE_VIEW_GATE_RESIDUAL_LIMIT: "0.75"
 
 data:
   csv_path: data/realdata/metadata.csv

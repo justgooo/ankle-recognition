@@ -1,15 +1,12 @@
-# Canonical formal config for the current DFR-47 ResNeXt-only 256x8 learned
-# decision-fusion mainline. DFR-47 keeps DFR-25 and adds a relative-view gate
-# residual to reduce sample-wise routing-order collapse.
-experiment_name: autoresearch_formal_resnext_decision_256x8_dfr47_relative_view_gate
-output_dir: runs/autoresearch_formal_resnext_decision_256x8_dfr47_relative_view_gate
+# Canonical formal config for the current DFR-25 ResNeXt-only 256x8 learned
+# decision-fusion mainline.
+experiment_name: autoresearch_formal_resnext_decision_256x8
+output_dir: runs/autoresearch_formal_resnext_decision_256x8
 seed: 42
 
 runtime_env:
   ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
   ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
-  ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE: "1"
-  ANKLE_DECISION_RELATIVE_VIEW_GATE_RESIDUAL_LIMIT: "0.75"
 
 data:
   csv_path: data/realdata/metadata.csv
