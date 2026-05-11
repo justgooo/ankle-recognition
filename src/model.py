@@ -2315,7 +2315,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 role_gate_features = torch.stack(gating_features, dim=1)
                 role_confidences = self.view_role_confidence_head(role_gate_features)
             base_confidences = None
-            if role_confidences is None or self.view_role_confidence_blend < 1.0:
+            if (
+                role_confidences is None
+                or self.view_role_confidence_blend < 1.0
+                or self.enable_conditional_view_role_residual
+            ):
                 calibrated_confidences = []
                 if self.use_shared_confidence_head:
                     confidence_heads = [self.shared_confidence_head for _ in confidence_features]
