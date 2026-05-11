@@ -903,6 +903,31 @@ class CandidateViewReliabilityGate(nn.Module):
         prototype_scale[:, 0] = 0.0
         return prototype_scale
 
+    def prototype_logits(
+        self,
+        view_features: torch.Tensor,
+        temperature: float = 0.2,
+    ) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        if temperature <= 0.0:
+            raise ValueError("temperature must be > 0.")
+
+        normalized_features = nn.functional.normalize(view_features, dim=-1)
+        normalized_prototypes = nn.functional.normalize(
+            self.class_prototypes.to(
+                device=view_features.device,
+                dtype=view_features.dtype,
+            ),
+            dim=-1,
+        )
+        class_scores = torch.einsum(
+            "bvf,cf->bvc",
+            normalized_features,
+            normalized_prototypes,
+        )
+        return class_scores / float(temperature)
+
     def forward(
         self,
         view_features: torch.Tensor,
@@ -1913,6 +1938,17 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_CANDIDATE_VIEW_GATE_PROTOTYPE_WINDOW",
             0.0,
         )
+        self.enable_candidate_view_prototype_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS"
+        )
+        self.candidate_view_prototype_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_PROTOTYPE_AUX_WEIGHT",
+            0.05,
+        )
+        self.candidate_view_prototype_aux_temperature = _env_positive_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_PROTOTYPE_AUX_TEMPERATURE",
+            0.2,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2234,6 +2270,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             raise ValueError(
                 "ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_EXCESS_SCALE_WINDOW "
                 "requires ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD."
+            )
+        if self.enable_candidate_view_prototype_aux_loss and not self.enable_candidate_view_gate:
+            raise ValueError(
+                "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS requires "
+                "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_GATE."
+            )
+        if self.enable_candidate_view_prototype_aux_loss and self.enable_aux_view_loss:
+            raise ValueError(
+                "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS and "
+                "ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS are mutually exclusive."
             )
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
@@ -2982,6 +3028,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         teacher_rescue_weights = None
         role_confidences = None
         base_confidences = None
+        candidate_prototype_logits = None
 
         if self.minimal_fusion_baseline:
             confidences = torch.stack(
@@ -3060,6 +3107,11 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     candidate_gate_features,
                     view_logits,
                 )
+                if self.enable_candidate_view_prototype_aux_loss:
+                    candidate_prototype_logits = self.candidate_view_gate.prototype_logits(
+                        candidate_gate_features,
+                        temperature=self.candidate_view_prototype_aux_temperature,
+                    )
             if self.enable_relative_view_gate:
                 relative_gate_features = torch.stack(gating_features, dim=1)
                 confidences = confidences + self.relative_view_gate(
@@ -3178,18 +3230,36 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "fusion_weights": fusion_weights,
             "classifier_gradient_fusion_weights": classifier_gradient_fusion_weights,
             "view_logit_temperatures": view_logit_temperatures,
+            "candidate_prototype_logits": candidate_prototype_logits,
         }
 
-    def _set_aux_view_loss_state(self, view_logits: torch.Tensor) -> None:
-        """Expose per-view logits through the existing train.py UWDF hook."""
-        if self.enable_aux_view_loss:
-            self._view_logits = view_logits
-            log_var_value = -math.log(self.aux_view_loss_weight)
+    def _set_aux_view_loss_state(
+        self,
+        view_logits: torch.Tensor,
+        candidate_prototype_logits: torch.Tensor | None = None,
+    ) -> None:
+        """Expose optional per-view auxiliary logits through the existing train.py hook."""
+        aux_logits = None
+        aux_weight = self.aux_view_loss_weight
+        if self.enable_candidate_view_prototype_aux_loss:
+            if candidate_prototype_logits is None:
+                raise RuntimeError(
+                    "Candidate prototype auxiliary loss is enabled but prototype logits "
+                    "were not produced."
+                )
+            aux_logits = candidate_prototype_logits
+            aux_weight = self.candidate_view_prototype_aux_weight
+        elif self.enable_aux_view_loss:
+            aux_logits = view_logits
+
+        if aux_logits is not None:
+            self._view_logits = aux_logits
+            log_var_value = -math.log(aux_weight)
             self._log_vars = torch.full(
-                (view_logits.shape[0], view_logits.shape[1], 1),
+                (aux_logits.shape[0], aux_logits.shape[1], 1),
                 log_var_value,
-                device=view_logits.device,
-                dtype=view_logits.dtype,
+                device=aux_logits.device,
+                dtype=aux_logits.dtype,
             )
         else:
             self._view_logits = None
@@ -3292,7 +3362,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
     def forward_with_decision_info(self, images: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Return the usual fused logits plus intermediate tensors for matched controls."""
         decision_outputs = self._compute_decision_outputs(images)
-        self._set_aux_view_loss_state(decision_outputs["view_logits"])
+        self._set_aux_view_loss_state(
+            decision_outputs["view_logits"],
+            candidate_prototype_logits=decision_outputs.get("candidate_prototype_logits"),
+        )
         active_view_mask = None
         if self.forced_active_view_mask is not None:
             active_view_mask = decision_outputs["view_logits"].new_tensor(self.forced_active_view_mask)
