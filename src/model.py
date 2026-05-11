@@ -711,6 +711,9 @@ class CandidateViewReliabilityGate(nn.Module):
         prob_window: float = 0.0,
         prototype_advantage: float = 0.0,
         prototype_window: float = 0.0,
+        require_nonaxial_pair_consensus: bool = False,
+        nonaxial_pair_consensus_margin: float = 0.2,
+        nonaxial_pair_consensus_window: float = 0.2,
         detach_features: bool = False,
         dropout: float = 0.05,
     ) -> None:
@@ -733,6 +736,10 @@ class CandidateViewReliabilityGate(nn.Module):
             raise ValueError("prototype_advantage must be >= 0.")
         if prototype_window < 0.0:
             raise ValueError("prototype_window must be >= 0.")
+        if nonaxial_pair_consensus_margin < 0.0:
+            raise ValueError("nonaxial_pair_consensus_margin must be >= 0.")
+        if nonaxial_pair_consensus_window < 0.0:
+            raise ValueError("nonaxial_pair_consensus_window must be >= 0.")
         self.feature_norm = nn.LayerNorm(feature_dim)
         self.evidence_norm = nn.LayerNorm(evidence_dim)
         self.adapter = nn.Sequential(
@@ -751,6 +758,9 @@ class CandidateViewReliabilityGate(nn.Module):
         self.prob_window = float(prob_window)
         self.prototype_advantage = float(prototype_advantage)
         self.prototype_window = float(prototype_window)
+        self.require_nonaxial_pair_consensus = bool(require_nonaxial_pair_consensus)
+        self.nonaxial_pair_consensus_margin = float(nonaxial_pair_consensus_margin)
+        self.nonaxial_pair_consensus_window = float(nonaxial_pair_consensus_window)
         self.detach_features = bool(detach_features)
         self.class_prototypes = nn.Parameter(torch.empty(2, feature_dim))
         nn.init.normal_(self.class_prototypes, mean=0.0, std=0.02)
@@ -903,6 +913,35 @@ class CandidateViewReliabilityGate(nn.Module):
         prototype_scale[:, 0] = 0.0
         return prototype_scale
 
+    def _nonaxial_pair_consensus_scale(self, view_logits: torch.Tensor) -> torch.Tensor:
+        if not self.require_nonaxial_pair_consensus:
+            return torch.ones(
+                view_logits.shape[:2],
+                device=view_logits.device,
+                dtype=view_logits.dtype,
+            )
+        if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        detached_logits = view_logits.detach()
+        if detached_logits.shape[-1] > 1:
+            signed_margins = detached_logits[..., 1] - detached_logits[..., 0]
+        else:
+            signed_margins = detached_logits.squeeze(-1)
+
+        candidate_direction = signed_margins.sign()
+        pair_support = torch.zeros_like(signed_margins)
+        pair_support[:, 1] = candidate_direction[:, 1] * signed_margins[:, 2]
+        pair_support[:, 2] = candidate_direction[:, 2] * signed_margins[:, 1]
+        pair_delta = pair_support - self.nonaxial_pair_consensus_margin
+        if self.nonaxial_pair_consensus_window > 0.0:
+            pair_scale = (pair_delta / self.nonaxial_pair_consensus_window).clamp(0.0, 1.0)
+        else:
+            pair_scale = pair_delta.ge(0.0).to(dtype=view_logits.dtype)
+        pair_scale = pair_scale * candidate_direction.ne(0.0).to(dtype=view_logits.dtype)
+        pair_scale = pair_scale.clone()
+        pair_scale[:, 0] = 0.0
+        return pair_scale
+
     def prototype_logits(
         self,
         view_features: torch.Tensor,
@@ -959,11 +998,16 @@ class CandidateViewReliabilityGate(nn.Module):
             device=view_features.device,
             dtype=view_features.dtype,
         )
+        nonaxial_pair_consensus_scale = self._nonaxial_pair_consensus_scale(view_logits).to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
         candidate_scale = (
             candidate_scale
             * consensus_scale
             * prob_advantage_scale
             * prototype_scale
+            * nonaxial_pair_consensus_scale
         )
         return residual * candidate_scale.unsqueeze(-1)
 
@@ -1938,6 +1982,17 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_CANDIDATE_VIEW_GATE_PROTOTYPE_WINDOW",
             0.0,
         )
+        self.candidate_view_gate_require_nonaxial_pair_consensus = _env_flag(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_REQUIRE_NONAXIAL_PAIR_CONSENSUS"
+        )
+        self.candidate_view_gate_nonaxial_pair_consensus_margin = _env_positive_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_NONAXIAL_PAIR_CONSENSUS_MARGIN",
+            0.2,
+        )
+        self.candidate_view_gate_nonaxial_pair_consensus_window = _env_unit_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_NONAXIAL_PAIR_CONSENSUS_WINDOW",
+            0.2,
+        )
         self.enable_candidate_view_prototype_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS"
         )
@@ -2397,6 +2452,15 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         prob_window=self.candidate_view_gate_prob_window,
                         prototype_advantage=self.candidate_view_gate_prototype_advantage,
                         prototype_window=self.candidate_view_gate_prototype_window,
+                        require_nonaxial_pair_consensus=(
+                            self.candidate_view_gate_require_nonaxial_pair_consensus
+                        ),
+                        nonaxial_pair_consensus_margin=(
+                            self.candidate_view_gate_nonaxial_pair_consensus_margin
+                        ),
+                        nonaxial_pair_consensus_window=(
+                            self.candidate_view_gate_nonaxial_pair_consensus_window
+                        ),
                         detach_features=self.candidate_view_gate_detach_features,
                     )
                 if self.enable_gate_logit_rms_limit:
