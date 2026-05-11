@@ -223,6 +223,18 @@
 - **sample-level 结论**：相对 DFR-25，DFR-63 是 `fixed=9 / broken=21 / net=-12`；broken 主要是阳性 FN（总计 `19` 个 FN break + `2` 个 FP break）。seed42/123 的 coronal over-routing 修复了少数阴性 FP（如 `CTyin__CT24yin21/95/113/109`），但打坏大量 DFR-25 强阳性样本（如 `CT2412yang120/165/176/29/47/54/58`）；seed456 则转成 sagittal over-routing。
 - **当前判断**：DFR-63 是 strong negative result。role replacement family 的核心问题不是单纯 gate feature 梯度污染，而是 role scorer 在 fused loss 下会找到过强的单弱视角捷径；解耦 classifier 梯度反而让 role scorer 更自由地过路由。第 `5/5` 轮不应继续扩大 role scorer 结构，应回到 DFR-25 内部 gate prior 修复，并做此前最接近主线的 `DFR-53 midcap evidence-close prior debias` 的 3-seed formal confirmation。
 
+### DFR-64 midcap prior debias confirmation（2026-05-11）
+
+> **实验说明**
+> - 本轮是用户要求继续 5 轮 3-seed research 的第 `5/5` 轮；不新增模型代码，只对 DFR-53 的 `midcap evidence-close prior debias` 做正式 3-seed confirmation。
+> - 结构假设：DFR-63 证明 role replacement family 会过校正到单弱视角捷径；DFR-53 是此前最接近 DFR-25 seed42 ceiling 的 gate-internal prior repair，因此回到 DFR-25 scorer，只开启 `GateViewPriorDebiaser` 的 `strength=0.35 / max_strength=0.75 / gap=0.2 / window=0.2`。
+> - 预计改进效果：如果 DFR-53 的 seed42 信号可泛化，seed123/456 应在避免 hard axial lock-in 的同时保持 axial strong-positive 样本，top-weight 应从 DFR-25 的 seed42/456 `axial=94/94` 迁移到 controlled mixed routing，而不是 DFR-63 式 coronal/sagittal collapse。
+
+- [x] **DFR-64-RESNEXT-DECISION-256X8-MIDCAP-PRIOR-DEBIAS-CONFIRM-MULTISEED-FORMAL**：commit `f9d3c8f`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr64_midcap_prior_debias_confirm_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr64_midcap_prior_debias_confirm_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr64_midcap_prior_debias_confirm_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr64_midcap_prior_debias_confirm_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr64_midcap_prior_debias_confirm_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr64_midcap_prior_debias_confirm_formal_s456.yaml)。实验实际结果：Slurm job `482637` 在 `RTXA6Kq/node16` 完成，`seed42=0.9361702127659575/0.9636363636363636/0.9302325581395349`，`seed123=0.9148936170212766/0.9709090909090909/0.9047619047619048`，`seed456=0.8936170212765957/0.9445454545454546/0.8750000000000000`；3-seed mean `val_acc=0.9148936170212766`，`val_auc=0.9596969696969696`，`val_f1=0.9033314876338133`，`peak_vram≈2.15 GiB` → **discard**（低于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`，也低于 matched equal-weight mean 的 `val_acc / val_auc / val_f1`。）
+- **fusion-weight 结论**：DFR-64 复现了 DFR-53 seed42 的表面正信号，但没有跨 seed 泛化。`seed42` mean weight `0.7355/0.2016/0.0629` 且 top-weight 仍 `94/0/0`；`seed123` mean weight `0.4505/0.2927/0.2568`，top-weight `40/33/21`；`seed456` mean weight `0.3009/0.4745/0.2246`，top-weight `15/60/19`。seed456 的 true-margin 分布是 `0/50/44`，但 top-weight hit-rate 只有 `0.7021`，说明 routing 虽然离开 axial lock-in，却转成 coronal-heavy 且仍未对齐有效证据。
+- **sample-level 结论**：相对 DFR-25，DFR-64 是 `fixed=6 / broken=13 / net=-7`。fixed 仍主要是阴性 FP（例如 `CTyin__CT24yin21/95/109/122`），broken 主要是阳性 FN（例如 `CT2412yang29/54/58/120/165/176/78`），并且 seed456 额外打坏 `CTyin__CT24yin122`。这说明 midcap prior debias 的收益仍是少量阴性修复，代价是更多阳性 evidence dilution。
+- **当前判断**：DFR-64 是 negative confirmation。DFR-53 的单 seed 接近 ceiling 不是可保留主线；blind evidence-close prior debias 可以改变权重分布，但不能可靠判断哪一个 non-axial migration 对分类有益。下一轮不应继续扫 `strength/max_strength`，而应把 gate 修复改成更保守的 **positive-safe** 机制：只在候选 non-axial view 的异常概率不低于 axial 或 fused positive margin 已足够安全时允许 prior-debias 迁移，否则保持 DFR-25 axial strong-positive 通道。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1230,11 +1242,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-63 decoupled role classifier gradients multiseed formal`：从 DFR-60 出发，训练时保持 role-weighted fused logits 数值，但让 view logits 主梯度走 DFR-25 base confidence weights；完成 seeds `42/123/456`。 |
-| 上次结果 | 3-seed mean `val_acc=0.8971631205673759`，`val_auc=0.9450000000000000`，`val_f1=0.8793995060203766` → discard。相对 DFR-25 是 fixed `9` / broken `21` / net `-12`；routing 从 axial collapse 过校正为 coronal/sagittal 单弱视角 collapse。 |
-| 下一步 | 继续用户要求的第 `5/5` 轮 3-seed research：停止继续 role replacement family，回到 DFR-25 内部 gate prior 修复；对此前最接近主线的 `DFR-53 midcap evidence-close prior debias` 做 3-seed formal confirmation。 |
+| 上次实验 | `DFR-64 midcap prior debias confirmation multiseed formal`：从 DFR-25 回到 gate-internal prior repair，对 DFR-53 的 `strength=0.35 / max_strength=0.75 / gap=0.2 / window=0.2` 做 3-seed formal confirmation；完成 seeds `42/123/456`。 |
+| 上次结果 | 3-seed mean `val_acc=0.9148936170212766`，`val_auc=0.9596969696969696`，`val_f1=0.9033314876338133` → discard。相对 DFR-25 是 fixed `6` / broken `13` / net `-7`；seed42 表面复现 DFR-53，但 seed123/456 显示 non-axial migration 仍会打坏更多阳性样本。 |
+| 下一步 | 立即继续下一轮 DFR-65：保留 DFR-25 scorer 和 DFR-64 prior-debias family，但把迁移条件改成 positive-safe，只允许在 non-axial abnormal evidence 不会压低阳性通道时增强 debias，避免继续盲扫 strength/max_strength。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 38（自 `DFR-26 seed123` 起至 `DFR-63 decoupled role classifier gradients multiseed formal` 连续为 discard；DFR-57/60/61/62/63 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 39（自 `DFR-26 seed123` 起至 `DFR-64 midcap prior debias confirmation multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
