@@ -709,6 +709,8 @@ class CandidateViewReliabilityGate(nn.Module):
         consensus_window: float = 0.0,
         prob_advantage: float = 0.0,
         prob_window: float = 0.0,
+        prototype_advantage: float = 0.0,
+        prototype_window: float = 0.0,
         detach_features: bool = False,
         dropout: float = 0.05,
     ) -> None:
@@ -727,6 +729,10 @@ class CandidateViewReliabilityGate(nn.Module):
             raise ValueError("prob_advantage must be >= 0.")
         if prob_window < 0.0:
             raise ValueError("prob_window must be >= 0.")
+        if prototype_advantage < 0.0:
+            raise ValueError("prototype_advantage must be >= 0.")
+        if prototype_window < 0.0:
+            raise ValueError("prototype_window must be >= 0.")
         self.feature_norm = nn.LayerNorm(feature_dim)
         self.evidence_norm = nn.LayerNorm(evidence_dim)
         self.adapter = nn.Sequential(
@@ -743,7 +749,11 @@ class CandidateViewReliabilityGate(nn.Module):
         self.consensus_window = float(consensus_window)
         self.prob_advantage = float(prob_advantage)
         self.prob_window = float(prob_window)
+        self.prototype_advantage = float(prototype_advantage)
+        self.prototype_window = float(prototype_window)
         self.detach_features = bool(detach_features)
+        self.class_prototypes = nn.Parameter(torch.empty(2, feature_dim))
+        nn.init.normal_(self.class_prototypes, mean=0.0, std=0.02)
         nn.init.zeros_(self.adapter[-1].weight)
         nn.init.zeros_(self.adapter[-1].bias)
 
@@ -840,6 +850,59 @@ class CandidateViewReliabilityGate(nn.Module):
         prob_scale[:, 0] = 0.0
         return prob_scale
 
+    def _prototype_alignment_scale(
+        self,
+        view_features: torch.Tensor,
+        view_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.prototype_advantage <= 0.0 and self.prototype_window <= 0.0:
+            return torch.ones(
+                view_logits.shape[:2],
+                device=view_logits.device,
+                dtype=view_logits.dtype,
+            )
+        if view_features.ndim != 3 or view_logits.ndim != 3:
+            raise ValueError("view_features and view_logits must have shape (batch, views, ...).")
+        if view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        if view_logits.shape[-1] != self.class_prototypes.shape[0]:
+            raise ValueError(
+                "prototype-aligned candidate gate currently expects binary class logits."
+            )
+
+        normalized_features = nn.functional.normalize(view_features, dim=-1)
+        normalized_prototypes = nn.functional.normalize(
+            self.class_prototypes.to(
+                device=view_features.device,
+                dtype=view_features.dtype,
+            ),
+            dim=-1,
+        )
+        class_scores = torch.einsum(
+            "bvf,cf->bvc",
+            normalized_features,
+            normalized_prototypes,
+        )
+        predicted_classes = view_logits.detach().argmax(dim=-1, keepdim=True)
+        candidate_scores = class_scores.gather(dim=-1, index=predicted_classes).squeeze(-1)
+        axial_same_class_scores = class_scores[:, :1, :].expand_as(class_scores)
+        axial_same_class_scores = axial_same_class_scores.gather(
+            dim=-1,
+            index=predicted_classes,
+        ).squeeze(-1)
+        prototype_delta = (
+            candidate_scores
+            - axial_same_class_scores
+            - self.prototype_advantage
+        )
+        if self.prototype_window > 0.0:
+            prototype_scale = (prototype_delta / self.prototype_window).clamp(0.0, 1.0)
+        else:
+            prototype_scale = prototype_delta.ge(0.0).to(dtype=view_logits.dtype)
+        prototype_scale = prototype_scale.clone()
+        prototype_scale[:, 0] = 0.0
+        return prototype_scale
+
     def forward(
         self,
         view_features: torch.Tensor,
@@ -867,7 +930,16 @@ class CandidateViewReliabilityGate(nn.Module):
             device=view_features.device,
             dtype=view_features.dtype,
         )
-        candidate_scale = candidate_scale * consensus_scale * prob_advantage_scale
+        prototype_scale = self._prototype_alignment_scale(view_features, view_logits).to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        candidate_scale = (
+            candidate_scale
+            * consensus_scale
+            * prob_advantage_scale
+            * prototype_scale
+        )
         return residual * candidate_scale.unsqueeze(-1)
 
 
@@ -1833,6 +1905,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_CANDIDATE_VIEW_GATE_PROB_WINDOW",
             0.0,
         )
+        self.candidate_view_gate_prototype_advantage = _env_unit_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_PROTOTYPE_ADVANTAGE",
+            0.0,
+        )
+        self.candidate_view_gate_prototype_window = _env_unit_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_PROTOTYPE_WINDOW",
+            0.0,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2269,6 +2349,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         consensus_window=self.candidate_view_gate_consensus_window,
                         prob_advantage=self.candidate_view_gate_prob_advantage,
                         prob_window=self.candidate_view_gate_prob_window,
+                        prototype_advantage=self.candidate_view_gate_prototype_advantage,
+                        prototype_window=self.candidate_view_gate_prototype_window,
                         detach_features=self.candidate_view_gate_detach_features,
                     )
                 if self.enable_gate_logit_rms_limit:
