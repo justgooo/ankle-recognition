@@ -707,6 +707,7 @@ class CandidateViewReliabilityGate(nn.Module):
         require_class_consensus: bool = False,
         consensus_margin: float = 0.0,
         consensus_window: float = 0.0,
+        detach_features: bool = False,
         dropout: float = 0.05,
     ) -> None:
         super().__init__()
@@ -734,6 +735,7 @@ class CandidateViewReliabilityGate(nn.Module):
         self.require_class_consensus = bool(require_class_consensus)
         self.consensus_margin = float(consensus_margin)
         self.consensus_window = float(consensus_window)
+        self.detach_features = bool(detach_features)
         nn.init.zeros_(self.adapter[-1].weight)
         nn.init.zeros_(self.adapter[-1].bias)
 
@@ -797,6 +799,8 @@ class CandidateViewReliabilityGate(nn.Module):
             device=view_features.device,
             dtype=view_features.dtype,
         )
+        if self.detach_features:
+            view_features = view_features.detach()
         features = self.feature_norm(view_features)
         evidence = self.evidence_norm(evidence)
         residual_input = torch.cat([features, evidence], dim=-1)
@@ -1756,6 +1760,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.candidate_view_gate_require_class_consensus = _env_flag(
             "ANKLE_DECISION_CANDIDATE_VIEW_GATE_REQUIRE_CLASS_CONSENSUS"
         )
+        self.candidate_view_gate_detach_features = _env_flag(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_DETACH_FEATURES"
+        )
         self.candidate_view_gate_consensus_margin = _env_positive_float(
             "ANKLE_DECISION_CANDIDATE_VIEW_GATE_CONSENSUS_MARGIN",
             0.2,
@@ -2198,6 +2205,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         require_class_consensus=self.candidate_view_gate_require_class_consensus,
                         consensus_margin=self.candidate_view_gate_consensus_margin,
                         consensus_window=self.candidate_view_gate_consensus_window,
+                        detach_features=self.candidate_view_gate_detach_features,
                     )
                 if self.enable_gate_logit_rms_limit:
                     self.gate_logit_rms_limiter = GateLogitRMSLimiter(
