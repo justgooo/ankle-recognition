@@ -707,6 +707,8 @@ class CandidateViewReliabilityGate(nn.Module):
         require_class_consensus: bool = False,
         consensus_margin: float = 0.0,
         consensus_window: float = 0.0,
+        prob_advantage: float = 0.0,
+        prob_window: float = 0.0,
         detach_features: bool = False,
         dropout: float = 0.05,
     ) -> None:
@@ -721,6 +723,10 @@ class CandidateViewReliabilityGate(nn.Module):
             raise ValueError("consensus_margin must be >= 0.")
         if consensus_window < 0.0:
             raise ValueError("consensus_window must be >= 0.")
+        if prob_advantage < 0.0:
+            raise ValueError("prob_advantage must be >= 0.")
+        if prob_window < 0.0:
+            raise ValueError("prob_window must be >= 0.")
         self.feature_norm = nn.LayerNorm(feature_dim)
         self.evidence_norm = nn.LayerNorm(evidence_dim)
         self.adapter = nn.Sequential(
@@ -735,6 +741,8 @@ class CandidateViewReliabilityGate(nn.Module):
         self.require_class_consensus = bool(require_class_consensus)
         self.consensus_margin = float(consensus_margin)
         self.consensus_window = float(consensus_window)
+        self.prob_advantage = float(prob_advantage)
+        self.prob_window = float(prob_window)
         self.detach_features = bool(detach_features)
         nn.init.zeros_(self.adapter[-1].weight)
         nn.init.zeros_(self.adapter[-1].bias)
@@ -790,6 +798,48 @@ class CandidateViewReliabilityGate(nn.Module):
         consensus_scale[:, 0] = 0.0
         return consensus_scale
 
+    def _prob_advantage_scale(self, view_logits: torch.Tensor) -> torch.Tensor:
+        if self.prob_advantage <= 0.0 and self.prob_window <= 0.0:
+            return torch.ones(
+                view_logits.shape[:2],
+                device=view_logits.device,
+                dtype=view_logits.dtype,
+            )
+        if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        detached_logits = view_logits.detach()
+        if detached_logits.shape[-1] < 2:
+            return torch.ones(
+                view_logits.shape[:2],
+                device=view_logits.device,
+                dtype=view_logits.dtype,
+            )
+
+        probs = torch.softmax(detached_logits, dim=-1)
+        abnormal_probs = probs[..., 1]
+        normal_probs = probs[..., 0]
+        signed_margins = detached_logits[..., 1] - detached_logits[..., 0]
+        candidate_is_abnormal = signed_margins.ge(0.0)
+        candidate_class_probs = torch.where(
+            candidate_is_abnormal,
+            abnormal_probs,
+            normal_probs,
+        )
+        axial_same_class_probs = torch.where(
+            candidate_is_abnormal,
+            abnormal_probs[:, :1].expand_as(abnormal_probs),
+            normal_probs[:, :1].expand_as(normal_probs),
+        )
+        prob_delta = candidate_class_probs - axial_same_class_probs - self.prob_advantage
+        if self.prob_window > 0.0:
+            prob_scale = (prob_delta / self.prob_window).clamp(0.0, 1.0)
+        else:
+            prob_scale = prob_delta.ge(0.0).to(dtype=view_logits.dtype)
+        prob_scale = prob_scale * signed_margins.ne(0.0).to(dtype=view_logits.dtype)
+        prob_scale = prob_scale.clone()
+        prob_scale[:, 0] = 0.0
+        return prob_scale
+
     def forward(
         self,
         view_features: torch.Tensor,
@@ -813,7 +863,11 @@ class CandidateViewReliabilityGate(nn.Module):
             device=view_features.device,
             dtype=view_features.dtype,
         )
-        candidate_scale = candidate_scale * consensus_scale
+        prob_advantage_scale = self._prob_advantage_scale(view_logits).to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        candidate_scale = candidate_scale * consensus_scale * prob_advantage_scale
         return residual * candidate_scale.unsqueeze(-1)
 
 
@@ -1771,6 +1825,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_CANDIDATE_VIEW_GATE_CONSENSUS_WINDOW",
             0.2,
         )
+        self.candidate_view_gate_prob_advantage = _env_unit_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_PROB_ADVANTAGE",
+            0.0,
+        )
+        self.candidate_view_gate_prob_window = _env_unit_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_PROB_WINDOW",
+            0.0,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2205,6 +2267,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         require_class_consensus=self.candidate_view_gate_require_class_consensus,
                         consensus_margin=self.candidate_view_gate_consensus_margin,
                         consensus_window=self.candidate_view_gate_consensus_window,
+                        prob_advantage=self.candidate_view_gate_prob_advantage,
+                        prob_window=self.candidate_view_gate_prob_window,
                         detach_features=self.candidate_view_gate_detach_features,
                     )
                 if self.enable_gate_logit_rms_limit:
