@@ -704,6 +704,9 @@ class CandidateViewReliabilityGate(nn.Module):
         residual_limit: float = 0.35,
         margin_gap: float = 0.5,
         margin_window: float = 0.25,
+        require_class_consensus: bool = False,
+        consensus_margin: float = 0.0,
+        consensus_window: float = 0.0,
         dropout: float = 0.05,
     ) -> None:
         super().__init__()
@@ -713,6 +716,10 @@ class CandidateViewReliabilityGate(nn.Module):
             raise ValueError("margin_gap must be >= 0.")
         if margin_window < 0.0:
             raise ValueError("margin_window must be >= 0.")
+        if consensus_margin < 0.0:
+            raise ValueError("consensus_margin must be >= 0.")
+        if consensus_window < 0.0:
+            raise ValueError("consensus_window must be >= 0.")
         self.feature_norm = nn.LayerNorm(feature_dim)
         self.evidence_norm = nn.LayerNorm(evidence_dim)
         self.adapter = nn.Sequential(
@@ -724,6 +731,9 @@ class CandidateViewReliabilityGate(nn.Module):
         self.residual_limit = float(residual_limit)
         self.margin_gap = float(margin_gap)
         self.margin_window = float(margin_window)
+        self.require_class_consensus = bool(require_class_consensus)
+        self.consensus_margin = float(consensus_margin)
+        self.consensus_window = float(consensus_window)
         nn.init.zeros_(self.adapter[-1].weight)
         nn.init.zeros_(self.adapter[-1].bias)
 
@@ -742,6 +752,42 @@ class CandidateViewReliabilityGate(nn.Module):
         candidate_scale[:, 0] = 0.0
         return candidate_scale
 
+    def _class_consensus_scale(self, view_logits: torch.Tensor) -> torch.Tensor:
+        if not self.require_class_consensus:
+            return torch.ones(
+                view_logits.shape[:2],
+                device=view_logits.device,
+                dtype=view_logits.dtype,
+            )
+        if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        detached_logits = view_logits.detach()
+        if detached_logits.shape[-1] > 1:
+            signed_margins = detached_logits[..., 1] - detached_logits[..., 0]
+        else:
+            signed_margins = detached_logits.squeeze(-1)
+        candidate_direction = signed_margins.sign()
+        support_values = []
+        for view_index in range(3):
+            other_support = [
+                candidate_direction[:, view_index] * signed_margins[:, other_index]
+                for other_index in range(3)
+                if other_index != view_index
+            ]
+            support_values.append(torch.stack(other_support, dim=1).amax(dim=1))
+        consensus_support = torch.stack(support_values, dim=1)
+        consensus_delta = consensus_support - self.consensus_margin
+        if self.consensus_window > 0.0:
+            consensus_scale = (consensus_delta / self.consensus_window).clamp(0.0, 1.0)
+        else:
+            consensus_scale = consensus_delta.ge(0.0).to(dtype=view_logits.dtype)
+        consensus_scale = consensus_scale * candidate_direction.ne(0.0).to(
+            dtype=view_logits.dtype
+        )
+        consensus_scale = consensus_scale.clone()
+        consensus_scale[:, 0] = 0.0
+        return consensus_scale
+
     def forward(
         self,
         view_features: torch.Tensor,
@@ -759,6 +805,11 @@ class CandidateViewReliabilityGate(nn.Module):
             device=view_features.device,
             dtype=view_features.dtype,
         )
+        consensus_scale = self._class_consensus_scale(view_logits).to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        candidate_scale = candidate_scale * consensus_scale
         return residual * candidate_scale.unsqueeze(-1)
 
 
@@ -1702,6 +1753,17 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_CANDIDATE_VIEW_GATE_MARGIN_WINDOW",
             0.25,
         )
+        self.candidate_view_gate_require_class_consensus = _env_flag(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_REQUIRE_CLASS_CONSENSUS"
+        )
+        self.candidate_view_gate_consensus_margin = _env_positive_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_CONSENSUS_MARGIN",
+            0.2,
+        )
+        self.candidate_view_gate_consensus_window = _env_unit_float(
+            "ANKLE_DECISION_CANDIDATE_VIEW_GATE_CONSENSUS_WINDOW",
+            0.2,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2133,6 +2195,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         residual_limit=self.candidate_view_gate_residual_limit,
                         margin_gap=self.candidate_view_gate_margin_gap,
                         margin_window=self.candidate_view_gate_margin_window,
+                        require_class_consensus=self.candidate_view_gate_require_class_consensus,
+                        consensus_margin=self.candidate_view_gate_consensus_margin,
+                        consensus_window=self.candidate_view_gate_consensus_window,
                     )
                 if self.enable_gate_logit_rms_limit:
                     self.gate_logit_rms_limiter = GateLogitRMSLimiter(
