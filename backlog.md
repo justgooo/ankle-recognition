@@ -355,6 +355,17 @@
 - **fusion-weight 结论**：hard mismatch trigger 没有修复 routing collapse。`seed42` mean weight `0.9748/0.0140/0.0112`，top-weight `94/0/0`；`seed123` mean weight `0.9210/0.0486/0.0304`，top-weight `94/0/0`；`seed456` mean weight `0.9676/0.0137/0.0188`，top-weight `94/0/0`。三 seed 合计 top-weight `282/0/0`，multi-seed mean weight `0.9545/0.0254/0.0201`；即使 true-margin telemetry 中存在 non-axial 支持样本，最终 routing 仍全部选择 axial。
 - **当前判断**：DFR-74 正式关闭 DFR-37 hard mismatch threshold 作为可推广主线修复的假设。它没有把 weak-view contribution 转化成稳定 routing，也没有让 learned full-fusion 明确超过 matched equal-weight；后续不应继续调这个 threshold。下一轮若继续 DFR-25 anchor，应优先做一项 positive-signal 机制或样本级 trigger audit，聚焦“哪些样本确实需要 non-axial routing、当前 trigger 为什么没有覆盖/转化”，而不是再做 broad amplitude sweep。
 
+### DFR-75 candidate-view reliability gate seed42 candidates（2026-05-12）
+
+> **实验说明**
+> - 本轮继续严格从 DFR-25 anchor 出发：ResNeXt 256x8、learned decision fusion、L3 no-mixer、dominant-gate dropout 与 winning scalar 不变；唯一新增机制是在 reliability path 中加入低容量 `CandidateViewReliabilityGate`。
+> - 设计思路：用 detached per-view classifier logit margin 识别 candidate non-axial view；只有当 coronal/sagittal 的 predicted margin 相对 axial 至少高出 `0.5` 时，才允许该 non-axial view 获得 bounded residual reliability logit。这样修复的是 evidence 与 routing 不一致，而不是把三视角固定平均。
+> - 预计改进效果：相对 DFR-25 seed42 的 `top_weight axial=94/94`，预期 axial 仍主导大多数强 axial-evidence 样本，但 coronal/sagittal 在自身 margin 明确强于 axial 的样本上获得少量 top/near-top routing；如果这些候选样本确实对应 right-view evidence，则 learned full-fusion 有机会超过 matched equal-weight seed42 `0.9255319148936170`，而不是只提升单视角或把权重拉平均。
+
+- [x] **DFR-75-RESNEXT-DECISION-256X8-CANDIDATE-VIEW-RELIABILITY-GATE-SEED42-MAIN-STUDY**：commit `2c53420`，fresh adaptive `main-study` 使用 [autoresearch_logs/generated_search_configs/optuna_main_search_iter_0002_20260512_033321.yaml](/dataset/HH/ankle-ct/autoresearch_logs/generated_search_configs/optuna_main_search_iter_0002_20260512_033321.yaml)，study root [runs/optuna_main_autoloop/iter_0002_20260512_033321](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0002_20260512_033321)，GPU policy `--gpu-ids 0,2,3 --max-workers 3`，只跑 seed42 三个保守候选 `ANKLE_DECISION_CANDIDATE_VIEW_GATE_RESIDUAL_LIMIT=0.25/0.35/0.50`。实验实际结果：trial0 `0.8936170212765957/0.9368181818181818/0.8837209302325582`，trial1 `0.9042553191489362/0.9468181818181818/0.8915662650602410`，trial2 `0.9148936170212766/0.9468181818181818/0.9090909090909091`；best trial2 `peak_vram≈2.19 GiB` → **discard**（best seed42 仍低于 DFR-25 seed42 `0.9361702127659575/0.9786363636363636/0.9333333333333333`，也低于 matched equal-weight seed42 `0.9255319148936170` 的主指标。）
+- **fusion-weight 结论**：best trial2 的 [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0002_20260512_033321/trials/trial_0002/run/fusion_weight_analysis.json) 显示 candidate gate 确实打破了 axial collapse，但迁移质量不够。mean fusion weight `axial/coronal/sagittal = 0.4241/0.5587/0.0173`；top-weight count/rate `axial=42/0.4468`，`coronal=52/0.5532`，`sagittal=0/0.0000`。`top_true_margin` 分布为 `32/46/16`，`top_weight_hit_rate.true_margin=0.5851`；也就是说，coronal 获得大量 top-routing，但并没有把 true-margin 中的 sagittal 支持样本纳入，也没有转化为 accuracy。
+- **当前判断**：DFR-75 是 negative seed42 candidate study，不应 promotion 到 3-seed formal。它提供的诊断是：直接用 predicted-margin advantage 选 candidate view 可以移动 routing，但该触发仍会把 learned fusion 推向 coronal over-routing，而不是 right-view-at-right-sample。后续若继续 candidate/hierarchical selection，必须先做样本级 trigger audit 或加更可靠的 supervised/prototype alignment signal；不要把 `residual_limit`、`margin_gap` 当成新的 broad sweep 主线。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1362,11 +1373,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-74 hard mismatch dominant-gate dropout multiseed formal`：从 DFR-25 anchor 出发，只启用 `ANKLE_DECISION_TRAIN_AXIAL_TEACHER_MISALIGNMENT_THRESHOLD=0.1`，对 DFR-37 seed42 positive signal 做 seeds `42/123/456` confirmation。 |
-| 上次结果 | 3-seed mean `val_acc=0.9219858156028369`，`val_auc=0.9653030303030303`，`val_f1=0.9175728486073313` → discard。best seed456 达到 `0.9468085106382979`，但 seed42/123 明显回落；fusion telemetry 为 seed42 `94/0/0`、seed123 `94/0/0`、seed456 `94/0/0`，mean weights `0.9545/0.0254/0.0201`，说明 hard mismatch dropout 没有减少 axial top-weight collapse。 |
-| 下一步 | 不继续调 DFR-37 threshold。若外层 loop 继续，应仍从 DFR-25 anchor 出发，优先选择一项能直接解释“right view at right sample”的 positive-signal 机制或样本级 trigger audit；可考虑 lightweight hierarchical/candidate view selection 或 supervised/prototype alignment 的 seed42 3-candidate study，但不要回到 broad view-role amplitude、plain floor、direct teacher blend 或 scalar temperature family。 |
+| 上次实验 | `DFR-75 candidate-view reliability gate seed42 candidates`：从 DFR-25 anchor 出发，只新增 low-capacity candidate-view reliability gate；seed42 main-study 三候选 `residual_limit=0.25/0.35/0.50`，candidate 条件为 non-axial predicted margin 相对 axial 高出 `0.5`。 |
+| 上次结果 | best trial2 `val_acc=0.9148936170212766`，`val_auc=0.9468181818181818`，`val_f1=0.9090909090909091` → discard，低于 DFR-25 seed42 与 matched equal-weight seed42。fusion telemetry 为 mean weights `0.4241/0.5587/0.0173`，top-weight count/rate `42/0.4468, 52/0.5532, 0/0.0000`；candidate gate 打破了 axial collapse，但转成 coronal over-routing，没有带来 accuracy gain。 |
+| 下一步 | 不 promotion DFR-75，也不要沿 `residual_limit/margin_gap` 做 broad sweep。若外层 loop 继续，应先做样本级 trigger audit，或选择一项带更可靠监督/原型对齐信号的 minimal DFR-25 repair，让 candidate/hierarchical selection 只在 right-view evidence 样本上触发；继续避免 broad view-role amplitude、plain floor、direct teacher blend、scalar temperature 和 blind prior-debias family。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 49（自 `DFR-26 seed123` 起至 `DFR-74 hard mismatch dominant-gate dropout multiseed formal` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 50（自 `DFR-26 seed123` 起至 `DFR-75 candidate-view reliability gate seed42 candidates` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
