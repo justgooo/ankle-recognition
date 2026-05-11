@@ -1377,6 +1377,33 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_BLEND",
             1.0,
         )
+        self.enable_conditional_view_role_residual = _env_flag(
+            "ANKLE_DECISION_ENABLE_CONDITIONAL_VIEW_ROLE_RESIDUAL"
+        )
+        self.conditional_view_role_residual_scale = _env_unit_float(
+            "ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_SCALE",
+            0.25,
+        )
+        self.conditional_view_role_residual_gate_gap = _env_positive_float(
+            "ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_GATE_GAP",
+            0.5,
+        )
+        self.conditional_view_role_residual_fp_prob_threshold = _env_unit_float(
+            "ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_FP_PROB_THRESHOLD",
+            0.7,
+        )
+        self.conditional_view_role_residual_coronal_low_prob = _env_unit_float(
+            "ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_CORONAL_LOW_PROB",
+            0.35,
+        )
+        self.conditional_view_role_residual_axial_high_prob = _env_unit_float(
+            "ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_AXIAL_HIGH_PROB",
+            0.65,
+        )
+        self.conditional_view_role_residual_positive_floor = _env_unit_float(
+            "ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_POSITIVE_FLOOR",
+            0.7,
+        )
         self.enable_relative_view_gate = _env_flag(
             "ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE"
         )
@@ -1628,6 +1655,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 needs_base_confidence_head = (
                     not self.use_view_role_confidence_head
                     or self.view_role_confidence_blend < 1.0
+                    or self.enable_conditional_view_role_residual
                 )
                 if needs_base_confidence_head:
                     if self.use_shared_confidence_head:
@@ -1701,6 +1729,54 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             dim=1,
         )
         return teacher_weights.unsqueeze(-1)
+
+    def _apply_conditional_view_role_residual(
+        self,
+        base_confidences: torch.Tensor,
+        role_confidences: torch.Tensor,
+        view_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        """Use role-aware routing only on FP-risk or low-gap cases, while protecting axial-positive evidence."""
+        if (
+            not self.enable_conditional_view_role_residual
+            or role_confidences is None
+            or self.conditional_view_role_residual_scale <= 0.0
+        ):
+            return base_confidences
+
+        base_scores = base_confidences.squeeze(-1)
+        sorted_scores = torch.sort(base_scores.detach(), dim=1, descending=True).values
+        top12_gap = (
+            sorted_scores[:, 0] - sorted_scores[:, 1]
+            if sorted_scores.shape[1] > 1
+            else sorted_scores[:, 0].new_zeros(sorted_scores.shape[0])
+        )
+        low_gap = top12_gap <= self.conditional_view_role_residual_gate_gap
+
+        view_probs = torch.softmax(view_logits.detach(), dim=-1)[..., 1]
+        base_weights = torch.softmax(base_scores.detach() / self.fusion_temperature, dim=1)
+        fused_abnormal_prob = (base_weights * view_probs).sum(dim=1)
+        axial_prob = view_probs[:, 0]
+        coronal_prob = view_probs[:, 1] if view_probs.shape[1] > 1 else axial_prob
+        fp_risk = (
+            fused_abnormal_prob >= self.conditional_view_role_residual_fp_prob_threshold
+        ) & (
+            axial_prob >= self.conditional_view_role_residual_axial_high_prob
+        ) & (
+            coronal_prob <= self.conditional_view_role_residual_coronal_low_prob
+        )
+        positive_guard = axial_prob >= self.conditional_view_role_residual_positive_floor
+        apply_mask = (low_gap | fp_risk) & (~positive_guard | fp_risk)
+        apply_mask = apply_mask.to(dtype=base_confidences.dtype, device=base_confidences.device)
+        residual = (role_confidences - base_confidences).clamp(
+            min=-self.view_role_confidence_logit_limit,
+            max=self.view_role_confidence_logit_limit,
+        )
+        return base_confidences + (
+            self.conditional_view_role_residual_scale
+            * apply_mask.view(-1, 1, 1)
+            * residual
+        )
 
     def _compute_classifier_features(
         self,
@@ -2256,6 +2332,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 base_confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
             if role_confidences is None:
                 confidences = base_confidences
+            elif self.enable_conditional_view_role_residual:
+                confidences = self._apply_conditional_view_role_residual(
+                    base_confidences,
+                    role_confidences,
+                    view_logits,
+                )
             elif self.view_role_confidence_blend >= 1.0:
                 confidences = role_confidences
             else:

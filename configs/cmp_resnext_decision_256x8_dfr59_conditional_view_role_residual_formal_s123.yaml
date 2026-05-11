@@ -1,0 +1,55 @@
+# DFR-59: DFR-25 base scorer plus conditional DFR-57 view-role residual.
+# The role-aware scorer is applied only on FP-risk / low-gap samples so strong
+# axial-positive cases keep the DFR-25 ranking.
+experiment_name: cmp_resnext_decision_256x8_dfr59_conditional_view_role_residual_formal_s123
+output_dir: runs/resnext_decision_256x8_mainline/dfr59_conditional_view_role_residual_formal_s123
+seed: 123
+
+runtime_env:
+  ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
+  ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
+  ANKLE_DECISION_USE_VIEW_ROLE_CONFIDENCE_HEAD: "1"
+  ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_ROLE_DIM: "32"
+  ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_HIDDEN_DIM: "128"
+  ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_DROPOUT: "0.05"
+  ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_LOGIT_LIMIT: "1.5"
+  ANKLE_DECISION_ENABLE_CONDITIONAL_VIEW_ROLE_RESIDUAL: "1"
+  ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_SCALE: "0.25"
+  ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_GATE_GAP: "0.5"
+  ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_FP_PROB_THRESHOLD: "0.7"
+  ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_CORONAL_LOW_PROB: "0.35"
+  ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_AXIAL_HIGH_PROB: "0.65"
+  ANKLE_DECISION_CONDITIONAL_VIEW_ROLE_RESIDUAL_POSITIVE_FLOOR: "0.7"
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 256
+  num_slices_per_view: 8
+  trim_edge_slices: 2
+  batch_size: 6
+  num_workers: 12
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnext
+  fusion_type: decision
+  share_backbone: false
+  use_pretrained: true
+  freeze_layers: 3
+  fusion_hidden_dim: 256
+  dropout: 0.25
+  use_attention_pooling: false
+
+train:
+  epochs: 15
+  lr: 1.0e-4
+  weight_decay: 2.5e-4
+  class_weight: true
+  device: auto
+  augmentation: true
+  scheduler: none
+  label_smoothing: 0.0
+  gradient_clip_norm: 2.5
