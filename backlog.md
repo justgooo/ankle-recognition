@@ -199,6 +199,18 @@
 - **sample-level 结论**：相对 DFR-25，DFR-61 是 `fixed=8 / broken=15 / net=-7`；broken 以阳性 FN 为主，seed456 单独新增 `6` 个阳性 FN（例如 `112/142/147/165/29/58`），seed123 还新增阴性 FP（例如 `CTyin__CT24yin122/21`）。相对 DFR-60，DFR-61 只在 seed42 净 `+1`，seed123 净 `-2`，seed456 净 `-3`。
 - **当前判断**：DFR-61 是 negative result。自由 signed margin residual 会学习到过强的负向修正，反而加剧 positive-evidence dilution；下一轮不应继续用 unconstrained residual。DFR-62 应改成单向 positive evidence floor/guard：只允许在 fused abnormal probability 低于高置信 view abnormal evidence 时向 abnormal margin 方向补偿，并通过小强度/高阈值约束避免阴性 FP 爆炸。
 
+### DFR-62 positive-evidence floor fusion（2026-05-11）
+
+> **实验说明**
+> - 本轮是用户要求继续 5 轮 3-seed research 的第 `3/5` 轮；从 DFR-60 fork，不启用 DFR-61 的自由 signed residual。
+> - 结构假设：DFR-61 失败来自 residual 可以学习负向 abnormal-margin 修正；DFR-62 改为 `PositiveEvidenceFloorFusion`，只允许在 fused abnormal probability 低于 `0.5`、且 detached per-view evidence 满足 `max abnormal >= 0.75` 与 second-view support `>= 0.2` 时，向 abnormal margin 做单向 sigmoid boost。模块初始化 bias 为负，初始几乎等价于 DFR-60。
+> - 预计改进效果：在不打坏阴性 FP 修复的前提下，救回 DFR-57/60 的阳性 FN；如果 late-fusion floor 足够，seed42/456 应减少 `29/54/58/142/147/165/176` 这些 positive breaks。
+
+- [x] **DFR-62-RESNEXT-DECISION-256X8-POSITIVE-EVIDENCE-FLOOR-FUSION-MULTISEED-FORMAL**：commit `567c4b5`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr62_positive_evidence_floor_fusion_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr62_positive_evidence_floor_fusion_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr62_positive_evidence_floor_fusion_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr62_positive_evidence_floor_fusion_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr62_positive_evidence_floor_fusion_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr62_positive_evidence_floor_fusion_formal_s456.yaml)。实验实际结果：Slurm job `482601` 在 `RTXA6Kq/node16` 完成，`seed42=0.9148936170212766/0.9700000000000000/0.9024390243902439`，`seed123=0.9255319148936170/0.9718181818181818/0.9213483146067416`，`seed456=0.9148936170212766/0.9586363636363637/0.9000000000000000`；3-seed mean `val_acc=0.9184397163120567`，`val_auc=0.9668181818181818`，`val_f1=0.9079291129989953`，`peak_vram≈2.20 GiB` → **discard**（低于 DFR-25、DFR-57/60，也低于 matched equal-weight mean 的 `val_acc / val_f1`。）
+- **fusion-weight 结论**：DFR-62 没有稳定修复 routing。`seed42` top-weight 重新 hard axial `94/0/0`，mean weight `0.6767/0.2167/0.1066`；`seed123` top-weight `51/42/1`；`seed456` top-weight `28/66/0`，表现为 coronal over-routing。不同 seed 的 routing 方向分化，不能作为主线保留。
+- **sample-level 结论**：相对 DFR-25，DFR-62 是 `fixed=8 / broken=14 / net=-6`；seed42 broken `5` 个阳性 FN，seed456 broken `5` 个阳性 FN，seed123 则出现 `3` 个阴性 FP（`CTyin__CT24yin122/188/21`）。相对 DFR-60，seed42 净 `0`，seed123 净 `-1`，seed456 净 `-2`。late positive floor 没能救回核心 positive breaks，且会重新打坏阴性样本。
+- **当前判断**：DFR-62 是 negative result。DFR-61/62 共同说明问题不适合在最终 fused logits 后补；DFR-57/60 的 broken cases 已经包含 per-view abnormal probability drift，late-fusion guard 只能在已经漂移的概率上补救，容易引入 FP/FN tradeoff。DFR-63 应回到 gate/scorer 训练耦合：保留 role-aware anti-collapse，但减少它对 per-view classifier/head 学习的扰动，例如把 role scorer 的 replacement 变成 stop-gradient gate target / train-time auxiliary，而不改变 fused logits 主梯度。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1206,11 +1218,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-61 evidence-margin residual fusion multiseed formal`：从 DFR-60 出发，在最终 binary fused margin 上加入零初始化、有界、detached evidence 驱动的 residual；完成 seeds `42/123/456`。 |
-| 上次结果 | 3-seed mean `val_acc=0.9148936170212766`，`val_auc=0.9718181818181818`，`val_f1=0.9029051147185149` → discard。routing 进一步离开 hard axial，但相对 DFR-25 是 fixed `8` / broken `15` / net `-7`，broken 主要是阳性 FN。 |
-| 下一步 | 继续用户要求的第 `3/5` 轮 3-seed research：不要再用自由 signed margin residual；改成单向 positive-evidence floor/guard，只在 fused abnormal probability 低于高置信 view abnormal evidence 时向 abnormal margin 小幅补偿，并用高阈值控制阴性 FP。 |
+| 上次实验 | `DFR-62 positive-evidence floor fusion multiseed formal`：从 DFR-60 出发，用单向 abnormal-margin boost 替代 DFR-61 的自由 signed residual；完成 seeds `42/123/456`。 |
+| 上次结果 | 3-seed mean `val_acc=0.9184397163120567`，`val_auc=0.9668181818181818`，`val_f1=0.9079291129989953` → discard。相对 DFR-25 是 fixed `8` / broken `14` / net `-6`；positive FN 仍未解决，seed123 还新增阴性 FP。 |
+| 下一步 | 继续用户要求的第 `4/5` 轮 3-seed research：停止在最终 fused logits 后补；回到 gate/scorer 训练耦合，保留 role-aware anti-collapse 但减少它对 per-view classifier/head 学习的扰动。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 36（自 `DFR-26 seed123` 起至 `DFR-61 evidence-margin residual fusion multiseed formal` 连续为 discard；DFR-57/60/61 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 37（自 `DFR-26 seed123` 起至 `DFR-62 positive-evidence floor fusion multiseed formal` 连续为 discard；DFR-57/60/61/62 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
