@@ -965,6 +965,68 @@ class PairwiseReliabilityGate(nn.Module):
         return self.residual_limit * torch.tanh(residual)
 
 
+class ViewRoleConfidenceScorer(nn.Module):
+    """Shared confidence scorer from centered view features plus view-role tokens.
+
+    The module follows the MVCNN/RotationNet lesson that view identity should be
+    explicit, but it avoids feeding raw per-view offsets directly into the gate.
+    Scores are bounded so the replacement gate cannot immediately hard-select a
+    single anatomical plane.
+    """
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        num_views: int = 3,
+        role_dim: int = 32,
+        hidden_dim: int = 128,
+        dropout: float = 0.05,
+        logit_limit: float = 1.5,
+    ) -> None:
+        super().__init__()
+        if num_views <= 0:
+            raise ValueError("num_views must be > 0.")
+        if role_dim <= 0:
+            raise ValueError("role_dim must be > 0.")
+        if hidden_dim <= 0:
+            raise ValueError("hidden_dim must be > 0.")
+        if logit_limit <= 0.0:
+            raise ValueError("logit_limit must be > 0.")
+
+        self.num_views = int(num_views)
+        self.logit_limit = float(logit_limit)
+        self.feature_norm = nn.LayerNorm(feature_dim)
+        self.role_embeddings = nn.Parameter(torch.empty(num_views, role_dim))
+        self.scorer = nn.Sequential(
+            nn.LayerNorm(feature_dim + role_dim),
+            nn.Linear(feature_dim + role_dim, hidden_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.normal_(self.role_embeddings, mean=0.0, std=0.02)
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        batch_size, num_views, _ = view_features.shape
+        if num_views > self.num_views:
+            raise ValueError(
+                f"ViewRoleConfidenceScorer configured for {self.num_views} views, got {num_views}."
+            )
+
+        relative_features = view_features - view_features.mean(dim=1, keepdim=True)
+        normalized_features = self.feature_norm(relative_features)
+        role_tokens = self.role_embeddings[:num_views].to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        role_tokens = role_tokens.unsqueeze(0).expand(batch_size, -1, -1)
+        score_input = torch.cat([normalized_features, role_tokens], dim=-1)
+        raw_scores = self.scorer(score_input)
+        return self.logit_limit * torch.tanh(raw_scores / self.logit_limit)
+
+
 class MultiViewEncoder(nn.Module):
     """
     多视角编码器 - 把 3 个视角的 CT 切片图像分别提取成特征向量。
@@ -1292,6 +1354,25 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.use_relative_confidence_features = _env_flag(
             "ANKLE_DECISION_USE_RELATIVE_CONFIDENCE_FEATURES"
         )
+        self.use_view_role_confidence_head = _env_flag(
+            "ANKLE_DECISION_USE_VIEW_ROLE_CONFIDENCE_HEAD"
+        )
+        self.view_role_confidence_role_dim = _env_positive_int(
+            "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_ROLE_DIM",
+            32,
+        )
+        self.view_role_confidence_hidden_dim = _env_positive_int(
+            "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_HIDDEN_DIM",
+            128,
+        )
+        self.view_role_confidence_dropout = _env_unit_float(
+            "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_DROPOUT",
+            0.05,
+        )
+        self.view_role_confidence_logit_limit = _env_positive_float(
+            "ANKLE_DECISION_VIEW_ROLE_CONFIDENCE_LOGIT_LIMIT",
+            1.5,
+        )
         self.enable_relative_view_gate = _env_flag(
             "ANKLE_DECISION_ENABLE_RELATIVE_VIEW_GATE"
         )
@@ -1531,7 +1612,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                         nn.Linear(self.feature_dim, 1),  # 512 → 1 reliability logit
                     )
 
-                if self.use_shared_confidence_head:
+                if self.use_view_role_confidence_head:
+                    self.view_role_confidence_head = ViewRoleConfidenceScorer(
+                        feature_dim=self.feature_dim,
+                        num_views=3,
+                        role_dim=self.view_role_confidence_role_dim,
+                        hidden_dim=self.view_role_confidence_hidden_dim,
+                        dropout=self.view_role_confidence_dropout,
+                        logit_limit=self.view_role_confidence_logit_limit,
+                    )
+                elif self.use_shared_confidence_head:
                     self.shared_confidence_head = make_confidence_head()
                 else:
                     self.confidence_heads = nn.ModuleList(
@@ -2135,20 +2225,24 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                     - stacked_confidence_features.mean(dim=1, keepdim=True)
                 )
                 confidence_features = list(relative_confidence_features.unbind(dim=1))
-            calibrated_confidences = []
-            if self.use_shared_confidence_head:
-                confidence_heads = [self.shared_confidence_head for _ in confidence_features]
+            if self.use_view_role_confidence_head:
+                role_gate_features = torch.stack(gating_features, dim=1)
+                confidences = self.view_role_confidence_head(role_gate_features)
             else:
-                confidence_heads = self.confidence_heads
-            for head, feature in zip(confidence_heads, confidence_features):
-                raw_confidence = head(feature)
-                if self.disable_fusion_calibrator:
-                    calibrated_confidences.append(raw_confidence)
+                calibrated_confidences = []
+                if self.use_shared_confidence_head:
+                    confidence_heads = [self.shared_confidence_head for _ in confidence_features]
                 else:
-                    calibrated_confidences.append(
-                        self.confidence_calibrator(feature, raw_confidence)
-                    )
-            confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
+                    confidence_heads = self.confidence_heads
+                for head, feature in zip(confidence_heads, confidence_features):
+                    raw_confidence = head(feature)
+                    if self.disable_fusion_calibrator:
+                        calibrated_confidences.append(raw_confidence)
+                    else:
+                        calibrated_confidences.append(
+                            self.confidence_calibrator(feature, raw_confidence)
+                        )
+                confidences = torch.stack(calibrated_confidences, dim=1)  # (B, 3, 1)
             if self.enable_evidence_aware_gate:
                 evidence_gate_features = torch.stack(gating_features, dim=1)
                 confidences = confidences + self.evidence_aware_gate(
