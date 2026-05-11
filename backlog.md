@@ -211,6 +211,18 @@
 - **sample-level 结论**：相对 DFR-25，DFR-62 是 `fixed=8 / broken=14 / net=-6`；seed42 broken `5` 个阳性 FN，seed456 broken `5` 个阳性 FN，seed123 则出现 `3` 个阴性 FP（`CTyin__CT24yin122/188/21`）。相对 DFR-60，seed42 净 `0`，seed123 净 `-1`，seed456 净 `-2`。late positive floor 没能救回核心 positive breaks，且会重新打坏阴性样本。
 - **当前判断**：DFR-62 是 negative result。DFR-61/62 共同说明问题不适合在最终 fused logits 后补；DFR-57/60 的 broken cases 已经包含 per-view abnormal probability drift，late-fusion guard 只能在已经漂移的概率上补救，容易引入 FP/FN tradeoff。DFR-63 应回到 gate/scorer 训练耦合：保留 role-aware anti-collapse，但减少它对 per-view classifier/head 学习的扰动，例如把 role scorer 的 replacement 变成 stop-gradient gate target / train-time auxiliary，而不改变 fused logits 主梯度。
 
+### DFR-63 decoupled role classifier gradients（2026-05-11）
+
+> **实验说明**
+> - 本轮是用户要求继续 5 轮 3-seed research 的第 `4/5` 轮；从 DFR-60 fork，继续使用 detached view-role scorer，但不再在最终 fused logits 后加补丁。
+> - 结构假设：DFR-57/60 的坏样本来自 role-aware routing 改变 per-view classifier/head 的训练平衡；因此训练时 fused logits 的数值仍等价于 role-weighted fusion，但 view logits 的主梯度走 DFR-25 base confidence weights，role scorer 只通过 detached view-logit residual 学习 routing。
+> - 预计改进效果：保留 role-aware anti-collapse 与阴性 FP 修复，同时让 per-view classifier 更接近 DFR-25 的强阳性证据通道，减少 `54/58/120/165/176/29/47` 这类阳性 FN。
+
+- [x] **DFR-63-RESNEXT-DECISION-256X8-DECOUPLED-ROLE-CLASSIFIER-GRAD-MULTISEED-FORMAL**：commit `6c9dc66`，formal seeds `42/123/456`，配置为 [configs/cmp_resnext_decision_256x8_dfr63_decoupled_role_classifier_grad_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr63_decoupled_role_classifier_grad_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr63_decoupled_role_classifier_grad_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr63_decoupled_role_classifier_grad_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr63_decoupled_role_classifier_grad_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr63_decoupled_role_classifier_grad_formal_s456.yaml)。实验实际结果：Slurm job `482624` 在 `RTXA6Kq/node16` 完成，`seed42=0.8936170212765957/0.9550000000000000/0.8750000000000000`，`seed123=0.8829787234042553/0.9277272727272726/0.8607594936708861`，`seed456=0.9148936170212766/0.9522727272727273/0.9024390243902439`；3-seed mean `val_acc=0.8971631205673759`，`val_auc=0.9450000000000000`，`val_f1=0.8793995060203766`，`peak_vram≈2.20 GiB` → **discard**（显著低于 DFR-25、DFR-57/60，也低于 matched equal-weight mean。）
+- **fusion-weight 结论**：DFR-63 不是回到 DFR-25 稳定 routing，而是从 axial collapse 过校正成单一弱视角 collapse。`seed42` mean weight `0.3330/0.5190/0.1480`，top-weight `0/94/0`；`seed123` mean weight `0.1127/0.7374/0.1499`，top-weight `0/94/0`；`seed456` mean weight `0.4217/0.0675/0.5108`，top-weight `3/0/91`。seed456 的 `top_weight_hit_rate.true_margin=0.1170`，说明 learned routing 与真正有用视角严重错位。
+- **sample-level 结论**：相对 DFR-25，DFR-63 是 `fixed=9 / broken=21 / net=-12`；broken 主要是阳性 FN（总计 `19` 个 FN break + `2` 个 FP break）。seed42/123 的 coronal over-routing 修复了少数阴性 FP（如 `CTyin__CT24yin21/95/113/109`），但打坏大量 DFR-25 强阳性样本（如 `CT2412yang120/165/176/29/47/54/58`）；seed456 则转成 sagittal over-routing。
+- **当前判断**：DFR-63 是 strong negative result。role replacement family 的核心问题不是单纯 gate feature 梯度污染，而是 role scorer 在 fused loss 下会找到过强的单弱视角捷径；解耦 classifier 梯度反而让 role scorer 更自由地过路由。第 `5/5` 轮不应继续扩大 role scorer 结构，应回到 DFR-25 内部 gate prior 修复，并做此前最接近主线的 `DFR-53 midcap evidence-close prior debias` 的 3-seed formal confirmation。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1218,11 +1230,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-62 positive-evidence floor fusion multiseed formal`：从 DFR-60 出发，用单向 abnormal-margin boost 替代 DFR-61 的自由 signed residual；完成 seeds `42/123/456`。 |
-| 上次结果 | 3-seed mean `val_acc=0.9184397163120567`，`val_auc=0.9668181818181818`，`val_f1=0.9079291129989953` → discard。相对 DFR-25 是 fixed `8` / broken `14` / net `-6`；positive FN 仍未解决，seed123 还新增阴性 FP。 |
-| 下一步 | 继续用户要求的第 `4/5` 轮 3-seed research：停止在最终 fused logits 后补；回到 gate/scorer 训练耦合，保留 role-aware anti-collapse 但减少它对 per-view classifier/head 学习的扰动。 |
+| 上次实验 | `DFR-63 decoupled role classifier gradients multiseed formal`：从 DFR-60 出发，训练时保持 role-weighted fused logits 数值，但让 view logits 主梯度走 DFR-25 base confidence weights；完成 seeds `42/123/456`。 |
+| 上次结果 | 3-seed mean `val_acc=0.8971631205673759`，`val_auc=0.9450000000000000`，`val_f1=0.8793995060203766` → discard。相对 DFR-25 是 fixed `9` / broken `21` / net `-12`；routing 从 axial collapse 过校正为 coronal/sagittal 单弱视角 collapse。 |
+| 下一步 | 继续用户要求的第 `5/5` 轮 3-seed research：停止继续 role replacement family，回到 DFR-25 内部 gate prior 修复；对此前最接近主线的 `DFR-53 midcap evidence-close prior debias` 做 3-seed formal confirmation。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 37（自 `DFR-26 seed123` 起至 `DFR-62 positive-evidence floor fusion multiseed formal` 连续为 discard；DFR-57/60/61/62 follow-up 离线分析不改变 discard 计数。） |
+| 连续 discard 计数 | 38（自 `DFR-26 seed123` 起至 `DFR-63 decoupled role classifier gradients multiseed formal` 连续为 discard；DFR-57/60/61/62/63 follow-up 离线分析不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
