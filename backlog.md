@@ -154,6 +154,15 @@
 - **当前判断**：DFR-58 是 negative result。简单 logit blend 不是合适的桥接方式；如果后续继续 view-role 方向，应优先研究 DFR-57 replacement 的强 seed123 行为和 seed42/456 失败样本，而不是继续调 blend 比例。本次用户要求的 3 轮 manual autoresearch 已完成，当前最优仍是 DFR-25 3-seed formal mean。
 - **Agent 状态（2026-05-11 04:30 SGT）**：本 session 是唯一 coordinator，已完成用户要求的第 3/3 轮 manual autoresearch；last experiment=`DFR-58 view-role confidence blend multiseed formal`，lane=`formal 3-seed`，result=`discard`，last commit=`254b04c`；本次三轮结论=`DFR-57 view-role scorer 是唯一 positive routing signal，但未超过 DFR-25`；建议下一步=`offline compare DFR-25 vs DFR-57 sample-level routing/correctness before further network edits`。
 
+### DFR-57 follow-up offline analysis（2026-05-11）
+
+- [x] **DFR-57-VS-DFR-25-SAMPLE-LEVEL-ROUTING-COMPARE**：新增 [scripts/analyze_dfr57_followup.py](/dataset/HH/ankle-ct/scripts/analyze_dfr57_followup.py)，只读取既有 `fusion_weight_analysis.json`，对 DFR-25 与 DFR-57 的 seeds `42/123/456` 做 patient-level join；完整 JSON 报告落在 `autoresearch_logs/dfr57_followup_analysis.json`（日志目录按 `.gitignore` 不入库）。核心结论：DFR-57 相比 DFR-25 共修复 `7` 个样本、打坏 `10` 个样本，净 `-3` correct，正好解释 3-seed mean accuracy 从 `0.939716` 回落到 `0.929078`。
+- **按 seed 分解**：`seed42` 从 `0.936170` 降到 `0.914894`，`fixed=2 / broken=4 / net=-2`；`seed123` 从 `0.936170` 升到 `0.946809`，`fixed=4 / broken=3 / net=+1`；`seed456` 从 `0.946809` 降到 `0.925532`，`fixed=1 / broken=3 / net=-2`。DFR-57 的 positive signal 主要是 seed123 的 coronal role routing，而不是全 seed 稳定收益。
+- **修复样本形态**：DFR-57 修复的样本多是 DFR-25 的阴性 FP。典型情况是 DFR-25 axial 对阴性样本给出高 abnormal probability，并用高 axial gate weight 放大错误；DFR-57 通过 coronal/role-aware rerouting 或重新训练后的 axial/coronal低异常概率把它们拉回 TN。重复出现的 positive fixed case 是 `CTyin__CT24yin21`（seed42/456）。
+- **新增错误形态**：DFR-57 打坏的样本集中在两类。第一类是阳性样本被 coronal 强阴性稀释成 FN，例如 `CTyang__CT24yang1__CT2412yang54` 与 `CTyang__CT24yang1__CT2412yang58` 在 seed42/123 都被打坏；这说明 role-aware scorer 在一部分阳性 case 上过度信任 coronal negative evidence。第二类是 seed456 的阴性样本 classifier 本身漂移成强阳性，例如 `CTyin__CT24yin122/125/188`，即使 top-weight 仍是 axial，也已经不是纯 routing 问题。
+- **per-view 诊断**：DFR-57 显著提升 coronal 单视角准确率（seed42 `+0.106383`，seed123 `+0.308511`，seed456 `+0.234043`），但同时压低 sagittal（`-0.063830 / -0.276596 / -0.138298`），并在 seed42/456 压低 axial（`-0.031915 / -0.074468`）。因此 DFR-57 的失败不是简单的 gate 权重分布不好，而是 role-aware confidence replacement 改变了多视角头部训练平衡：coronal 更可用，但 axial/sagittal 稳定性受损。
+- **当前判断**：后续不应继续做 DFR-58 式无条件 logit blend，也不应直接把 DFR-57 replacement 当成新 base。更合格的下一轮应保留 DFR-25 scorer/classifier 的强样本 ranking，只在 `DFR-25 高异常阴性 FP 风险` 或 `top gate confidence gap 小且 coronal 低异常证据强` 的样本上启用 role-aware residual；并且必须限制对阳性样本的 coronal negative override，避免 `54/58/147/176` 这类 axial-positive case 被稀释成 FN。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1161,11 +1170,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-58 view-role confidence blend multiseed formal`：从 DFR-57 fork，保留 DFR-25 base confidence heads/calibrator，并以 `0.55 * base + 0.45 * role` 在 confidence-logit 层混合 bounded role-aware scorer；formal seeds `42/123/456` 在 node03 Slurm allocation 上并行完成，权重 telemetry 已补齐。 |
-| 上次结果 | **discard**。3-seed mean `val_acc=0.9042553191489362`, `val_auc=0.9659090909090910`, `val_f1=0.8867699485174015`，低于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`，也低于 matched equal-weight mean `0.9219858156028368 / 0.9606060606060606 / 0.9112221100424511` 的 `val_acc / val_f1`。fusion telemetry 显示 seed42/123 重新 hard axial top-weight `94/0/0`，seed456 虽分裂到 `58/36/0` 但 accuracy 只有 `0.8936`；simple logit blend 没有保住 DFR-57 的 anti-collapse signal。 |
-| 下一步 | 本次用户要求的 3 轮 manual autoresearch 已完成，当前最优仍是 DFR-25。若继续推进，建议先做 offline sample-level compare：对比 DFR-25 与 DFR-57 在 seed42/123/456 的 per-sample routing、view correctness、true-margin 和错误集合，找出为什么 DFR-57 seed123 提升而 seed42/456 下降，再决定是否做更有条件的 role-aware network edit。 |
+| 上次实验 | `DFR-57 follow-up offline sample-level analysis`：新增 `scripts/analyze_dfr57_followup.py`，对 DFR-25 与 DFR-57 的 seeds `42/123/456` 读取既有 fusion telemetry 并做 patient-level join；没有启动训练，没有修改数据划分。 |
+| 上次结果 | DFR-57 相比 DFR-25 共 `fixed=7 / broken=10 / net=-3`。seed123 的收益来自 coronal role routing 修复 FP/FN（`fixed=4 / broken=3`），但 seed42/456 各净损 `2` 个样本；失败模式是阳性 axial-positive case 被 coronal negative evidence 稀释成 FN，以及 seed456 阴性样本的 axial/coronal classifier 漂移成强阳性。 |
+| 下一步 | 若继续 view-role 方向，应做条件化而非无条件 blend：保留 DFR-25 scorer/classifier 的强样本 ranking，只在 DFR-25 高异常阴性 FP 风险或 top-gate confidence gap 小且 coronal 低异常证据强时启用 bounded role-aware residual，并限制阳性样本的 coronal negative override。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 33（自 `DFR-26 seed123` 起至 `DFR-58 view-role confidence blend multiseed formal` 连续为 discard；上一轮 keep 已在 `DFR-26 seed42` 处把计数清零。本次用户指定的 3 轮 manual autoresearch 已完成；DFR-57 提供 positive routing signal，但 DFR-58 未能转化为新 best。） |
+| 连续 discard 计数 | 33（自 `DFR-26 seed123` 起至 `DFR-58 view-role confidence blend multiseed formal` 连续为 discard；本次 DFR-57 follow-up 是离线分析，不改变 discard 计数。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
