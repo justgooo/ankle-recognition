@@ -2025,6 +2025,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.gate_view_correctness_aux_nonaxial_only = _env_flag(
             "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_NONAXIAL_ONLY"
         )
+        self.gate_view_correctness_aux_protect_strong_axial = _env_flag(
+            "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_PROTECT_STRONG_AXIAL"
+        )
+        self.gate_view_correctness_aux_axial_margin_cap = _env_positive_float(
+            "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_AXIAL_MARGIN_CAP",
+            2.5,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -3366,6 +3373,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 view_mask = torch.ones_like(aux_fusion_weights)
                 view_mask[:, :1] = 0.0
                 aux_fusion_weights = aux_fusion_weights * view_mask
+            if self.gate_view_correctness_aux_protect_strong_axial:
+                axial_logits = view_logits.detach()[:, 0]
+                axial_margin = axial_logits.amax(dim=-1) - axial_logits.amin(dim=-1)
+                weak_axial_mask = axial_margin.le(
+                    self.gate_view_correctness_aux_axial_margin_cap
+                )
+                nonaxial_mask = torch.ones_like(aux_fusion_weights)
+                nonaxial_mask[:, :1] = 0.0
+                protected_nonaxial = aux_fusion_weights * nonaxial_mask
+                preserved_axial = aux_fusion_weights * (1.0 - nonaxial_mask)
+                aux_fusion_weights = preserved_axial + protected_nonaxial * weak_axial_mask.to(
+                    device=fusion_weights.device,
+                    dtype=fusion_weights.dtype,
+                ).view(-1, 1, 1)
             view_scales = (
                 self.gate_view_correctness_aux_base_scale
                 + self.gate_view_correctness_aux_weight_scale * aux_fusion_weights
