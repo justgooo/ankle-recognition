@@ -2042,6 +2042,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.pairwise_selector_aux_require_disagreement = _env_flag(
             "ANKLE_DECISION_PAIRWISE_SELECTOR_AUX_REQUIRE_DISAGREEMENT"
         )
+        self.enable_nonaxial_abnormal_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS"
+        )
+        self.nonaxial_abnormal_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_NONAXIAL_ABNORMAL_AUX_WEIGHT",
+            0.025,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2374,13 +2381,15 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_candidate_view_prototype_aux_loss,
             self.enable_gate_view_correctness_aux_loss,
             self.enable_pairwise_selector_aux_loss,
+            self.enable_nonaxial_abnormal_aux_loss,
         ]
         if sum(bool(flag) for flag in enabled_aux_modes) > 1:
             raise ValueError(
                 "ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS, "
                 "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS, and "
-                "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS, and "
-                "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS are mutually exclusive."
+                "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS, "
+                "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS are mutually exclusive."
             )
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
@@ -3444,6 +3453,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 pair_logits.append(candidate_logits)
             aux_logits = torch.stack(pair_logits, dim=1)
             aux_weight = self.pairwise_selector_aux_weight
+        elif self.enable_nonaxial_abnormal_aux_loss:
+            if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+                raise RuntimeError(
+                    "Non-axial abnormal auxiliary loss expects view logits with shape "
+                    "(batch, 3, classes)."
+                )
+            if view_logits.shape[-1] != 2:
+                raise RuntimeError(
+                    "Non-axial abnormal auxiliary loss requires binary logits."
+                )
+            normal_logits = view_logits[:, 1:, :1].detach()
+            abnormal_logits = view_logits[:, 1:, 1:2]
+            aux_logits = torch.cat([normal_logits, abnormal_logits], dim=-1)
+            aux_weight = self.nonaxial_abnormal_aux_weight
         elif self.enable_aux_view_loss:
             aux_logits = view_logits
 
