@@ -2224,6 +2224,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.gate_pairwise_contrast_aux_require_disagreement = _env_flag(
             "ANKLE_DECISION_GATE_PAIRWISE_CONTRAST_AUX_REQUIRE_DISAGREEMENT"
         )
+        self.enable_gate_label_evidence_rank_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_GATE_LABEL_EVIDENCE_RANK_AUX_LOSS"
+        )
+        self.gate_label_evidence_rank_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_GATE_LABEL_EVIDENCE_RANK_AUX_WEIGHT",
+            0.0025,
+        )
         self.enable_axial_sagittal_rank_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS"
         )
@@ -2636,6 +2643,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_gate_view_correctness_aux_loss,
             self.enable_pairwise_selector_aux_loss,
             self.enable_gate_pairwise_contrast_aux_loss,
+            self.enable_gate_label_evidence_rank_aux_loss,
             self.enable_axial_sagittal_rank_aux_loss,
             self.enable_coronal_pair_abnormal_aux_loss,
             self.enable_nonaxial_abnormal_aux_loss,
@@ -2648,6 +2656,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS, "
                 "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_GATE_PAIRWISE_CONTRAST_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_GATE_LABEL_EVIDENCE_RANK_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS, and "
@@ -3796,6 +3805,30 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 pair_logits.append(candidate_logits)
             aux_logits = torch.stack(pair_logits, dim=1)
             aux_weight = self.gate_pairwise_contrast_aux_weight
+        elif self.enable_gate_label_evidence_rank_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Gate label-evidence rank auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if view_logits.ndim != 3:
+                raise RuntimeError(
+                    "Gate label-evidence rank auxiliary loss expects view logits with shape "
+                    "(batch, views, classes)."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Gate label-evidence rank auxiliary loss expects fusion weights with "
+                    "shape (batch, views, 1) matching view logits."
+                )
+            detached_log_probs = torch.log_softmax(view_logits.detach(), dim=-1)
+            log_weights = fusion_weights.squeeze(-1).clamp_min(1e-8).log()
+            mixture_log_probs = torch.logsumexp(
+                log_weights.unsqueeze(-1) + detached_log_probs,
+                dim=1,
+            )
+            aux_logits = mixture_log_probs.unsqueeze(1)
+            aux_weight = self.gate_label_evidence_rank_aux_weight
         elif self.enable_axial_sagittal_rank_aux_loss:
             if fusion_weights is None:
                 raise RuntimeError(
