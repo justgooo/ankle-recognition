@@ -2121,6 +2121,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.gate_pairwise_contrast_aux_require_disagreement = _env_flag(
             "ANKLE_DECISION_GATE_PAIRWISE_CONTRAST_AUX_REQUIRE_DISAGREEMENT"
         )
+        self.enable_axial_sagittal_rank_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS"
+        )
+        self.axial_sagittal_rank_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_AXIAL_SAGITTAL_RANK_AUX_WEIGHT",
+            0.001,
+        )
         self.enable_coronal_pair_abnormal_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS"
         )
@@ -2507,6 +2514,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_gate_view_correctness_aux_loss,
             self.enable_pairwise_selector_aux_loss,
             self.enable_gate_pairwise_contrast_aux_loss,
+            self.enable_axial_sagittal_rank_aux_loss,
             self.enable_coronal_pair_abnormal_aux_loss,
             self.enable_nonaxial_abnormal_aux_loss,
             self.enable_sagittal_normal_rescue_aux_loss,
@@ -2518,6 +2526,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS, "
                 "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_GATE_PAIRWISE_CONTRAST_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_SAGITTAL_NORMAL_RESCUE_AUX_LOSS are mutually exclusive."
@@ -3648,6 +3657,42 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 pair_logits.append(candidate_logits)
             aux_logits = torch.stack(pair_logits, dim=1)
             aux_weight = self.gate_pairwise_contrast_aux_weight
+        elif self.enable_axial_sagittal_rank_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Axial-sagittal rank auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+                raise RuntimeError(
+                    "Axial-sagittal rank auxiliary loss expects view logits with shape "
+                    "(batch, 3, classes)."
+                )
+            if view_logits.shape[-1] != 2:
+                raise RuntimeError(
+                    "Axial-sagittal rank auxiliary loss requires binary logits."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Axial-sagittal rank auxiliary loss expects fusion weights with "
+                    "shape (batch, 3, 1) matching view logits."
+                )
+            detached_predictions = view_logits.detach().argmax(dim=-1)
+            rank_mask = detached_predictions[:, 0].eq(1) & detached_predictions[:, 2].eq(0)
+            pair_weights = fusion_weights.squeeze(-1)[:, [0, 2]]
+            pair_weights = pair_weights / pair_weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
+            pair_log_weights = pair_weights.clamp_min(1e-8).log()
+            # Class 0 should choose sagittal-normal reliability; class 1 should preserve axial-abnormal reliability.
+            rank_logits = torch.stack(
+                [pair_log_weights[:, 1], pair_log_weights[:, 0]],
+                dim=1,
+            )
+            aux_logits = torch.where(
+                rank_mask.view(-1, 1),
+                rank_logits,
+                rank_logits.detach(),
+            ).unsqueeze(1)
+            aux_weight = self.axial_sagittal_rank_aux_weight
         elif self.enable_coronal_pair_abnormal_aux_loss:
             if fusion_weights is None:
                 raise RuntimeError(
