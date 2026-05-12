@@ -1102,6 +1102,102 @@ class SagittalNormalRescueGate(nn.Module):
         return residual
 
 
+class SagittalReliabilityCalibrator(nn.Module):
+    """Learn a low-capacity sagittal-only reliability residual from detached evidence."""
+
+    def __init__(
+        self,
+        hidden_dim: int = 32,
+        residual_limit: float = 1.0,
+        dropout: float = 0.05,
+    ) -> None:
+        super().__init__()
+        if hidden_dim <= 0:
+            raise ValueError("hidden_dim must be > 0.")
+        if residual_limit <= 0.0:
+            raise ValueError("residual_limit must be > 0.")
+        if not 0.0 <= dropout <= 1.0:
+            raise ValueError("dropout must be in [0, 1].")
+
+        self.residual_limit = float(residual_limit)
+        input_dim = 28
+        self.norm = nn.LayerNorm(input_dim)
+        self.adapter = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def forward(
+        self,
+        confidences: torch.Tensor,
+        view_logits: torch.Tensor,
+        fusion_temperature: float,
+    ) -> torch.Tensor:
+        if confidences.ndim != 3 or confidences.shape[1:] != (3, 1):
+            raise ValueError("confidences must have shape (batch, 3, 1).")
+        if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        if view_logits.shape[-1] != 2:
+            raise ValueError("SagittalReliabilityCalibrator requires binary logits.")
+
+        detached_confidences = confidences.detach().squeeze(-1)
+        detached_logits = view_logits.detach()
+        base_weights = torch.softmax(
+            detached_confidences / max(float(fusion_temperature), 1e-6),
+            dim=1,
+        )
+        view_probs = torch.softmax(detached_logits, dim=-1)
+        abnormal_probs = view_probs[..., 1]
+        view_margins = detached_logits[..., 1] - detached_logits[..., 0]
+        centered_confidences = detached_confidences - detached_confidences.mean(
+            dim=1,
+            keepdim=True,
+        )
+        centered_abnormal = abnormal_probs - abnormal_probs.mean(dim=1, keepdim=True)
+        centered_margins = view_margins - view_margins.mean(dim=1, keepdim=True)
+        weighted_abnormal = base_weights * abnormal_probs
+        fused_abnormal = weighted_abnormal.sum(dim=1, keepdim=True)
+        fused_margin = (base_weights * view_margins).sum(dim=1, keepdim=True)
+        safe_weights = base_weights.clamp_min(1e-8)
+        weight_entropy = -(safe_weights * safe_weights.log()).sum(dim=1, keepdim=True)
+        weight_entropy = weight_entropy / math.log(3.0)
+        sagittal_context = torch.cat(
+            [
+                abnormal_probs[:, 2:3] - abnormal_probs[:, 0:1],
+                view_margins[:, 2:3] - view_margins[:, 0:1],
+                base_weights[:, 2:3] - base_weights[:, 0:1],
+                centered_confidences[:, 2:3],
+            ],
+            dim=1,
+        )
+        evidence_features = torch.cat(
+            [
+                detached_confidences,
+                base_weights,
+                abnormal_probs,
+                centered_abnormal,
+                view_margins,
+                centered_margins,
+                weighted_abnormal,
+                fused_abnormal,
+                fused_margin,
+                weight_entropy,
+                sagittal_context,
+            ],
+            dim=1,
+        )
+        sagittal_residual = self.residual_limit * torch.tanh(
+            self.adapter(self.norm(evidence_features))
+        )
+        residual = torch.zeros_like(confidences)
+        residual[:, 2, 0] = sagittal_residual.squeeze(-1)
+        return residual
+
+
 class GateViewPriorDebiaser(nn.Module):
     """Remove persistent per-view reliability-logit offsets before softmax."""
 
@@ -2181,6 +2277,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_GATE_WINDOW",
             0.15,
         )
+        self.enable_sagittal_reliability_calibrator = _env_flag(
+            "ANKLE_DECISION_ENABLE_SAGITTAL_RELIABILITY_CALIBRATOR"
+        )
+        self.sagittal_reliability_calibrator_hidden_dim = _env_positive_int(
+            "ANKLE_DECISION_SAGITTAL_RELIABILITY_CALIBRATOR_HIDDEN_DIM",
+            32,
+        )
+        self.sagittal_reliability_calibrator_residual_limit = _env_positive_float(
+            "ANKLE_DECISION_SAGITTAL_RELIABILITY_CALIBRATOR_RESIDUAL_LIMIT",
+            1.0,
+        )
+        self.sagittal_reliability_calibrator_dropout = _env_unit_float(
+            "ANKLE_DECISION_SAGITTAL_RELIABILITY_CALIBRATOR_DROPOUT",
+            0.05,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2675,6 +2786,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                             self.sagittal_normal_rescue_gate_fused_abnormal_threshold
                         ),
                         window=self.sagittal_normal_rescue_gate_window,
+                    )
+                if self.enable_sagittal_reliability_calibrator:
+                    self.sagittal_reliability_calibrator = SagittalReliabilityCalibrator(
+                        hidden_dim=self.sagittal_reliability_calibrator_hidden_dim,
+                        residual_limit=(
+                            self.sagittal_reliability_calibrator_residual_limit
+                        ),
+                        dropout=self.sagittal_reliability_calibrator_dropout,
                     )
                 if self.enable_gate_view_prior_debias:
                     self.gate_view_prior_debiaser = GateViewPriorDebiaser(
@@ -3399,6 +3518,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 self.training and self.sagittal_normal_rescue_gate_eval_only
             ):
                 confidences = confidences + self.sagittal_normal_rescue_gate(
+                    confidences,
+                    view_logits,
+                    self.fusion_temperature,
+                )
+            if self.enable_sagittal_reliability_calibrator:
+                confidences = confidences + self.sagittal_reliability_calibrator(
                     confidences,
                     view_logits,
                     self.fusion_temperature,
