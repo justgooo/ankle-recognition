@@ -2242,6 +2242,21 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_TARGETED_EVIDENCE_RANK_AUX_GAP",
             0.05,
         )
+        self.enable_gate_confirmed_target_rank_margin_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_GATE_CONFIRMED_TARGET_RANK_MARGIN_AUX_LOSS"
+        )
+        self.gate_confirmed_target_rank_margin_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_GATE_CONFIRMED_TARGET_RANK_MARGIN_AUX_WEIGHT",
+            0.0025,
+        )
+        self.gate_confirmed_target_rank_margin_aux_gap = _env_unit_float(
+            "ANKLE_DECISION_GATE_CONFIRMED_TARGET_RANK_MARGIN_AUX_GAP",
+            0.02,
+        )
+        self.gate_confirmed_target_rank_margin_aux_margin = _env_positive_float(
+            "ANKLE_DECISION_GATE_CONFIRMED_TARGET_RANK_MARGIN_AUX_MARGIN",
+            0.25,
+        )
         self.enable_axial_sagittal_rank_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS"
         )
@@ -2655,6 +2670,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_pairwise_selector_aux_loss,
             self.enable_gate_pairwise_contrast_aux_loss,
             self.enable_gate_label_evidence_rank_aux_loss,
+            self.enable_gate_targeted_evidence_rank_aux_loss,
+            self.enable_gate_confirmed_target_rank_margin_aux_loss,
             self.enable_axial_sagittal_rank_aux_loss,
             self.enable_coronal_pair_abnormal_aux_loss,
             self.enable_nonaxial_abnormal_aux_loss,
@@ -2668,6 +2685,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_GATE_PAIRWISE_CONTRAST_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_GATE_LABEL_EVIDENCE_RANK_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_GATE_TARGETED_EVIDENCE_RANK_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_GATE_CONFIRMED_TARGET_RANK_MARGIN_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS, and "
@@ -3882,6 +3901,71 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 axial_pair_log_weights.detach(),
             ).unsqueeze(1)
             aux_weight = self.gate_targeted_evidence_rank_aux_weight
+        elif self.enable_gate_confirmed_target_rank_margin_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Gate confirmed-target rank-margin auxiliary loss is enabled but "
+                    "fusion weights were not produced."
+                )
+            if view_logits.ndim != 3:
+                raise RuntimeError(
+                    "Gate confirmed-target rank-margin auxiliary loss expects view logits "
+                    "with shape (batch, views, classes)."
+                )
+            if view_logits.shape[1] < 2 or view_logits.shape[-1] < 2:
+                raise RuntimeError(
+                    "Gate confirmed-target rank-margin auxiliary loss requires at least "
+                    "two views and two classes."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Gate confirmed-target rank-margin auxiliary loss expects fusion weights "
+                    "with shape (batch, views, 1) matching view logits."
+                )
+
+            detached_logits = view_logits.detach()
+            detached_log_probs = torch.log_softmax(detached_logits, dim=-1)
+            axial_log_probs = detached_log_probs[:, :1, :]
+            nonaxial_log_probs = detached_log_probs[:, 1:, :]
+            target_advantages = nonaxial_log_probs - axial_log_probs
+
+            nonaxial_logits = detached_logits[:, 1:, :]
+            num_classes = nonaxial_logits.shape[-1]
+            class_mask = torch.eye(
+                num_classes,
+                device=nonaxial_logits.device,
+                dtype=torch.bool,
+            ).view(1, 1, num_classes, num_classes)
+            other_class_logits = nonaxial_logits.unsqueeze(-2).masked_fill(
+                class_mask,
+                -torch.inf,
+            )
+            nonaxial_class_margins = nonaxial_logits - other_class_logits.max(dim=-1).values
+            target_advantages = target_advantages.masked_fill(
+                nonaxial_class_margins.lt(0.0),
+                -torch.inf,
+            )
+            best_advantage, best_relative_view = target_advantages.max(dim=1)
+            has_nonaxial_target = best_advantage.ge(
+                self.gate_confirmed_target_rank_margin_aux_gap
+            )
+
+            target_view = best_relative_view + 1
+            flat_log_weights = fusion_weights.squeeze(-1).clamp_min(1e-8).log()
+            target_log_weights = flat_log_weights.gather(dim=1, index=target_view)
+            axial_log_weights = flat_log_weights[:, :1].expand_as(target_log_weights)
+            rank_margin_logits = (
+                target_log_weights
+                - axial_log_weights
+                - self.gate_confirmed_target_rank_margin_aux_margin
+            )
+            baseline_logits = torch.zeros_like(rank_margin_logits).detach()
+            aux_logits = torch.where(
+                has_nonaxial_target,
+                rank_margin_logits,
+                baseline_logits,
+            ).unsqueeze(1)
+            aux_weight = self.gate_confirmed_target_rank_margin_aux_weight
         elif self.enable_axial_sagittal_rank_aux_loss:
             if fusion_weights is None:
                 raise RuntimeError(
