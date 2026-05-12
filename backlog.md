@@ -1703,17 +1703,29 @@
 
 ---
 
+## 2026-05-13：Decision-Fusion Repair Follow-up（DFR-104 gate label-evidence rank auxiliary，main-study）
+
+> **DFR-104 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-100 到 DFR-103 表明手写 trigger、pair rank、sagittal residual 与 coronal suppression 都不能稳定命中 non-axial true-margin 样本；本轮改用训练期 label-evidence rank auxiliary，把 detached per-view true-label evidence 与当前 raw learned fusion weights 做 log-mixture，只让梯度更新 gate 排序。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？推理期仍是 learned full-fusion，不固定平均权重，也不直接改变 per-view classifier；预期是 axial 在自身证据最强时继续主导，但 coronal/sagittal 在 detached true-label evidence 更强的少量样本上获得 top/near-top，从样本级 right-view routing 超过 matched equal-weight seed42 `0.9255319148936170`。
+
+- [x] **DFR-104-RESNEXT-DECISION-256X8-GATE-LABEL-EVIDENCE-RANK-AUX-SEED42-MAIN-STUDY**：commit `442e4a2`，在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增默认关闭的 `ANKLE_DECISION_ENABLE_GATE_LABEL_EVIDENCE_RANK_AUX_LOSS=1`；aux logits 使用 `logsumexp(log(raw_fusion_weight) + detached per-view log_prob)` 形成 label-evidence mixture，让现有训练 hook 的 CE 主要训练 gate 权重而不改变 per-view logits。fresh adaptive `main-study` 使用 [autoresearch_logs/generated_search_configs/optuna_main_search_iter_0009_20260513_002819.yaml](/dataset/HH/ankle-ct/autoresearch_logs/generated_search_configs/optuna_main_search_iter_0009_20260513_002819.yaml)，study root [runs/optuna_main_autoloop/iter_0009_20260513_002819](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0009_20260513_002819)，GPU policy `--gpu-ids 0,1,2 --max-workers 3`，只跑 seed42 三个候选 `ANKLE_DECISION_GATE_LABEL_EVIDENCE_RANK_AUX_WEIGHT=0.0005/0.001/0.0025`。设计思路：从 DFR-25 出发加一个 train-time gate label-evidence rank auxiliary，用 labels 只约束“哪个 view 的 detached evidence 应被 gate 采信”，避免再用手写 sagittal trigger 或单独 residual calibrator。预计改进效果：相对 DFR-103/DFR-25 的 axial-heavy routing，top-weight 应仍以 axial 为多数，但从 `94/0/0` 迁出少量证据支持样本到 coronal/sagittal；mean axial 应保持高位而不是均权化，若 true-label evidence 排序能命中 non-axial rescue 样本，就有机会把 learned full-fusion seed42 `val_acc` 推过 matched equal-weight `0.9255319148936170`。实验实际结果：trial0 `0.9148936170212766/0.9872727272727273/0.9069767441860465`，trial1 `0.9148936170212766/0.9759090909090910/0.9090909090909091`，trial2 `0.9148936170212766/0.9795454545454546/0.9000000000000000`；best by `val_acc` then `val_auc` 为 trial0，`peak_vram≈2.15 GiB`, `total_seconds≈779.9` → **discard**（best seed42 低于 matched equal-weight seed42 和 DFR-25 seed42；不能用 AUC spike 替代主指标。）
+- **fusion-weight 结论**：best trial0 的 [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0009_20260513_002819/trials/trial_0000/run/fusion_weight_analysis.json) 显示 label-evidence rank auxiliary 没有修复 routing。mean fusion weight `axial/coronal/sagittal = 0.8889762261446487/0.040047823349905615/0.07097594603955587`；top-weight count/rate `axial=94/1.0000`, `coronal=0/0.0000`, `sagittal=0/0.0000`；`top_true_margin` 分布为 `axial/coronal/sagittal = 86/4/4`，`top_weight_hit_rate.true_margin=0.9149`。即使 val set 仍有 8 个 non-axial top-true-margin 样本，gate top-weight 完全没有迁出 axial，说明这个 label-evidence mixture 主要强化了轴位主导，而不是学到可用的弱视角 rescue。
+- **当前判断**：DFR-104 是 negative seed42 candidate study，不应 promotion 到 3-seed formal。它排除了“只用 detached true-label evidence CE 就能让 gate 学会 right-view routing”的假设；当前弱视角 evidence 对训练目标仍不足以改变 top routing，且主指标跌到 `0.9149`。下一轮不应继续扫 label-evidence rank aux weight；若继续主线，应把目标限定到 DFR-25 错误且 non-axial true-margin 明确的少数样本，或者先审计这些样本上 view logits / confidence logit 的可分性，避免再用全局 CE 进一步强化 axial。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-103 sagittal-coronal competitive calibrator`：main-study 在 DFR-102 learned sagittal calibrator 上只加入 positive sagittal residual 对 coronal confidence 的竞争式抑制，尝试把 non-axial routing 从 coronal 迁到 sagittal。 |
-| 上次结果 | commit `20974d6`，fresh study [runs/optuna_main_autoloop/iter_0008_20260512_235815](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0008_20260512_235815) 完成 `3/3` trials；best trial2 `val_acc/val_auc/val_f1=0.925532/0.953182/0.915663`，suppression `0.75`，peak_vram≈`2.14 GiB`。fusion telemetry mean weight `0.8843/0.1108/0.0049`，top-weight `88/6/0`，top_true_margin `66/25/3`；只打平 matched equal-weight seed42 且低于 DFR-25 seed42，本轮 discard。 |
-| 下一步 | 不继续扫 coronal suppression；本轮说明压低 coronal 后 sagittal calibrator 会重新塌到接近零，不能把 DFR-102 的 mean sagittal mass 变成 sagittal top routing。下一轮仍聚焦 decision-fusion routing repair，应考虑显式 evidence-consistency / target-hit 约束，或先审计 calibrator 特征在 `top_true_margin=sagittal` 样本上的可分性，确保迁移命中 sagittal 而不是 coronal/均权。 |
+| 上次实验 | `DFR-104 gate label-evidence rank auxiliary`：main-study 用 detached per-view true-label evidence 与 raw learned fusion weights 构造 train-time mixture CE，尝试让 gate 排序跟随该主导的视角证据。 |
+| 上次结果 | commit `442e4a2`，fresh study [runs/optuna_main_autoloop/iter_0009_20260513_002819](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0009_20260513_002819) 完成 `3/3` trials；best trial0 `val_acc/val_auc/val_f1=0.914894/0.987273/0.906977`，aux weight `0.0005`，peak_vram≈`2.15 GiB`。fusion telemetry mean weight `0.8890/0.0400/0.0710`，top-weight `94/0/0`，top_true_margin `86/4/4`；低于 matched equal-weight seed42 和 DFR-25 seed42，本轮 discard。 |
+| 下一步 | 不继续扫 label-evidence rank aux weight；本轮说明全局 label-evidence CE 会继续强化 axial top-routing，不能命中少量 non-axial true-margin 样本。下一轮仍聚焦 decision-fusion routing repair，应把约束限定到 DFR-25 错误且 non-axial true-margin 明确的少数样本，或先审计这些样本的 view logits / confidence logit 可分性，确保迁移命中 coronal/sagittal 而不是轴位回塌或均权。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 78（自 `DFR-26 seed123` 起至 `DFR-103 sagittal-coronal competitive calibrator` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 79（自 `DFR-26 seed123` 起至 `DFR-104 gate label-evidence rank auxiliary` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
