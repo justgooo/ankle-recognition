@@ -1033,6 +1033,75 @@ class GateLogitRMSLimiter(nn.Module):
         return mean_confidence + centered * scale
 
 
+class SagittalNormalRescueGate(nn.Module):
+    """View-index constrained sagittal reliability boost for axial-FP rescue cases."""
+
+    def __init__(
+        self,
+        residual_limit: float = 0.5,
+        axial_abnormal_threshold: float = 0.65,
+        sagittal_normal_threshold: float = 0.65,
+        fused_abnormal_threshold: float = 0.55,
+        window: float = 0.15,
+    ) -> None:
+        super().__init__()
+        if residual_limit <= 0.0:
+            raise ValueError("residual_limit must be > 0.")
+        for name, value in (
+            ("axial_abnormal_threshold", axial_abnormal_threshold),
+            ("sagittal_normal_threshold", sagittal_normal_threshold),
+            ("fused_abnormal_threshold", fused_abnormal_threshold),
+            ("window", window),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1], got {value}.")
+        self.residual_limit = float(residual_limit)
+        self.axial_abnormal_threshold = float(axial_abnormal_threshold)
+        self.sagittal_normal_threshold = float(sagittal_normal_threshold)
+        self.fused_abnormal_threshold = float(fused_abnormal_threshold)
+        self.window = float(window)
+
+    def _trigger_scale(self, values: torch.Tensor, threshold: float) -> torch.Tensor:
+        if self.window > 0.0:
+            return ((values - threshold) / self.window).clamp(0.0, 1.0)
+        return values.ge(threshold).to(dtype=values.dtype)
+
+    def forward(
+        self,
+        confidences: torch.Tensor,
+        view_logits: torch.Tensor,
+        fusion_temperature: float,
+    ) -> torch.Tensor:
+        if confidences.ndim != 3 or confidences.shape[1:] != (3, 1):
+            raise ValueError("confidences must have shape (batch, 3, 1).")
+        if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        if view_logits.shape[-1] != 2:
+            raise ValueError("Sagittal normal rescue gate requires binary logits.")
+
+        detached_logits = view_logits.detach()
+        view_probs = torch.softmax(detached_logits, dim=-1)
+        abnormal_probs = view_probs[..., 1]
+        normal_probs = view_probs[..., 0]
+        flat_confidences = confidences.detach().squeeze(-1)
+        base_weights = torch.softmax(
+            flat_confidences / max(float(fusion_temperature), 1e-6),
+            dim=1,
+        )
+        fused_abnormal_prob = (base_weights * abnormal_probs).sum(dim=1)
+        dominant_view = flat_confidences.argmax(dim=1)
+
+        trigger = (
+            self._trigger_scale(abnormal_probs[:, 0], self.axial_abnormal_threshold)
+            * self._trigger_scale(normal_probs[:, 2], self.sagittal_normal_threshold)
+            * self._trigger_scale(fused_abnormal_prob, self.fused_abnormal_threshold)
+            * dominant_view.eq(0).to(dtype=flat_confidences.dtype)
+        )
+        residual = torch.zeros_like(confidences)
+        residual[:, 2, 0] = self.residual_limit * trigger.to(dtype=residual.dtype)
+        return residual
+
+
 class GateViewPriorDebiaser(nn.Module):
     """Remove persistent per-view reliability-logit offsets before softmax."""
 
@@ -2069,6 +2138,32 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_AUX_WEIGHT",
             0.0025,
         )
+        self.enable_sagittal_normal_rescue_gate = _env_flag(
+            "ANKLE_DECISION_ENABLE_SAGITTAL_NORMAL_RESCUE_GATE"
+        )
+        self.sagittal_normal_rescue_gate_eval_only = _env_flag(
+            "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_GATE_EVAL_ONLY"
+        )
+        self.sagittal_normal_rescue_gate_residual_limit = _env_positive_float(
+            "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_GATE_RESIDUAL_LIMIT",
+            0.5,
+        )
+        self.sagittal_normal_rescue_gate_axial_abnormal_threshold = _env_unit_float(
+            "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_GATE_AXIAL_ABNORMAL_THRESHOLD",
+            0.65,
+        )
+        self.sagittal_normal_rescue_gate_sagittal_normal_threshold = _env_unit_float(
+            "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_GATE_SAGITTAL_NORMAL_THRESHOLD",
+            0.65,
+        )
+        self.sagittal_normal_rescue_gate_fused_abnormal_threshold = _env_unit_float(
+            "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_GATE_FUSED_ABNORMAL_THRESHOLD",
+            0.55,
+        )
+        self.sagittal_normal_rescue_gate_window = _env_unit_float(
+            "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_GATE_WINDOW",
+            0.15,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2545,6 +2640,20 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 if self.enable_gate_logit_rms_limit:
                     self.gate_logit_rms_limiter = GateLogitRMSLimiter(
                         max_centered_rms=self.gate_logit_max_centered_rms,
+                    )
+                if self.enable_sagittal_normal_rescue_gate:
+                    self.sagittal_normal_rescue_gate = SagittalNormalRescueGate(
+                        residual_limit=self.sagittal_normal_rescue_gate_residual_limit,
+                        axial_abnormal_threshold=(
+                            self.sagittal_normal_rescue_gate_axial_abnormal_threshold
+                        ),
+                        sagittal_normal_threshold=(
+                            self.sagittal_normal_rescue_gate_sagittal_normal_threshold
+                        ),
+                        fused_abnormal_threshold=(
+                            self.sagittal_normal_rescue_gate_fused_abnormal_threshold
+                        ),
+                        window=self.sagittal_normal_rescue_gate_window,
                     )
                 if self.enable_gate_view_prior_debias:
                     self.gate_view_prior_debiaser = GateViewPriorDebiaser(
@@ -3264,6 +3373,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 pairwise_gate_features = torch.stack(gating_features, dim=1)
                 confidences = confidences + self.pairwise_reliability_gate(
                     pairwise_gate_features
+                )
+            if self.enable_sagittal_normal_rescue_gate and not (
+                self.training and self.sagittal_normal_rescue_gate_eval_only
+            ):
+                confidences = confidences + self.sagittal_normal_rescue_gate(
+                    confidences,
+                    view_logits,
+                    self.fusion_temperature,
                 )
             if self.enable_gate_logit_rms_limit:
                 confidences = self.gate_logit_rms_limiter(confidences)
