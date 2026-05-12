@@ -1645,6 +1645,16 @@
 - **fusion-weight 结论**：best trial1 的 [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0003_20260512_210836/trials/trial_0001/run/fusion_weight_analysis.json) 显示 DFR-98 仍没有释放 sagittal。mean fusion weight `axial/coronal/sagittal = 0.8045/0.1172/0.0783`；top-weight count/rate `axial=91/0.9681`, `coronal=3/0.0319`, `sagittal=0/0.0000`；`top_true_margin` 分布为 `axial/coronal/sagittal = 83/3/8`，`top_weight_correct_rate=0.9043`。也就是说，eval-only gate 比 DFR-97 更好地控制了 coronal side-effect，但仍没有把任何样本迁为 sagittal top-weight；它只是回到 DFR-25 accuracy、损失 AUC，并未证明 learned full-fusion routing 优于 matched control。
 - **当前判断**：DFR-98 是 negative seed42 candidate study，不应 promotion 到 3-seed formal。它否定了“用显式 sagittal-only eval residual gate 就能命中 DFR-96 tiny target”的假设；当前可观测 axial-abnormal / sagittal-normal / fused-abnormal 触发条件仍不足以产生高精度 sagittal 接管。下一轮若继续主线，应停止手写 sagittal rescue 规则，转向样本级触发审计或 post-training calibration audit，先证明哪些可观测条件真的覆盖 DFR-96 的 3-4 个 validated rescue 样本且不打坏 fragile axial-protect 样本。
 
+## 2026-05-12：Decision-Fusion Repair Follow-up（DFR-99 post-training calibration audit，analysis-only）
+
+> **DFR-99 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-98 已经说明手写 sagittal rescue gate 不能把 validated sagittal-normal FP 样本变成 top routing；DFR-99 不再新增训练 gate，而是离线模拟 post-training confidence-logit calibration，直接检验可观测条件能否覆盖 DFR-96 的 tiny sagittal target 并保护 fragile axial-positive 样本。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果存在高精度 calibration rule，top-weight 应保持 axial 绝对多数，只把约 `3-4/94` 个 validated sagittal-normal FP rescue 样本迁为 sagittal top/near-top；这种低覆盖迁移会保留 DFR-25 超过 equal-weight 的主体 routing，同时修复边界 FP，而不是把权重做平均或只改善单视角。
+
+- [x] **DFR-99-RESNEXT-DECISION-256X8-POST-TRAINING-CALIBRATION-AUDIT-ANALYSIS**：commit `30b474a`，新增 [scripts/analyze_dfr99_post_training_calibration.py](/dataset/HH/ankle-ct/scripts/analyze_dfr99_post_training_calibration.py)，只读取 DFR-25 seed42 与 DFR-98 telemetry 以及 DFR-96 audit target，不启动训练；输出报告为 [autoresearch_logs/dfr99_post_training_calibration_audit/report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr99_post_training_calibration_audit/report.json)。设计思路：把 DFR-96 的 target / protect 集合转成可观测 post-training sagittal confidence-logit calibration 网格，重算 fused abnormal probability、val metrics、mean fusion weights 与 top-weight 分布，判断是否存在 no-harm 的低覆盖 sagittal migration。预计改进效果：若可观测校准成立，最佳候选应保持 mean axial 权重高于 `0.80` 且 top-weight 仍约 `90/0/4`，同时 validated sagittal FP rescue 样本至少 `3` 个进入 sagittal top/near-top，`val_acc` 高于 DFR-25 seed42 或至少在 AUC tie-break 上不输。实验实际结果：analysis-only 网格 `14400` 个候选；DFR-25 seed42 reference 为 `val_acc/val_auc/val_f1=0.936170/0.978636/0.933333`，mean weight `axial/coronal/sagittal=0.888561/0.079051/0.032389`，top-weight `94/0/0`。`best_by_accuracy_auc` 是 no-trigger 等价候选，仍为 `0.936170/0.978636/0.933333`，top-weight `94/0/0`，validated sagittal top `0`；`best_by_sagittal_target_coverage` 可触发 `44` 个样本并覆盖 `3` 个 validated target、`4` 个 sagittal target、`2` 个 fragile protect，但 residual `0.25` 仍没有任何 sagittal top-weight，mean weight 仅变为 `0.886702/0.078947/0.034351`，top-weight 仍 `94/0/0`；`best_no_harm_candidate` 同样是不触发。→ **discard**。
+- **fusion-weight 结论**：DFR-99 没有产生新 checkpoint，但对 DFR-25 seed42 best completed checkpoint 的模拟后权重验证显示，可观测 post-training sagittal calibration 要么不触发、要么只微增 sagittal mean weight而不改变 top-routing；没有任何 no-harm 候选接近 DFR-96 预期的 `axial≈90, sagittal≈4` target。因此 DFR-96 的 oracle target 目前不能被当前 telemetry 中的 axial-abnormal / sagittal-normal / fused-abnormal / confidence-gap 条件可靠捕获。
+- **当前判断**：DFR-99 是 diagnostic discard。它明确否定继续沿“手写 sagittal rescue 触发 + 调 residual/阈值”的路线；下一轮若继续主线，不应再做简单 post-training gate rule、sagittal rescue aux weight 或同类阈值 sweep，而应回到更基础的 gate confidence learning 问题，先解释为什么 validated sagittal-normal 样本的 sagittal confidence gap 仍过大，或设计不会依赖这些失败可观测触发的 learned routing 机制。
+
 ---
 
 ## Agent 状态
@@ -1653,11 +1663,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-98 sagittal-normal rescue gate`：从 DFR-25 fork，新增默认关闭、eval-only 的显式 sagittal-only logit residual gate，只在 detached axial abnormal / sagittal normal / fused abnormal / axial top-confidence 同时成立时触发。 |
-| 上次结果 | commit `ed507f4`，fresh `main-study` [runs/optuna_main_autoloop/iter_0003_20260512_210836](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0003_20260512_210836) 完成 3 个 seed42 候选；best trial1 `val_acc/val_auc/val_f1=0.936170/0.974091/0.931818`，accuracy 打平 DFR-25 seed42 但 AUC 低于 DFR-25。fusion telemetry mean axial/coronal/sagittal=`0.8045/0.1172/0.0783`，top-weight=`91/3/0`，true-margin=`83/3/8`，说明仍未释放 sagittal，只产生少量 coronal migration，本轮 discard。 |
-| 下一步 | 停止手写 sagittal rescue 规则和简单 aux/gate weight 调参；若继续主线，优先做样本级触发审计或 post-training calibration audit，先证明可观测条件能覆盖 DFR-96 的 `3-4` 个 validated sagittal rescue 样本，同时不打坏 fragile axial-protect 样本。 |
+| 上次实验 | `DFR-99 post-training calibration audit`：analysis-only 新增离线脚本，模拟 DFR-25 seed42 confidence-logit 上的 sagittal post-training calibration 网格，检验可观测触发是否能覆盖 DFR-96 tiny sagittal target。 |
+| 上次结果 | commit `30b474a`，报告 [autoresearch_logs/dfr99_post_training_calibration_audit/report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr99_post_training_calibration_audit/report.json) 完成 `14400` 个候选；best by `val_acc/val_auc` 为 no-trigger 等价候选 `0.936170/0.978636/0.933333`，mean weight `0.888561/0.079051/0.032389`，top-weight `94/0/0`。best target-coverage 候选虽触发 `44` 个样本并覆盖 `3` 个 validated target，但仍无 sagittal top-weight，top-weight 还是 `94/0/0`，本轮 discard。 |
+| 下一步 | 停止手写 sagittal rescue 规则、post-training trigger 阈值和简单 aux/gate weight 调参；若继续主线，应转向解释/修复 validated sagittal-normal 样本的 confidence gap 过大问题，或设计不依赖当前失败可观测触发的 learned routing 机制。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 73（自 `DFR-26 seed123` 起至 `DFR-98 sagittal-normal rescue gate` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 74（自 `DFR-26 seed123` 起至 `DFR-99 post-training calibration audit` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
