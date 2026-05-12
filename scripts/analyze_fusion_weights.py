@@ -101,6 +101,28 @@ def safe_pearson(x_values: list[float], y_values: list[float]) -> float:
     return float(np.corrcoef(x_array, y_array)[0, 1])
 
 
+def apply_active_view_mask(
+    fusion_weights: torch.Tensor,
+    active_view_mask: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    if active_view_mask is None:
+        return fusion_weights, None
+    if active_view_mask.ndim == 1:
+        active_view_mask = active_view_mask.unsqueeze(0)
+    if active_view_mask.shape[0] == 1 and fusion_weights.shape[0] != 1:
+        active_view_mask = active_view_mask.expand(fusion_weights.shape[0], -1)
+    if active_view_mask.shape != fusion_weights.shape:
+        raise ValueError(
+            "active_view_mask must have shape (3,) or match fusion_weights batch shape."
+        )
+    mask = active_view_mask.to(device=fusion_weights.device, dtype=fusion_weights.dtype)
+    masked_weights = fusion_weights * mask
+    normalizer = masked_weights.sum(dim=1, keepdim=True)
+    if torch.any(normalizer <= 0):
+        raise ValueError("active_view_mask must keep at least one view per sample.")
+    return masked_weights / normalizer, mask
+
+
 def main() -> None:
     args = parse_args()
     config_path = Path(args.config)
@@ -149,6 +171,8 @@ def main() -> None:
     all_scaled_confidences: list[float] = []
     correct_view_weights: list[float] = []
     incorrect_view_weights: list[float] = []
+    raw_weight_sums = [0.0 for _ in view_names]
+    active_mask_records: list[list[float]] = []
 
     top_weight_hits_pred_margin = 0
     top_weight_hits_true_margin = 0
@@ -176,7 +200,13 @@ def main() -> None:
 
             fused_logits, decision_info = model.forward_with_decision_info(images)
             view_logits = decision_info["view_logits"]  # (B, 3, 2)
-            fusion_weights = decision_info["fusion_weights"].squeeze(-1)  # (B, 3)
+            raw_fusion_weights = decision_info["fusion_weights"].squeeze(-1)  # (B, 3)
+            fusion_weights, active_view_mask = apply_active_view_mask(
+                raw_fusion_weights,
+                decision_info.get("active_view_mask"),
+            )
+            if active_view_mask is not None:
+                active_mask_records.extend(active_view_mask.cpu().tolist())
             confidences = decision_info["confidences"].squeeze(-1)  # (B, 3)
             scaled_confidences = decision_info["scaled_confidences"].squeeze(-1)  # (B, 3)
 
@@ -213,6 +243,12 @@ def main() -> None:
                 fused_correct_value = bool(fusion_correct_mask[sample_index].item())
 
                 weight_values = fusion_weights[sample_index].cpu().tolist()
+                raw_weight_values = raw_fusion_weights[sample_index].cpu().tolist()
+                active_mask_values = (
+                    active_view_mask[sample_index].cpu().tolist()
+                    if active_view_mask is not None
+                    else None
+                )
                 confidence_values = confidences[sample_index].cpu().tolist()
                 scaled_confidence_values = scaled_confidences[sample_index].cpu().tolist()
                 pred_margin_values = pred_margins[sample_index].cpu().tolist()
@@ -269,6 +305,7 @@ def main() -> None:
                     scaled_confidence_sums[view_index] += scaled_confidence_value
                     pred_margin_sums[view_index] += pred_margin_value
                     true_margin_sums[view_index] += true_margin_value
+                    raw_weight_sums[view_index] += float(raw_weight_values[view_index])
 
                     if is_correct:
                         correct_view_weights.append(weight_value)
@@ -294,6 +331,12 @@ def main() -> None:
                         "views": {
                             view_name: {
                                 "fusion_weight": float(weight_values[view_index]),
+                                "raw_fusion_weight": float(raw_weight_values[view_index]),
+                                "active_view_mask": (
+                                    float(active_mask_values[view_index])
+                                    if active_mask_values is not None
+                                    else None
+                                ),
                                 "confidence_logit": float(confidence_values[view_index]),
                                 "scaled_confidence_logit": float(scaled_confidence_values[view_index]),
                                 "pred": int(view_pred_values[view_index]),
@@ -311,6 +354,12 @@ def main() -> None:
                 break
 
     total_samples = len(full_labels)
+    active_mask_unique = sorted(
+        {
+            tuple(float(value) for value in mask_values)
+            for mask_values in active_mask_records
+        }
+    )
     per_view_summaries: list[dict[str, Any]] = []
     for view_index, view_name in enumerate(view_names):
         metrics = compute_metrics(
@@ -323,6 +372,7 @@ def main() -> None:
                 "view": view_name,
                 "metrics": metrics,
                 "mean_fusion_weight": float(weight_sums[view_index] / total_samples),
+                "mean_raw_fusion_weight": float(raw_weight_sums[view_index] / total_samples),
                 "mean_confidence_logit": float(confidence_sums[view_index] / total_samples),
                 "mean_scaled_confidence_logit": float(scaled_confidence_sums[view_index] / total_samples),
                 "mean_pred_margin": float(pred_margin_sums[view_index] / total_samples),
@@ -346,6 +396,15 @@ def main() -> None:
         "total_samples": total_samples,
         "summary": {
             "full_fusion_metrics": compute_metrics(full_labels, full_preds, full_probs),
+            "fusion_weight_semantics": (
+                "active_mask_renormalized"
+                if active_mask_unique
+                else "raw_model_fusion_weights"
+            ),
+            "active_view_masks": [
+                to_float_dict(view_names, list(mask_values))
+                for mask_values in active_mask_unique
+            ],
             "fusion_correct_rate": float(fusion_correct / total_samples),
             "top_weight_hit_rate": {
                 "pred_margin": hit_rate(top_weight_hits_pred_margin, total_samples),
