@@ -2042,6 +2042,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.pairwise_selector_aux_require_disagreement = _env_flag(
             "ANKLE_DECISION_PAIRWISE_SELECTOR_AUX_REQUIRE_DISAGREEMENT"
         )
+        self.enable_coronal_pair_abnormal_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS"
+        )
+        self.coronal_pair_abnormal_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_CORONAL_PAIR_ABNORMAL_AUX_WEIGHT",
+            0.005,
+        )
+        self.coronal_pair_abnormal_aux_require_disagreement = _env_flag(
+            "ANKLE_DECISION_CORONAL_PAIR_ABNORMAL_AUX_REQUIRE_DISAGREEMENT"
+        )
         self.enable_nonaxial_abnormal_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS"
         )
@@ -2384,6 +2394,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_candidate_view_prototype_aux_loss,
             self.enable_gate_view_correctness_aux_loss,
             self.enable_pairwise_selector_aux_loss,
+            self.enable_coronal_pair_abnormal_aux_loss,
             self.enable_nonaxial_abnormal_aux_loss,
         ]
         if sum(bool(flag) for flag in enabled_aux_modes) > 1:
@@ -2392,6 +2403,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS, "
                 "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS are mutually exclusive."
             )
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
@@ -3456,6 +3468,48 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 pair_logits.append(candidate_logits)
             aux_logits = torch.stack(pair_logits, dim=1)
             aux_weight = self.pairwise_selector_aux_weight
+        elif self.enable_coronal_pair_abnormal_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Coronal pair abnormal auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+                raise RuntimeError(
+                    "Coronal pair abnormal auxiliary loss expects view logits with shape "
+                    "(batch, 3, classes)."
+                )
+            if view_logits.shape[-1] != 2:
+                raise RuntimeError(
+                    "Coronal pair abnormal auxiliary loss requires binary logits."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Coronal pair abnormal auxiliary loss expects fusion weights with "
+                    "shape (batch, 3, 1) matching view logits."
+                )
+            coronal_normal_logits = view_logits[:, 1:2, :1].detach()
+            coronal_abnormal_logits = view_logits[:, 1:2, 1:2]
+            coronal_abnormal_aux = torch.cat(
+                [coronal_normal_logits, coronal_abnormal_logits],
+                dim=-1,
+            ).squeeze(1)
+            pair_indices = [0, 1]
+            pair_weights = fusion_weights.squeeze(-1)[:, pair_indices]
+            pair_weights = pair_weights / pair_weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
+            pair_selector_aux = (
+                view_logits.detach()[:, pair_indices, :] * pair_weights.unsqueeze(-1)
+            ).sum(dim=1)
+            if self.coronal_pair_abnormal_aux_require_disagreement:
+                detached_predictions = view_logits.detach().argmax(dim=-1)
+                pair_disagreement = detached_predictions[:, 1].ne(detached_predictions[:, 0])
+                pair_selector_aux = torch.where(
+                    pair_disagreement.view(-1, 1),
+                    pair_selector_aux,
+                    pair_selector_aux.detach(),
+                )
+            aux_logits = torch.stack([coronal_abnormal_aux, pair_selector_aux], dim=1)
+            aux_weight = self.coronal_pair_abnormal_aux_weight
         elif self.enable_nonaxial_abnormal_aux_loss:
             if view_logits.ndim != 3 or view_logits.shape[1] != 3:
                 raise RuntimeError(
