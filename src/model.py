@@ -2032,6 +2032,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_VIEW_CORRECTNESS_AUX_AXIAL_MARGIN_CAP",
             2.5,
         )
+        self.enable_pairwise_selector_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS"
+        )
+        self.pairwise_selector_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_PAIRWISE_SELECTOR_AUX_WEIGHT",
+            0.005,
+        )
+        self.pairwise_selector_aux_require_disagreement = _env_flag(
+            "ANKLE_DECISION_PAIRWISE_SELECTOR_AUX_REQUIRE_DISAGREEMENT"
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2363,12 +2373,14 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_aux_view_loss,
             self.enable_candidate_view_prototype_aux_loss,
             self.enable_gate_view_correctness_aux_loss,
+            self.enable_pairwise_selector_aux_loss,
         ]
         if sum(bool(flag) for flag in enabled_aux_modes) > 1:
             raise ValueError(
                 "ANKLE_DECISION_ENABLE_AUX_VIEW_LOSS, "
                 "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS, and "
-                "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS are mutually exclusive."
+                "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS are mutually exclusive."
             )
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
@@ -3393,6 +3405,45 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             )
             aux_logits = view_logits.detach() * view_scales
             aux_weight = self.gate_view_correctness_aux_weight
+        elif self.enable_pairwise_selector_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Pairwise selector auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+                raise RuntimeError(
+                    "Pairwise selector auxiliary loss expects view logits with shape "
+                    "(batch, 3, classes)."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Pairwise selector auxiliary loss expects fusion weights with "
+                    "shape (batch, 3, 1) matching view logits."
+                )
+            flat_weights = fusion_weights.squeeze(-1)
+            pair_logits = []
+            for nonaxial_index in (1, 2):
+                pair_indices = [0, nonaxial_index]
+                pair_weights = flat_weights[:, pair_indices]
+                pair_weights = pair_weights / pair_weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
+                candidate_logits = (
+                    view_logits.detach()[:, pair_indices, :]
+                    * pair_weights.unsqueeze(-1)
+                ).sum(dim=1)
+                if self.pairwise_selector_aux_require_disagreement:
+                    detached_predictions = view_logits.detach().argmax(dim=-1)
+                    pair_disagreement = detached_predictions[:, nonaxial_index].ne(
+                        detached_predictions[:, 0]
+                    )
+                    candidate_logits = torch.where(
+                        pair_disagreement.view(-1, 1),
+                        candidate_logits,
+                        candidate_logits.detach(),
+                    )
+                pair_logits.append(candidate_logits)
+            aux_logits = torch.stack(pair_logits, dim=1)
+            aux_weight = self.pairwise_selector_aux_weight
         elif self.enable_aux_view_loss:
             aux_logits = view_logits
 
