@@ -1751,17 +1751,29 @@
 
 ---
 
+## 2026-05-13：Decision-Fusion Repair Follow-up（DFR-108 DFR107 aux encoding audit，analysis）
+
+> **DFR-108 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-107 已经把 confirmed target rank-margin 加强到足以抬高 non-axial mean weight，但仍然 `top-weight=94/0/0`；本轮不继续扫 margin，而是逐样本复现 DFR-107 的 target 选择与 train.py 现有 CE hook 的等价梯度方向，确认监督是否被非目标类或 label 编码稀释。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果审计定位到“目标干净但 CE 编码把大量 non-target-only 样本推回 axial”，下一轮就可以把训练目标改成 label-invariant、只对 confirmed DFR25 error / non-axial true-margin 样本生效的 gate objective；预期仍是 axial-majority routing，只让少量 confirmed sagittal/coronal target 进入 top/near-top，而不是均权化。
+
+- [x] **DFR-108-RESNEXT-DECISION-256X8-DFR107-AUX-ENCODING-AUDIT-ANALYSIS**：commit `6a4939b`，新增 [scripts/analyze_dfr107_confirmed_target_aux_audit.py](/dataset/HH/ankle-ct/scripts/analyze_dfr107_confirmed_target_aux_audit.py)，只读取既有 DFR-25 seed42 与 DFR-107 best-trial `fusion_weight_analysis.json`，复现 `gap=0.02 / margin=0.25` confirmed-target rank-margin 条件，并计算当前 binary patient-label CE aux logits 对 `log w_target - log w_axial` 的等价下降方向；完整报告写入 `autoresearch_logs/dfr107_confirmed_target_aux_audit.json`。设计思路：沿 DFR-105→106→107 的 audit path，先验证 target-sample 与 aux 编码，而不是继续加大 rank-margin 或换方向。预计改进效果：本轮无新 checkpoint，参考 telemetry 应保持 DFR-25 `94/0/0` 与 DFR-107 `94/0/0`；若发现 non-target-only 或 label-coded CE 稀释目标，下一轮可改成只对 confirmed sample 的 label-invariant target-vs-axial objective，目标 routing 是约 `88-92` 个 axial top 加少量 sagittal/coronal top/near-top，从样本级 rescue 推过 matched equal-weight。实验实际结果：无新训练；DFR-25 seed42 reference `val_acc/val_auc/val_f1=0.936170/0.978636/0.933333`，mean weight `axial/coronal/sagittal=0.888561/0.079051/0.032389`，top-weight `94/0/0`；DFR-107 best `0.936170/0.975909/0.930233`，mean weight `0.818500/0.113169/0.068331`，top-weight 仍 `94/0/0`。
+- **aux 编码审计结论**：以 DFR-25 seed42 telemetry 复现 DFR-107 条件时，true-class target 只剩 `6` 个，全部是 `label=0` 的 sagittal target，覆盖 `4/6` 个 DFR-25 错误与 `6/9` 个 non-axial true-margin 样本，`normal_rescue_targets=4`、`helpful_if_promoted=4`、`harmful_if_promoted=0`，但 DFR-107 后 target view `top/near-top=0/6`。关键问题不是 normal-rescue 方向反了，而是 `44` 个 non-target-only 样本（其中 `42` 个 label=1）通过当前 class-coded CE 产生 `non_target_only_reinforces_axial` 压力；以 DFR-107 best telemetry 自身复现时，这个问题扩大到 `84` 个 non-target-only 样本，同时 true targets 变成 `10` 个（`coronal=6/sagittal=4`）且 `helpful_if_promoted=3 / harmful_if_promoted=3`。因此 DFR-107 的 failure 更像是全 batch class-coded aux 被大量非目标类轴位强化抵消，而不是 target 覆盖污染或 label-0 rescue 梯度反向。
+- **当前判断**：DFR-108 是 diagnostic discard，但给出明确下一步。不要继续扫 `gap/margin/weight`；下一轮若做训练机制，应只改一个变量：把 confirmed-target supervision 从二分类 patient-label CE hook 改成 label-invariant 的 target-vs-axial gate objective，且只在 DFR-25 wrong 或 non-axial true-margin confirmed scope 内更新，inactive / non-target-only 样本必须完全 no-op，避免再次把 axial top-rank 强化到 `94/0/0`。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-107 confirmed-target rank-margin gate aux`：沿 DFR-106 的 confirmed-target 方向，把 targeted non-axial supervision 从 pair-normalized soft CE 改成 non-axial-vs-axial gate log-weight rank-margin aux；fresh adaptive `main-study` 只搜索 margin `0.10/0.25/0.50`。 |
-| 上次结果 | commit `b583d16`，study root [runs/optuna_main_autoloop/iter_0002_20260513_023419](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0002_20260513_023419)；best trial1 margin `0.25`，`val_acc/val_auc/val_f1=0.936170/0.975909/0.930233`，`peak_vram≈2.15 GiB`。Fusion telemetry [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0002_20260513_023419/trials/trial_0001/run/fusion_weight_analysis.json)：mean weight `axial/coronal/sagittal=0.8185/0.1132/0.0683`，top-weight `94/0/0`，top_true_margin `84/6/4`。本轮高于 matched equal-weight seed42 但只追平 DFR-25 seed42 accuracy，AUC/F1 回落，且没有释放任何 non-axial top-routing → discard。 |
-| 下一步 | 不继续扫 rank margin。DFR-107 说明更强 rank-margin 只提高 mean non-axial mass，仍无法让 confirmed target 进入 top-rank；下一轮应先做 DFR-107 target-sample 审计，尤其检查现有 aux hook 的 patient-label CE 编码是否压制 label-0 normal-rescue target，再考虑 label-invariant confirmed-target gate objective 或等价模型内 workaround，仍限定在 DFR25 error / non-axial true-margin 样本。 |
+| 上次实验 | `DFR-108 DFR107 aux encoding audit`：analysis-only 复现 DFR-107 confirmed-target rank-margin target，并审计当前 train.py binary patient-label CE aux hook 对 target-vs-axial gate log-weight 的等价梯度方向。 |
+| 上次结果 | commit `6a4939b`；报告 [autoresearch_logs/dfr107_confirmed_target_aux_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr107_confirmed_target_aux_audit.json)。无新 checkpoint；DFR-25 seed42 reference `0.936170/0.978636/0.933333`，mean weight `0.8886/0.0791/0.0324`，top-weight `94/0/0`；DFR-107 best `0.936170/0.975909/0.930233`，mean weight `0.8185/0.1132/0.0683`，top-weight `94/0/0`。DFR25-source audit：true targets `6` 个、全为 label0 sagittal，覆盖 `4/6` DFR25 errors 与 `6/9` non-axial true-margin，normal-rescue `4` 且 helpful `4/harmful 0`，但 DFR107 target top/near-top `0/6`；同时 `44` 个 non-target-only 样本经 CE hook 产生 axial-reinforcing pressure。 |
+| 下一步 | 不继续扫 DFR-107 的 margin/gap/weight。下一轮若训练，应做一个离散机制：将 confirmed-target supervision 改成 label-invariant target-vs-axial gate objective，并且只对 DFR25 wrong 或 non-axial true-margin confirmed scope 生效；inactive / non-target-only 样本必须 no-op，目标是让少量 confirmed sagittal/coronal target 进入 top/near-top，同时保持全局 axial-majority。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 82（自 `DFR-26 seed123` 起至 `DFR-107 confirmed-target rank-margin gate aux` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99/106 follow-up 离线分析不改变训练失败计数语义，但 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 83（自 `DFR-26 seed123` 起至 `DFR-108 DFR107 aux encoding audit` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99/106/108 follow-up 离线分析不改变训练失败计数语义，但 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
