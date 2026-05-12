@@ -1615,17 +1615,29 @@
 
 ---
 
+## 2026-05-12：Decision-Fusion Repair Follow-up（DFR-96 gate-target calibration audit，analysis-only）
+
+> **DFR-96 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-90~95 已经证明 simple auxiliary / active-mask sweep 要么重新塌回 axial，要么把权重迁给错误 sagittal；本轮不再盲目训练新 gate，而是离线审计 DFR-25 与 DFR-90~95 telemetry，确认哪些样本真的需要 non-axial 接管、哪些 DFR-25-correct axial 样本必须保护。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果能找到小而高精度的 gate target，下一轮可以只让少量 validated non-axial 样本获得 top/near-top routing，而不是把权重平均化或释放大批弱视角。预期 routing target 应保持 axial 绝对多数，只把 DFR-25 seed42 的少数 FP/FN 错误迁给真正可救的 coronal/sagittal，从而保留 DFR-25 已经超过 equal-weight 的主体收益。
+
+- [x] **DFR-96-RESNEXT-DECISION-256X8-GATE-TARGET-CALIBRATION-AUDIT-ANALYSIS**：commit `4cc1bc0`，新增 [scripts/analyze_dfr96_gate_target_calibration.py](/dataset/HH/ankle-ct/scripts/analyze_dfr96_gate_target_calibration.py)，只读取已有 telemetry，不启动训练；输出报告为 [autoresearch_logs/dfr96_gate_target_calibration_audit/report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr96_gate_target_calibration_audit/report.json)。设计思路：基于 DFR-25 seed42 与 DFR-90~95 的 `fusion_weight_analysis.json` 做样本级 fixed/broken/non-axial-top 对照，先校准“允许 non-axial 接管”的目标集合，避免继续把错误弱视角样本路由成主导。预计改进效果：若存在可用信号，推荐 target 应从 DFR-25 seed42 的 `top_weight axial=94/94` 迁移出极少量 validated non-axial 样本，形态应接近 axial 仍 >90% 主导、sagittal/coronal 只在 DFR-25 错误且可救样本 top-weight；这样下一轮才有机会把 learned full-fusion 推过 matched equal-weight，而不是重演 DFR-93 的 `72/0/22` 错误迁移或 DFR-95 的 hard axial mask。实验实际结果：analysis-only，无新 checkpoint；被审计 DFR-25 seed42 reference 为 `val_acc=0.9361702127659575`, `val_auc=0.9786363636363636`, `val_f1=0.9333333333333333`，fusion telemetry mean axial/coronal/sagittal=`0.888561/0.079051/0.032389`，top-weight count/rate=`94/1.0000, 0/0.0000, 0/0.0000`。DFR-96 推荐 target distribution 为 `axial=90/94 (0.957447)`, `coronal=0/94`, `sagittal=4/94 (0.042553)`；其中 DFR-25 wrong `6` 例，validated sagittal promote `3` 例，missed/unvalidated non-axial need `1` 例，fragile axial-protect `4` 例。DFR-90~95 每条 comparator 对 DFR-25 seed42 都是 net negative（例如 DFR-90 fixed `3` / broken `4`，DFR-93 top-weight `72/0/22` 但 fixed `1` / broken `2`），说明旧 auxiliary / active-mask 释放的 non-axial routing 不是可靠 target。`threshold_grid_against_dfr25_seed42` 也显示只有 oracle true-margin gap 能净修 `4` 例；可观测 pred-margin / confidence / fusion-weight gap 基本无法触发高精度修复，abnormal-prob gap 反而 net `-2` → **discard**（诊断有价值，但没有产生可直接 promote 的 learned routing 机制）。
+- **当前判断**：DFR-96 确认下一步不应继续 coronal auxiliary、pair aux、active mask 或 broad non-axial release。可救样本在 seed42 上几乎全是 sagittal-normal 修复 FP，且数量极少；同时有 `44` 个 axial-correct / non-axial-wrong protection cases，其中 `4` 个已被 DFR-90~95 破坏。因此下一轮若继续训练，应设计 **sagittal-only、FP/normal-safe、strong axial protection** 的极低覆盖校准，而不是用 label-free margin 直接决定 top view。
+- **下一步建议**：DFR-97 可从 DFR-25 fork，做一个单变量 “sagittal-normal rescue gate aux / calibration” 探针：只在训练态给 sagittal normal evidence 一个小的 reliability credit，并强保护 axial positive / high axial true-margin 样本；预期 top-weight target 是从 `94/0/0` 只迁出约 `3-4` 个 sagittal top/near-top，而不是释放 coronal 或扩大到几十个 non-axial 样本。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-95 active-view mask control without auxiliary loss`：main-study；回到 DFR-25 anchor，不加 pair/abnormal aux，只比较 axial+coronal / axial+sagittal / coronal+sagittal 三个 forced two-view masks。 |
-| 上次结果 | commit `f7328d9`，fresh main-study `runs/optuna_main_resnext_decision_256x8_dfr95_active_mask_control` 完成 3/3 trials：trial0 axial+coronal `val_acc/val_auc/val_f1=0.914894/0.976364/0.904762`，trial1 axial+sagittal `0.925532/0.978636/0.921348`，trial2 coronal+sagittal `0.872340/0.919091/0.842105`。best trial1 只打平 matched equal-weight seed42，低于 DFR-25 seed42，因此 discard；active-mask telemetry mean axial/coronal/sagittal=`0.9978/0.0000/0.0022`，top-weight=`94/0/0`，true-margin=`85/4/5`，说明 best 二视角 mask 仍几乎全靠 axial。 |
-| 下一步 | 停止简单 auxiliary / active-mask sweep；建议做 DFR-96 离线样本级 gate-target calibration audit：基于 DFR-25 与 DFR-90~95 telemetry，先确认哪些样本真的需要 non-axial 介入，再设计更小的三视角 gate 校准目标。 |
+| 上次实验 | `DFR-96 gate-target calibration audit`：analysis-only；新增脚本读取 DFR-25 seed42 与 DFR-90~95 的 `fusion_weight_analysis.json`，审计哪些 DFR-25 错误真的需要 non-axial 接管，以及哪些 axial-correct 样本必须保护。 |
+| 上次结果 | commit `4cc1bc0`，报告 `autoresearch_logs/dfr96_gate_target_calibration_audit/report.json`；无新训练 checkpoint，指标引用 DFR-25 seed42 reference `val_acc/val_auc/val_f1=0.936170/0.978636/0.933333`。DFR-25 seed42 权重 telemetry mean axial/coronal/sagittal=`0.888561/0.079051/0.032389`，top-weight=`94/0/0`；DFR-96 推荐 target top distribution=`axial 90/94`, `coronal 0/94`, `sagittal 4/94`，validated sagittal promote `3` 例、missed/unvalidated non-axial need `1` 例、fragile axial-protect `4` 例。旧 DFR-90~95 comparator 均 net negative，说明 broad auxiliary / active-mask 不是可靠 routing target，本轮 analysis-only 记 discard。 |
+| 下一步 | 停止 coronal auxiliary、pair aux、active-mask 与 broad non-axial release；建议 DFR-97 做单变量 `sagittal-only FP/normal-safe rescue` 或同等极低覆盖校准：只尝试把约 `3-4` 个 validated sagittal-normal rescue 样本从 axial top-weight 迁出，同时强保护 axial-positive / high-axial-margin 样本。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 70（自 `DFR-26 seed123` 起至 `DFR-95 active-view mask control without auxiliary loss` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85 follow-up 离线分析不改变 discard 计数语义，但本轮 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 71（自 `DFR-26 seed123` 起至 `DFR-96 gate-target calibration audit` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
