@@ -588,6 +588,19 @@
 - **当前判断**：DFR-93 是 negative seed42 candidate study，不应 promotion 到 3-seed formal；但它给出一个有用信号：pair-style auxiliary 能移动 gate，只是当前三视角竞争下 sagittal 会抢走权重。下一轮应直接测试 **forced axial+coronal active mask / no sagittal competition**，保留 DFR-93 的 axial-coronal pair 监督，但在最终融合中临时排除 sagittal，验证 coronal 是否能在没有 sagittal 干扰时转化为主指标收益。
 - **Agent 状态（2026-05-12 18:00 SGT）**：本 session 是唯一 coordinator，已完成用户要求的 `dfr89` 后续第 `4/6` 轮；last experiment=`DFR-93 coronal pair abnormal auxiliary loss`，lane=`main-study`，result=`discard with routing signal`，last commit=`c16a69e`；下一步建议=`DFR-94 forced axial-coronal active mask with DFR-93 aux, remove sagittal competition before changing objective again`，继续服务 DFR-25 decision-fusion routing 修复，不切 backbone / geometry / fusion family。
 
+### DFR-94 forced axial-coronal active mask with pair aux（2026-05-12）
+
+> **实验说明**
+> - 本轮继续从 DFR-93 出发；保持 ResNeXt 256x8、learned decision fusion、L3 no-mixer、dominant-gate dropout、winning scalar 与数据划分不变。
+> - 唯一行为变量是在 DFR-93 coronal-pair aux 之上加 `ANKLE_DECISION_FORCE_ACTIVE_VIEW_MASK=1,1,0`，让最终融合只使用 axial+coronal，排除 DFR-93 中错误抢权重的 sagittal；同时 [scripts/analyze_fusion_weights.py](/dataset/HH/ankle-ct/scripts/analyze_fusion_weights.py) 记录 active-mask 重新归一化后的有效 fusion weight，并保留 raw weight。
+> - 设计思路：DFR-93 证明 pair aux 能移动 gate，但权重跑向 sagittal。DFR-94 先不换主干、不换融合家族，只拿掉 sagittal 竞争，检查 coronal 在 axial-coronal 二视角竞争里是否能变成实际收益。
+> - 预计改进效果：相对 DFR-93 的 `top_weight=72/0/22`，预期有效 top-weight 应只在 axial/coronal 之间分配，并在 coronal true-margin 样本上给 coronal 少量 top/near-top 权重；如果 DFR-93 的主要问题只是 sagittal 干扰，则 seed42 learned full-fusion 应超过 matched equal-weight `0.9255319148936170`。
+
+- [x] **DFR-94-RESNEXT-DECISION-256X8-FORCED-AXCOR-PAIR-AUX-SEED42-MAIN-STUDY**：commit `11e76ff`，fresh adaptive `main-study` 使用 [configs/optuna_main_search_resnext_decision_256x8_dfr94_forced_axcor_pair_aux.yaml](/dataset/HH/ankle-ct/configs/optuna_main_search_resnext_decision_256x8_dfr94_forced_axcor_pair_aux.yaml)，study root [runs/optuna_main_resnext_decision_256x8_dfr94_forced_axcor_pair_aux](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr94_forced_axcor_pair_aux)，Slurm job `484388` 在 `PA100q/node03` 完成，GPU policy `--gpu-ids auto --max-workers 3`，只跑 seed42 三个候选 `ANKLE_DECISION_CORONAL_PAIR_ABNORMAL_AUX_WEIGHT=0.001/0.0025/0.005` 且固定 active mask `1,1,0`。实验实际结果：trial0 `0.9148936170212766/0.9722727272727272/0.9130434782608695`，trial1 `0.9255319148936170/0.9759090909090910/0.9230769230769231`，trial2 `0.9148936170212766/0.9777272727272728/0.9111111111111111`；best by `val_acc` 为 trial1，`peak_vram≈2.19 GiB`, `total_seconds≈612.7` → **discard**（best seed42 只打平 matched equal-weight seed42，仍低于 DFR-25 seed42 `0.9361702127659575/0.9786363636363636/0.9333333333333333`。）
+- **fusion-weight 结论**：best trial1 的 [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr94_forced_axcor_pair_aux/trials/trial_0001/run/fusion_weight_analysis.json) 显示 DFR-94 没有释放 coronal。effective mean fusion weight（active mask 后）`axial/coronal/sagittal = 0.9993/0.0007/0.0000`，raw mean weight `0.7207/0.0004/0.2789`；effective top-weight `94/0/0`。`top_true_margin` 分布为 `65/27/2`，说明有不少样本 coronal true margin 更强，但 gate 仍几乎完全给 axial。coronal 单视角退化为 `accuracy=0.5319`, `F1=0.0`, `AUC=0.6355`。
+- **当前判断**：DFR-94 是 negative seed42 candidate study，不应 promotion 到 3-seed formal。它排除了“只要拿掉 sagittal 就会用 coronal”的可能性；真正的问题是 DFR-93/94 的 aux 让 coronal classifier/gate 共同退化。下一轮应做一个更干净的 **active-view mask control**：不加 pair/abnormal aux，只用 DFR-25 anchor + forced two-view masks，分清 active mask 本身是否有价值，避免继续在坏掉的 coronal aux 上加复杂目标。
+- **Agent 状态（2026-05-12 18:26 SGT）**：本 session 是唯一 coordinator，已完成用户要求的 `dfr89` 后续第 `5/6` 轮；last experiment=`DFR-94 forced axial-coronal active mask with pair aux`，lane=`main-study`，result=`discard`，last commit=`11e76ff`；下一步建议=`DFR-95 DFR-25 active-view mask control without auxiliary loss, compare axial+coronal / axial+sagittal / coronal+sagittal masks`，继续服务 DFR-25 decision-fusion routing 修复，不切 backbone / geometry / fusion family。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1595,11 +1608,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-93 coronal pair abnormal auxiliary loss`：main-study；把 coronal abnormal evidence repair 与 axial-coronal pair selector aux 合在一起，试图直接连接 coronal 证据和 gate 排序。 |
-| 上次结果 | commit `c16a69e`，fresh main-study `runs/optuna_main_resnext_decision_256x8_dfr93_coronal_pair_abnormal_aux` 完成 3/3 trials：trial0 `val_acc/val_auc/val_f1=0.925532/0.966818/0.919540`，trial1 `0.914894/0.985000/0.909091`，trial2 `0.914894/0.977727/0.911111`。best trial0 只打平 matched equal-weight seed42，低于 DFR-25 seed42，因此 discard；权重验证 mean axial/coronal/sagittal=`0.6414/0.1179/0.2407`，top-weight=`72/0/22`，true-margin=`84/4/6`，`hit_rate.true_margin=0.6809`。这是 useful routing signal：gate 能被移动，但错误地释放到 sagittal，coronal/sagittal 单视角 F1 仍为 `0.0/0.0`。 |
-| 下一步 | 做 DFR-94 forced axial-coronal active mask：保留 DFR-93 的 axial-coronal pair 监督，但在最终融合中排除 sagittal，验证“去掉错误 sagittal 竞争”后 coronal 是否能带来主指标收益。 |
+| 上次实验 | `DFR-94 forced axial-coronal active mask with pair aux`：main-study；保留 DFR-93 的 axial-coronal pair 监督，但最终融合强制只用 axial+coronal，排除 sagittal 竞争。 |
+| 上次结果 | commit `11e76ff`，fresh main-study `runs/optuna_main_resnext_decision_256x8_dfr94_forced_axcor_pair_aux` 完成 3/3 trials：trial0 `val_acc/val_auc/val_f1=0.914894/0.972273/0.913043`，trial1 `0.925532/0.975909/0.923077`，trial2 `0.914894/0.977727/0.911111`。best trial1 只打平 matched equal-weight seed42，低于 DFR-25 seed42，因此 discard；effective fusion telemetry 使用 active-mask 后权重，mean axial/coronal/sagittal=`0.9993/0.0007/0.0000`，raw mean=`0.7207/0.0004/0.2789`，top-weight=`94/0/0`，true-margin=`65/27/2`。coronal 单视角 F1 仍为 `0.0`，说明去掉 sagittal 并没有释放 coronal。 |
+| 下一步 | 做 DFR-95 DFR-25 active-view mask control：不加 pair/abnormal aux，只用 DFR-25 anchor 测 axial+coronal / axial+sagittal / coronal+sagittal 三个 forced two-view masks，分清 active mask 本身是否有价值。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 68（自 `DFR-26 seed123` 起至 `DFR-93 coronal pair abnormal auxiliary loss` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85 follow-up 离线分析不改变 discard 计数语义，但本轮 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 69（自 `DFR-26 seed123` 起至 `DFR-94 forced axial-coronal active mask with pair aux` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85 follow-up 离线分析不改变 discard 计数语义，但本轮 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
