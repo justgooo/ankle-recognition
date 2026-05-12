@@ -2049,6 +2049,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_NONAXIAL_ABNORMAL_AUX_WEIGHT",
             0.025,
         )
+        self.nonaxial_abnormal_aux_coronal_only = _env_flag(
+            "ANKLE_DECISION_NONAXIAL_ABNORMAL_AUX_CORONAL_ONLY"
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -3463,8 +3466,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 raise RuntimeError(
                     "Non-axial abnormal auxiliary loss requires binary logits."
                 )
-            normal_logits = view_logits[:, 1:, :1].detach()
-            abnormal_logits = view_logits[:, 1:, 1:2]
+            aux_view_logits = (
+                view_logits[:, 1:2]
+                if self.nonaxial_abnormal_aux_coronal_only
+                else view_logits[:, 1:]
+            )
+            normal_logits = aux_view_logits[..., :1].detach()
+            abnormal_logits = aux_view_logits[..., 1:2]
             aux_logits = torch.cat([normal_logits, abnormal_logits], dim=-1)
             aux_weight = self.nonaxial_abnormal_aux_weight
         elif self.enable_aux_view_loss:
