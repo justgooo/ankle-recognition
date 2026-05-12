@@ -2111,6 +2111,16 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.pairwise_selector_aux_require_disagreement = _env_flag(
             "ANKLE_DECISION_PAIRWISE_SELECTOR_AUX_REQUIRE_DISAGREEMENT"
         )
+        self.enable_gate_pairwise_contrast_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_GATE_PAIRWISE_CONTRAST_AUX_LOSS"
+        )
+        self.gate_pairwise_contrast_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_GATE_PAIRWISE_CONTRAST_AUX_WEIGHT",
+            0.0025,
+        )
+        self.gate_pairwise_contrast_aux_require_disagreement = _env_flag(
+            "ANKLE_DECISION_GATE_PAIRWISE_CONTRAST_AUX_REQUIRE_DISAGREEMENT"
+        )
         self.enable_coronal_pair_abnormal_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS"
         )
@@ -2496,6 +2506,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_candidate_view_prototype_aux_loss,
             self.enable_gate_view_correctness_aux_loss,
             self.enable_pairwise_selector_aux_loss,
+            self.enable_gate_pairwise_contrast_aux_loss,
             self.enable_coronal_pair_abnormal_aux_loss,
             self.enable_nonaxial_abnormal_aux_loss,
             self.enable_sagittal_normal_rescue_aux_loss,
@@ -2506,6 +2517,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_CANDIDATE_VIEW_PROTOTYPE_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS, "
                 "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_GATE_PAIRWISE_CONTRAST_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_SAGITTAL_NORMAL_RESCUE_AUX_LOSS are mutually exclusive."
@@ -3594,6 +3606,48 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 pair_logits.append(candidate_logits)
             aux_logits = torch.stack(pair_logits, dim=1)
             aux_weight = self.pairwise_selector_aux_weight
+        elif self.enable_gate_pairwise_contrast_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Gate pairwise contrast auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+                raise RuntimeError(
+                    "Gate pairwise contrast auxiliary loss expects view logits with shape "
+                    "(batch, 3, classes)."
+                )
+            if view_logits.shape[-1] != 2:
+                raise RuntimeError(
+                    "Gate pairwise contrast auxiliary loss requires binary logits."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Gate pairwise contrast auxiliary loss expects fusion weights with "
+                    "shape (batch, 3, 1) matching view logits."
+                )
+            flat_weights = fusion_weights.squeeze(-1)
+            detached_logits = view_logits.detach()
+            detached_predictions = detached_logits.argmax(dim=-1)
+            pair_logits = []
+            for pair_indices in ([0, 1], [0, 2], [1, 2]):
+                pair_weights = flat_weights[:, pair_indices]
+                pair_weights = pair_weights / pair_weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
+                candidate_logits = (
+                    detached_logits[:, pair_indices, :] * pair_weights.unsqueeze(-1)
+                ).sum(dim=1)
+                if self.gate_pairwise_contrast_aux_require_disagreement:
+                    pair_disagreement = detached_predictions[:, pair_indices[0]].ne(
+                        detached_predictions[:, pair_indices[1]]
+                    )
+                    candidate_logits = torch.where(
+                        pair_disagreement.view(-1, 1),
+                        candidate_logits,
+                        candidate_logits.detach(),
+                    )
+                pair_logits.append(candidate_logits)
+            aux_logits = torch.stack(pair_logits, dim=1)
+            aux_weight = self.gate_pairwise_contrast_aux_weight
         elif self.enable_coronal_pair_abnormal_aux_loss:
             if fusion_weights is None:
                 raise RuntimeError(
