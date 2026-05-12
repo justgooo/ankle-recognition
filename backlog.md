@@ -536,6 +536,19 @@
 - **当前判断**：DFR-89 是 negative seed42 candidate study，不应 promotion 到 3-seed formal。它比 DFR-88 更保守，避免了错误 sagittal over-routing，但代价是完全回到 `94/0/0` axial top-weight；所以问题不是简单 pairwise 监督强度不够，而是 aux 目标没有让 coronal/sagittal 的正类证据变可用。下一轮应先尝试更直接的 non-axial 正类监督 / class-bias 修正，目标是让 coronal/sagittal 至少能在少量阳性样本上形成非零 F1，再谈 selector routing。
 - **Agent 状态（2026-05-12 13:49 SGT）**：本 session 是唯一 coordinator，已完成用户要求的 `dfr89`；last experiment=`DFR-89 pairwise selector auxiliary loss`，lane=`main-study`，result=`discard`，last commit=`3778d94`；下一步建议=`DFR-90 non-axial positive-sensitive auxiliary / class-bias repair before another selector threshold sweep`，继续服务 DFR-25 decision-fusion routing 修复，不切 backbone / geometry / fusion family。
 
+### DFR-90 non-axial abnormal auxiliary loss（2026-05-12）
+
+> **实验说明**
+> - 本轮继续从 DFR-25 anchor 出发；保持 ResNeXt 256x8、learned decision fusion、L3 no-mixer、dominant-gate dropout、winning scalar 与数据划分不变。
+> - 唯一新增机制是在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 通过 `ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS=1` 暴露一个 train-time auxiliary：只取 coronal/sagittal 两个非 axial 视角，把 normal logit detach，只让 abnormal logit 接收 CE 梯度。
+> - 设计思路：DFR-89 已证明 pairwise selector aux 没有让 coronal/sagittal 的正类证据变可用；DFR-90 因此先不继续调 selector，而是直接修非 axial 的 abnormal class evidence，让弱视角至少能在少量阳性样本上形成可分类信号，再评估 gate 是否能利用它。
+> - 预计改进效果：相对 DFR-89 best 的 coronal/sagittal F1=`0.0/0.0` 与 top-weight `94/0/0`，预期 coronal/sagittal 至少出现非零 F1，并在 true-margin 支持样本上获得少量 top/near-top routing；如果这些非 axial 正类证据覆盖 DFR-25/DFR-89 的 oracle-fixable 错样本，则 seed42 learned full-fusion 有机会超过 matched equal-weight `0.9255319148936170`。
+
+- [x] **DFR-90-RESNEXT-DECISION-256X8-NONAXIAL-ABNORMAL-AUX-SEED42-MAIN-STUDY**：commit `fef9069`，fresh adaptive `main-study` 使用 [configs/optuna_main_search_resnext_decision_256x8_dfr90_nonaxial_abnormal_aux.yaml](/dataset/HH/ankle-ct/configs/optuna_main_search_resnext_decision_256x8_dfr90_nonaxial_abnormal_aux.yaml)，study root [runs/optuna_main_resnext_decision_256x8_dfr90_nonaxial_abnormal_aux](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr90_nonaxial_abnormal_aux)，Slurm job `483684` 在 `PA100q/node03` 完成，GPU policy `--gpu-ids auto --max-workers 3`，只跑 seed42 三个候选 `ANKLE_DECISION_NONAXIAL_ABNORMAL_AUX_WEIGHT=0.01/0.025/0.05`。实验实际结果：trial0 `0.9148936170212766/0.9768181818181818/0.9111111111111111`，trial1 `0.9148936170212766/0.9822727272727273/0.9047619047619048`，trial2 `0.9255319148936170/0.9677272727272728/0.9176470588235294`；best by `val_acc` 为 trial2，`peak_vram≈2.19 GiB`, `total_seconds≈607.0` → **discard**（best seed42 只打平 matched equal-weight seed42，仍低于 DFR-25 seed42 `0.9361702127659575/0.9786363636363636/0.9333333333333333`；AUC/F1 也未超过 DFR-25。）
+- **fusion-weight 结论**：best trial2 的 [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr90_nonaxial_abnormal_aux/trials/trial_0002/run/fusion_weight_analysis.json) 显示 DFR-90 只修到一半。mean fusion weight `axial/coronal/sagittal = 0.8661/0.0894/0.0445`；top-weight count/rate `axial=94/1.0000`, `coronal=0/0.0000`, `sagittal=0/0.0000`；`top_true_margin` 分布为 `axial/coronal/sagittal = 84/8/2`，`top_weight_hit_rate.true_margin=0.8936`。好消息是 coronal 单视角从 DFR-89 的 F1 `0.0` 提升到 `0.6847`，说明 positive evidence repair 有信号；坏消息是 gate 仍然一次也没有把 top weight 给 coronal/sagittal，sagittal 仍是 F1 `0.0`，所以没有转化成 full-fusion 收益。
+- **当前判断**：DFR-90 是 negative seed42 candidate study，不应 promotion 到 3-seed formal。它说明“同时推 coronal+sagittal abnormal logit”太粗：coronal 确实获得可用正类信号，但 sagittal 仍弱且 gate 仍 fully axial。下一轮应把变量再收窄为 **coronal-only abnormal auxiliary / class-bias repair**，先验证能否把 DFR-90 的 coronal F1 信号转成少量 evidence-aligned routing，而不是继续联合拉动 sagittal。
+- **Agent 状态（2026-05-12 14:09 SGT）**：本 session 是唯一 coordinator，已完成用户要求的 `dfr89` 后续第 `1/6` 轮；last experiment=`DFR-90 non-axial abnormal auxiliary loss`，lane=`main-study`，result=`discard`，last commit=`fef9069`；下一步建议=`DFR-91 coronal-only abnormal auxiliary / class-bias repair, keep sagittal untouched`，继续服务 DFR-25 decision-fusion routing 修复，不切 backbone / geometry / fusion family。
+
 ---
 
 ## 2026-05-10：Decision-Fusion Repair（DFR-44 evidence-aware residual gate，3-seed formal，RTXA6Kq/node16）
@@ -1543,11 +1556,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-89 pairwise selector auxiliary loss`：main-study；从 DFR-25 anchor 新增 pairwise selector aux，构造 `axial+coronal` / `axial+sagittal` 两个候选融合 logits，只让 pair-normalized fusion weights 接收 aux 梯度，并固定 disagreement mask；seed42 三候选 aux weight `0.0025/0.005/0.01`。 |
-| 上次结果 | commit `3778d94`，fresh main-study `runs/optuna_main_resnext_decision_256x8_dfr89_pairwise_selector_aux` 完成 3/3 trials：trial0 `val_acc/val_auc/val_f1=0.925532/0.968636/0.919540`，trial1 `0.925532/0.973182/0.923077`，trial2 `0.925532/0.980455/0.923077`。best trial2 只打平 matched equal-weight seed42，低于 DFR-25 seed42，因此 discard；权重验证 mean axial/coronal/sagittal=`0.9112/0.0316/0.0572`，top-weight=`94/0/0`，true-margin=`84/2/8`，`hit_rate.true_margin=0.8936`，说明 pairwise selector aux 避免了 DFR-88 的 sagittal over-routing，但完全回到 axial lock-in。 |
-| 下一步 | 不再继续扫 pairwise selector aux weight；最新结果说明 selector 没有让 non-axial 正类证据变可用。下一轮优先做更直接的 non-axial positive-sensitive auxiliary / class-bias repair，让 coronal/sagittal 至少在少量阳性样本上形成非零 F1，再评估是否值得继续 selector routing。 |
+| 上次实验 | `DFR-90 non-axial abnormal auxiliary loss`：main-study；从 DFR-25 anchor 新增 train-time non-axial abnormal aux，只对 coronal/sagittal abnormal logit 施加 CE 梯度，normal logit detach；seed42 三候选 aux weight `0.01/0.025/0.05`。 |
+| 上次结果 | commit `fef9069`，fresh main-study `runs/optuna_main_resnext_decision_256x8_dfr90_nonaxial_abnormal_aux` 完成 3/3 trials：trial0 `val_acc/val_auc/val_f1=0.914894/0.976818/0.911111`，trial1 `0.914894/0.982273/0.904762`，trial2 `0.925532/0.967727/0.917647`。best trial2 只打平 matched equal-weight seed42，低于 DFR-25 seed42，因此 discard；权重验证 mean axial/coronal/sagittal=`0.8661/0.0894/0.0445`，top-weight=`94/0/0`，true-margin=`84/8/2`，`hit_rate.true_margin=0.8936`。coronal 单视角 F1 提升到 `0.6847`，但 gate 仍 fully axial，sagittal 仍 F1 `0.0`。 |
+| 下一步 | 不把 DFR-90 升 3-seed；下一轮把变量收窄成 coronal-only abnormal auxiliary / class-bias repair，验证 DFR-90 的 coronal positive signal 能否转成少量 evidence-aligned routing，同时避免继续拉动无收益的 sagittal。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 64（自 `DFR-26 seed123` 起至 `DFR-89 pairwise selector auxiliary loss` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85 follow-up 离线分析不改变 discard 计数语义，但本轮 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 65（自 `DFR-26 seed123` 起至 `DFR-90 non-axial abnormal auxiliary loss` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85 follow-up 离线分析不改变 discard 计数语义，但本轮 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
