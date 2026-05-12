@@ -2062,6 +2062,13 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
         self.nonaxial_abnormal_aux_coronal_only = _env_flag(
             "ANKLE_DECISION_NONAXIAL_ABNORMAL_AUX_CORONAL_ONLY"
         )
+        self.enable_sagittal_normal_rescue_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_SAGITTAL_NORMAL_RESCUE_AUX_LOSS"
+        )
+        self.sagittal_normal_rescue_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_AUX_WEIGHT",
+            0.0025,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2396,6 +2403,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_pairwise_selector_aux_loss,
             self.enable_coronal_pair_abnormal_aux_loss,
             self.enable_nonaxial_abnormal_aux_loss,
+            self.enable_sagittal_normal_rescue_aux_loss,
         ]
         if sum(bool(flag) for flag in enabled_aux_modes) > 1:
             raise ValueError(
@@ -2404,7 +2412,8 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_GATE_VIEW_CORRECTNESS_AUX_LOSS, "
                 "ANKLE_DECISION_ENABLE_PAIRWISE_SELECTOR_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS, and "
-                "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS are mutually exclusive."
+                "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_SAGITTAL_NORMAL_RESCUE_AUX_LOSS are mutually exclusive."
             )
         if self.minimal_fusion_baseline and self.equal_weight_fusion:
             raise ValueError(
@@ -3529,6 +3538,40 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             abnormal_logits = aux_view_logits[..., 1:2]
             aux_logits = torch.cat([normal_logits, abnormal_logits], dim=-1)
             aux_weight = self.nonaxial_abnormal_aux_weight
+        elif self.enable_sagittal_normal_rescue_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Sagittal normal rescue auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+                raise RuntimeError(
+                    "Sagittal normal rescue auxiliary loss expects view logits with shape "
+                    "(batch, 3, classes)."
+                )
+            if view_logits.shape[-1] != 2:
+                raise RuntimeError(
+                    "Sagittal normal rescue auxiliary loss requires binary logits."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Sagittal normal rescue auxiliary loss expects fusion weights with "
+                    "shape (batch, 3, 1) matching view logits."
+                )
+            detached_predictions = view_logits.detach().argmax(dim=-1)
+            rescue_mask = detached_predictions[:, 0].eq(1) & detached_predictions[:, 2].eq(0)
+            pair_indices = [0, 2]
+            pair_weights = fusion_weights.squeeze(-1)[:, pair_indices]
+            pair_weights = pair_weights / pair_weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
+            pair_logits = (
+                view_logits.detach()[:, pair_indices, :] * pair_weights.unsqueeze(-1)
+            ).sum(dim=1)
+            aux_logits = torch.where(
+                rescue_mask.view(-1, 1),
+                pair_logits,
+                pair_logits.detach(),
+            ).unsqueeze(1)
+            aux_weight = self.sagittal_normal_rescue_aux_weight
         elif self.enable_aux_view_loss:
             aux_logits = view_logits
 
