@@ -1727,17 +1727,29 @@
 
 ---
 
+## 2026-05-13：Decision-Fusion Repair Follow-up（DFR-106 targeted-aux trigger audit，analysis）
+
+> **DFR-106 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-105 已经把 aux 限定到 non-axial evidence > axial，却仍只抬高平均权重、不改变 top-rank；本轮不再盲加训练机制，而是复现 targeted aux 触发条件，审计它是否真正覆盖 DFR-25 错误与 non-axial true-margin 样本。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果审计证明触发集合是小而准确的 coronal/sagittal target，后续机制就可以把监督进一步限定到 confirmed DFR25 error 或 non-axial true-margin 样本，目标是让 axial 继续主导多数样本，只把少数需要补充的视角推到 top/near-top，而不是均权化或强化单视角。
+
+- [x] **DFR-106-RESNEXT-DECISION-256X8-TARGETED-AUX-TRIGGER-AUDIT-ANALYSIS**：commit `35375bc`，新增 [scripts/analyze_dfr105_targeted_aux_audit.py](/dataset/HH/ankle-ct/scripts/analyze_dfr105_targeted_aux_audit.py)，只读取既有 DFR-25 seed42 与 DFR-105 best-trial `fusion_weight_analysis.json`，复现 `best_nonaxial_log_prob[class] - axial_log_prob[class] >= gap` 的 targeted aux 触发规则，并把 target 与 DFR-25 错误、non-axial true-margin、DFR-105 训练后 top/near-top routing 做 patient-level join；完整报告写入 `autoresearch_logs/dfr105_targeted_aux_audit.json`。设计思路：analysis-only audit after DFR-105，先确认 targeted aux target 是否污染或稀释，再决定下一轮是否把监督限定到 confirmed DFR25 error / non-axial true-margin 样本。预计改进效果：参考 telemetry 的 top-weight 仍应保持 DFR-25 `94/0/0`，但 target 分布应指向少量 coronal/sagittal 样本；若这些样本覆盖 DFR-25 错误与 non-axial true-margin，下一轮可用更强或更直接的 selector target 推动少量 non-axial top/near-top，从而有机会超过 matched equal-weight，而不是把权重平均化。实验实际结果：无新 checkpoint；DFR-25 seed42 reference `val_acc/val_auc/val_f1=0.936170/0.978636/0.933333`，mean weight `axial/coronal/sagittal=0.888561/0.079051/0.032389`，top-weight `94/0/0`；DFR-105 best `0.936170/0.972727/0.933333`，mean weight `0.816850/0.126227/0.056923`，top-weight 仍 `94/0/0`。
+- **targeted-aux 审计结论**：以 DFR-25 seed42 telemetry 复现时，gap `0.02/0.05/0.10` 三档触发集合完全相同：共 `8` 个 true-class target，target view `coronal=2, sagittal=6`，覆盖 `6/6` 个 DFR-25 错误和 `8/9` 个 DFR-25 non-axial true-margin 样本，`confirmed_scope_rate=1.0`，oracle `helpful_if_promoted=4 / harmful_if_promoted=0`；但 DFR-105 best trial 中这 `8` 个目标样本的 target view `top_weight=0/8`、near-top `0/8`，top-weight 全部仍是 axial。以 DFR-105 best telemetry 自身复现时，gap `0.02/0.05/0.10` 分别触发 `12/10/9` 个样本，同样覆盖 `6/6` 个 DFR-25 错误与 `9/9` 个 non-axial true-margin 样本，但 target top/near-top 仍为 `0`。
+- **当前判断**：DFR-106 是 diagnostic discard，但给出清晰下一步。DFR-105 的失败不是 trigger 污染，反而说明 target 已经很窄且覆盖正确；问题在于现有 pair-normalized CE 对 gate rank 的作用太弱，无法越过 axial confidence-logit 排序。下一轮若继续训练目标，不应再扫 gap；应只做一项更直接的机制，把监督限定在这类 confirmed DFR25 error 或 non-axial true-margin 样本上，并让目标样本的 non-axial gate logit 获得更强的 rank margin / hard target，而不是继续用全 batch pair-weight soft CE。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-105 targeted non-axial evidence rank auxiliary`：main-study 只在 detached coronal/sagittal true-class evidence 超过 axial 的 label/class 上，对 non-axial-vs-axial pair-normalized gate weight 做 train-time rank CE。 |
-| 上次结果 | commit `4b43d9d`，fresh study [runs/optuna_main_autoloop/iter_0010_20260513_010547](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0010_20260513_010547) 完成 `3/3` trials；best trial0 gap `0.02`，`val_acc/val_auc/val_f1=0.936170/0.972727/0.933333`，peak_vram≈`2.15 GiB`。fusion telemetry mean weight `0.8168/0.1262/0.0569`，top-weight `94/0/0`，top_true_margin `80/2/12`；accuracy 只追平 DFR-25 seed42 且 AUC 更低，routing 仍未释放 non-axial top-weight，本轮 discard。 |
-| 下一步 | 不继续扫 targeted evidence gap；本轮说明即使把 aux 限定到 non-axial evidence > axial 的情形，梯度也只抬高弱视角平均权重，不能改变 top-rank。下一轮仍聚焦 decision-fusion routing repair，应优先做 targeted-aux 触发覆盖率 / 样本级 target audit，确认 DFR-25 错误且 non-axial true-margin 样本是否被正确命中；若继续训练目标，应显式限定到这些样本，避免多数 axial case 或非目标类把信号稀释。 |
+| 上次实验 | `DFR-106 targeted-aux trigger audit`：analysis-only 复现 DFR-105 targeted evidence-rank aux 触发规则，并把 target 与 DFR-25 错误、non-axial true-margin、DFR-105 best trial routing 做样本级 join。 |
+| 上次结果 | commit `35375bc`，报告 [autoresearch_logs/dfr105_targeted_aux_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr105_targeted_aux_audit.json)；无新 checkpoint。DFR-25 seed42 reference `val_acc/val_auc/val_f1=0.936170/0.978636/0.933333`，mean weight `0.8886/0.0791/0.0324`，top-weight `94/0/0`。DFR-105 best `0.936170/0.972727/0.933333`，mean weight `0.8168/0.1262/0.0569`，top-weight `94/0/0`。DFR-25-source gap `0.02/0.05/0.10` 均触发同一 `8` 个样本，target `coronal/sagittal=2/6`，覆盖 `6/6` 个 DFR-25 错误和 `8/9` 个 non-axial true-margin 样本，但 DFR-105 target top/near-top 为 `0/8`。本轮 diagnostic discard。 |
+| 下一步 | 不继续扫 targeted evidence gap；trigger target 已经窄且对齐，失败点是 pair-normalized soft CE 无法越过 axial rank。下一轮仍聚焦 decision-fusion routing repair，可做一项更直接的 confirmed-target 机制：只在 DFR25 error 或 non-axial true-margin 样本上施加 hard/rank-margin gate target，让目标 non-axial view 进入 top/near-top，同时保护其余 axial-majority 样本。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 80（自 `DFR-26 seed123` 起至 `DFR-105 targeted non-axial evidence rank auxiliary` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 81（自 `DFR-26 seed123` 起至 `DFR-106 targeted-aux trigger audit` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99/106 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
