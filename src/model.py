@@ -2231,6 +2231,17 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_GATE_LABEL_EVIDENCE_RANK_AUX_WEIGHT",
             0.0025,
         )
+        self.enable_gate_targeted_evidence_rank_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_GATE_TARGETED_EVIDENCE_RANK_AUX_LOSS"
+        )
+        self.gate_targeted_evidence_rank_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_GATE_TARGETED_EVIDENCE_RANK_AUX_WEIGHT",
+            0.001,
+        )
+        self.gate_targeted_evidence_rank_aux_gap = _env_unit_float(
+            "ANKLE_DECISION_GATE_TARGETED_EVIDENCE_RANK_AUX_GAP",
+            0.05,
+        )
         self.enable_axial_sagittal_rank_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS"
         )
@@ -3829,6 +3840,48 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             )
             aux_logits = mixture_log_probs.unsqueeze(1)
             aux_weight = self.gate_label_evidence_rank_aux_weight
+        elif self.enable_gate_targeted_evidence_rank_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Gate targeted evidence-rank auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if view_logits.ndim != 3:
+                raise RuntimeError(
+                    "Gate targeted evidence-rank auxiliary loss expects view logits with shape "
+                    "(batch, views, classes)."
+                )
+            if view_logits.shape[1] < 2:
+                raise RuntimeError(
+                    "Gate targeted evidence-rank auxiliary loss requires at least two views."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Gate targeted evidence-rank auxiliary loss expects fusion weights with "
+                    "shape (batch, views, 1) matching view logits."
+                )
+            detached_log_probs = torch.log_softmax(view_logits.detach(), dim=-1)
+            axial_log_probs = detached_log_probs[:, :1, :]
+            nonaxial_log_probs = detached_log_probs[:, 1:, :]
+            best_advantage, best_relative_view = (
+                nonaxial_log_probs - axial_log_probs
+            ).max(dim=1)
+            has_nonaxial_target = best_advantage.ge(
+                self.gate_targeted_evidence_rank_aux_gap
+            )
+            target_view = best_relative_view + 1
+            flat_weights = fusion_weights.squeeze(-1).clamp_min(1e-8)
+            target_weights = flat_weights.gather(dim=1, index=target_view)
+            axial_weights = flat_weights[:, :1].expand_as(target_weights)
+            pair_normalizer = (target_weights + axial_weights).clamp_min(1e-8)
+            target_pair_log_weights = (target_weights / pair_normalizer).clamp_min(1e-8).log()
+            axial_pair_log_weights = (axial_weights / pair_normalizer).clamp_min(1e-8).log()
+            aux_logits = torch.where(
+                has_nonaxial_target,
+                target_pair_log_weights,
+                axial_pair_log_weights.detach(),
+            ).unsqueeze(1)
+            aux_weight = self.gate_targeted_evidence_rank_aux_weight
         elif self.enable_axial_sagittal_rank_aux_loss:
             if fusion_weights is None:
                 raise RuntimeError(
