@@ -1103,13 +1103,14 @@ class SagittalNormalRescueGate(nn.Module):
 
 
 class SagittalReliabilityCalibrator(nn.Module):
-    """Learn a low-capacity sagittal-only reliability residual from detached evidence."""
+    """Learn low-capacity sagittal reliability residuals from detached evidence."""
 
     def __init__(
         self,
         hidden_dim: int = 32,
         residual_limit: float = 1.0,
         dropout: float = 0.05,
+        coronal_suppression: float = 0.0,
     ) -> None:
         super().__init__()
         if hidden_dim <= 0:
@@ -1118,8 +1119,11 @@ class SagittalReliabilityCalibrator(nn.Module):
             raise ValueError("residual_limit must be > 0.")
         if not 0.0 <= dropout <= 1.0:
             raise ValueError("dropout must be in [0, 1].")
+        if not 0.0 <= coronal_suppression <= 1.0:
+            raise ValueError("coronal_suppression must be in [0, 1].")
 
         self.residual_limit = float(residual_limit)
+        self.coronal_suppression = float(coronal_suppression)
         input_dim = 28
         self.norm = nn.LayerNorm(input_dim)
         self.adapter = nn.Sequential(
@@ -1195,6 +1199,9 @@ class SagittalReliabilityCalibrator(nn.Module):
         )
         residual = torch.zeros_like(confidences)
         residual[:, 2, 0] = sagittal_residual.squeeze(-1)
+        if self.coronal_suppression > 0.0:
+            positive_sagittal_residual = sagittal_residual.clamp_min(0.0).squeeze(-1)
+            residual[:, 1, 0] = -self.coronal_suppression * positive_sagittal_residual
         return residual
 
 
@@ -2292,6 +2299,10 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_SAGITTAL_RELIABILITY_CALIBRATOR_DROPOUT",
             0.05,
         )
+        self.sagittal_reliability_calibrator_coronal_suppression = _env_unit_float(
+            "ANKLE_DECISION_SAGITTAL_RELIABILITY_CALIBRATOR_CORONAL_SUPPRESSION",
+            0.0,
+        )
         self.enable_gate_logit_rms_limit = _env_flag(
             "ANKLE_DECISION_ENABLE_GATE_LOGIT_RMS_LIMIT"
         )
@@ -2794,6 +2805,9 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                             self.sagittal_reliability_calibrator_residual_limit
                         ),
                         dropout=self.sagittal_reliability_calibrator_dropout,
+                        coronal_suppression=(
+                            self.sagittal_reliability_calibrator_coronal_suppression
+                        ),
                     )
                 if self.enable_gate_view_prior_debias:
                     self.gate_view_prior_debiaser = GateViewPriorDebiaser(
