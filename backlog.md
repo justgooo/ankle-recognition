@@ -1679,17 +1679,29 @@
 
 ---
 
+## 2026-05-12：Decision-Fusion Repair Follow-up（DFR-102 sagittal reliability calibrator，main-study）
+
+> **DFR-102 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-101 说明 pair-weight CE 仍被 base gate confidence gap 压住；DFR-102 因此新增独立的 sagittal-only reliability residual calibrator，用 detached per-view logits、当前 fusion weights、margin / abnormal probability / fused context 学一个低容量 confidence residual，不改 view classifier，也不固定平均权重。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？因为推理期仍是 learned full-fusion softmax，只给 sagittal confidence 一个 bounded residual。预期不是把三视角压平均，而是让 axial 保持多数，同时把 DFR-96/101 暴露的少量 sagittal evidence 样本推到 sagittal near-top/top；理想 top-weight 从 `94/0/0` 迁到约 `88-92/0-3/2-6`，用样本级 rescue 超过 matched equal-weight seed42。
+
+- [x] **DFR-102-RESNEXT-DECISION-256X8-SAGITTAL-RELIABILITY-CALIBRATOR-SEED42-MAIN-STUDY**：commit `3d7519d`，在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增默认关闭的 `SagittalReliabilityCalibrator`，通过 `ANKLE_DECISION_ENABLE_SAGITTAL_RELIABILITY_CALIBRATOR=1` 启用；calibrator 的输入全部 detached，输出只加到 sagittal confidence logit，并由 `ANKLE_DECISION_SAGITTAL_RELIABILITY_CALIBRATOR_RESIDUAL_LIMIT` 限幅。fresh adaptive `main-study` 使用 [autoresearch_logs/generated_search_configs/optuna_main_search_iter_0007_20260512_232402.yaml](/dataset/HH/ankle-ct/autoresearch_logs/generated_search_configs/optuna_main_search_iter_0007_20260512_232402.yaml)，study root [runs/optuna_main_autoloop/iter_0007_20260512_232402](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0007_20260512_232402)，GPU policy `--gpu-ids 0,1,2 --max-workers 3`，只跑 seed42 三个候选 residual limit `0.25/0.5/1.0`。设计思路：把 DFR-101 的 sagittal target 从 pair-weight 排序改成独立 learned reliability 校准，让 sagittal 在有证据样本上能跨过 base confidence gap，同时避免手写 trigger 与 coronal side-effect。预计改进效果：axial 仍应保持 top-weight 主导，但不再是 `94/0/0`；预期少量 sagittal-normal / sagittal true-margin 样本进入 sagittal top/near-top，coronal 不应成为主要迁移方向，从而让 learned full-fusion seed42 `val_acc` 超过 matched equal-weight `0.9255319148936170` 并尝试超过 DFR-25 seed42。实验实际结果：trial0 `0.9255319148936170/0.9736363636363636/0.9213483146067416`，trial1 `0.9148936170212766/0.9690909090909092/0.9024390243902439`，trial2 `0.9042553191489362/0.9563636363636363/0.8860759493670886`；best by `val_acc` then `val_auc` 为 trial0，`peak_vram≈2.15 GiB`, `total_seconds≈771.2` → **discard**（best seed42 只打平 matched equal-weight seed42，低于 DFR-25 seed42 `0.9361702127659575/0.9786363636363636/0.9333333333333333`。）
+- **fusion-weight 结论**：best trial0 的 [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0007_20260512_232402/trials/trial_0000/run/fusion_weight_analysis.json) 显示 calibrator 确实释放了 mean weight，但迁移方向仍不满足目标。mean fusion weight `axial/coronal/sagittal = 0.5577487625340198/0.2564358654967014/0.18581537117666386`；top-weight count/rate `axial=88/0.9362`, `coronal=6/0.0638`, `sagittal=0/0.0000`；`top_true_margin` 分布为 `axial/coronal/sagittal = 67/20/7`，`top_weight_hit_rate.true_margin=0.7553`。也就是说，本轮把 axial lock-in 松开了，但没有把任何样本交给 sagittal top routing，且 coronal 获得 6 个 top-weight；平均 sagittal mass 上升没有转化为目标 rescue 或 accuracy 增益。
+- **当前判断**：DFR-102 是 negative seed42 candidate study，不应 promotion 到 3-seed formal。它比 DFR-101 更能改变权重分布，但仍没有解决 “sagittal 有 true-margin 支持却拿不到 top routing” 的核心问题；继续扫 residual limit 只会在 coronal leakage 与 accuracy 回落之间移动。下一轮若继续主线，应停止纯幅度版 sagittal calibrator sweep，转向更强的 evidence-consistency 约束或离线审计 calibrator 特征在 `top_true_margin=sagittal` 样本上的可分性，明确约束迁移必须命中 sagittal 而不是 coronal。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-101 axial-sagittal rank auxiliary`：main-study 新增训练期 axial/sagittal pair-weight rank aux，只在 detached axial=abnormal、sagittal=normal 样本上触发，正常标签推高 sagittal reliability，异常标签保护 axial reliability，coronal 不参与。 |
-| 上次结果 | commit `f300ae3`，fresh study [runs/optuna_main_autoloop/iter_0006_20260512_224440](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0006_20260512_224440) 完成 `3/3` trials；best trial2 `val_acc/val_auc/val_f1=0.925532/0.975909/0.923077`，aux weight `0.0025`，peak_vram≈`2.15 GiB`。fusion telemetry mean weight `0.9096/0.0725/0.0179`，top-weight `94/0/0`，top_true_margin `83/2/9`；只打平 matched equal-weight seed42 且低于 DFR-25 seed42，本轮 discard。 |
-| 下一步 | 停止 axial-sagittal rank aux weight sweep；本轮证明加 target/protect 语义后会从 DFR-100 的 coronal over-migration 回到 axial re-collapse，仍不能释放 sagittal。下一轮应分析 DFR-25/100/101 的 sagittal-target 样本为什么存在巨大 confidence gap，或设计独立的 learned sagittal reliability calibrator，而不是继续用当前 pair weights 做 CE 排序或手写 sagittal trigger。 |
+| 上次实验 | `DFR-102 sagittal reliability calibrator`：main-study 新增 sagittal-only learned confidence residual calibrator，使用 detached logits / 当前 weights / margin 与 fused context 学 bounded residual，不改 view classifier，不固定 equal-weight。 |
+| 上次结果 | commit `3d7519d`，fresh study [runs/optuna_main_autoloop/iter_0007_20260512_232402](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0007_20260512_232402) 完成 `3/3` trials；best trial0 `val_acc/val_auc/val_f1=0.925532/0.973636/0.921348`，residual limit `0.25`，peak_vram≈`2.15 GiB`。fusion telemetry mean weight `0.5577/0.2564/0.1858`，top-weight `88/6/0`，top_true_margin `67/20/7`；只打平 matched equal-weight seed42 且低于 DFR-25 seed42，本轮 discard。 |
+| 下一步 | 停止单纯扩大/缩小 sagittal calibrator residual limit；本轮证明独立 calibrator 能松开 axial lock-in，但迁移仍流向 coronal/mean-mass 而不是 sagittal top routing。下一轮若继续该主线，应做 evidence-consistency / target-hit 约束或离线可分性审计，明确把 `top_true_margin=sagittal` 的样本推向 sagittal top/near-top，同时保护 DFR-25 axial-correct 样本。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 76（自 `DFR-26 seed123` 起至 `DFR-101 axial-sagittal rank auxiliary` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 77（自 `DFR-26 seed123` 起至 `DFR-102 sagittal reliability calibrator` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99 follow-up 离线分析不改变训练失败计数语义，但本轮 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
