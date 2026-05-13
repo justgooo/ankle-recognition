@@ -1775,17 +1775,29 @@
 
 ---
 
+## 2026-05-13：Decision-Fusion Repair Follow-up（DFR-110 DFR109 target drift audit，analysis）
+
+> **DFR-110 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-109 的主指标和 telemetry 同时失败，但原因可能是 trigger 覆盖错、non-target 阳性污染、或训练后 non-axial classifier drift；本轮只读既有 telemetry，定位下一轮是否还值得做训练机制。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果 DFR-109 只是阈值漏掉 confirmed targets，第三轮可以做更窄的 target filter；如果它已经导致 weak-view evidence drift，则应停止该 aux family，避免继续把 learned routing 推向不可用的 non-axial evidence。
+
+- [x] **DFR-110-RESNEXT-DECISION-256X8-DFR109-TARGET-DRIFT-AUDIT-ANALYSIS**：commit `53cb56e`，新增 [scripts/analyze_dfr110_dfr109_target_drift.py](/dataset/HH/ankle-ct/scripts/analyze_dfr110_dfr109_target_drift.py)，只读取 DFR-25 seed42、DFR-107 best、DFR-109 best 的 `fusion_weight_analysis.json`，复现 DFR-108 confirmed true targets、DFR-107 non-target-only pressure 与 DFR-109 best-trial FP-risk trigger；报告写入 `autoresearch_logs/dfr110_dfr109_target_drift_audit.json`。设计思路：不再继续扫 DFR-109 阈值/weight，而是检查该 mechanism 是否真的覆盖六个 confirmed targets、是否打到阳性 non-target-only、以及训练后 target view evidence 是否保持 sagittal。预计改进效果：若这条路线接近成功，应看到 true-target trigger overlap 高、positive non-target overlap 低、DFR-109 target cases 由 axial top 向 sagittal near-top/top 迁移，且 non-axial per-view sensitivity 不崩。实验实际结果：无新 checkpoint；DFR-25 reference `0.936170/0.978636/0.933333`；DFR-109 best `0.925532/0.978636/0.921348`。
+- **target drift 审计结论**：DFR-109 best trigger 在 DFR-25 telemetry 上只覆盖 `3/6` 个 DFR-108 true targets（`CTyin__CT24yin122/21/95`），同时命中 `2` 个 positive non-target-only 样本（`CTyang__CT24yang1__CT2412yang176/58`）。在六个 true targets 上，DFR-107 相对 DFR-25 是 `fixed=2 / broken=0 / net=+2`，但 DFR-109 是 `fixed=1 / broken=1 / stayed_wrong=3 / net=0`；DFR-109 还把这些 target 的 `top_true_margin` 从 DFR-25 的 `sagittal=6` 变成 `coronal=5, axial=1`，而 top-weight 仍全是 axial。典型坏例是 `CTyin__CT24yin109`：DFR-25 为 TN 且 sagittal true target，DFR-109 变成 FP，axial abnormal 从 `0.4774` 升到 `0.9257`，top weight 仍 axial `0.9591`。
+- **当前判断**：DFR-110 是 analysis-only discard，但给出明确第三轮方向。DFR-109 不是一个只需调 threshold 的 near miss：它漏 target、打中 positive non-target，并改变 weak-view evidence 分布。第三轮不应继续 DFR-109 family；更合格的 DFR-111 应验证“不给训练增加 aux，只在 inference/eval gate logit 上做极小 post-hoc sagittal rescue 是否存在可行上限”，用 DFR-25 checkpoint 离线扫描 DFR-108 六个 true targets 的 observable rule。如果离线 post-hoc 也不能提升 DFR-25 seed42，说明在不改 `train.py` scalar loss 的约束下这条 confirmed-target aux 路线应暂停。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-109 FP-risk axial-sagittal rank aux`：seed42 main-study，三档 FP-risk 触发阈值，尝试用 inactive detach 的 axial/sagittal pair CE workaround 缩小 DFR-107 的 non-target-only 压力。 |
-| 上次结果 | commit `34946a1`；study [runs/optuna_main_resnext_decision_256x8_dfr109_fp_risk_axsag_rank_aux](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr109_fp_risk_axsag_rank_aux)，best trial2 `0.925532/0.978636/0.921348`, peak_vram≈`2.15 GiB`，低于 DFR-25 seed42 且只打平 matched equal-weight seed42；telemetry mean weights `0.8771/0.0668/0.0561`，top-weight `94/0/0`，top_true_margin `87/5/2`，coronal/sagittal per-view sensitivity `0.0/0.0`。 |
-| 下一步 | 不继续扫 DFR-109 阈值/weight。先做 DFR-110 analysis：比较 DFR-25 / DFR-107 / DFR-109 在 DFR-108 六个 true targets 与 non-target-only 阳性样本上的 view logits、gate logits、触发覆盖和 correctness，判断 non-axial classifier collapse 是目标副作用还是阈值选错；再决定第三轮是否做更窄的 train-time mechanism 或直接停止该 aux family。 |
+| 上次实验 | `DFR-110 DFR109 target drift audit`：analysis-only 比较 DFR-25 / DFR-107 / DFR-109 在 DFR-108 六个 true targets 与 positive non-target-only 样本上的 trigger 覆盖、view evidence drift 和 correctness transition。 |
+| 上次结果 | commit `53cb56e`；报告 [autoresearch_logs/dfr110_dfr109_target_drift_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr110_dfr109_target_drift_audit.json)。DFR-109 trigger 只覆盖 `3/6` true targets，同时命中 `2` 个 positive non-target-only；true-target set 相对 DFR-25 为 `fixed=1/broken=1/stayed_wrong=3/net=0`，且 top_true_margin 从 DFR-25 的 `sagittal=6` 漂移到 DFR-109 的 `coronal=5, axial=1`，top-weight 仍 `94/0/0`。 |
+| 下一步 | 不继续 DFR-109 aux family。第三轮 DFR-111 做 DFR-25 checkpoint 的离线 post-hoc sagittal rescue 上限扫描：只调 eval-side gate logits / weights，不训练，验证 DFR-108 六个 target 是否可由 observable rule 修复而不打坏 DFR-25 正确样本；若离线上限也不能超过 DFR-25 seed42，则暂停该 confirmed-target aux 路线。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 84（自 `DFR-26 seed123` 起至 `DFR-109 FP-risk axial-sagittal rank aux` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99/106/108 follow-up 离线分析不改变训练失败计数语义，但 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 85（自 `DFR-26 seed123` 起至 `DFR-110 DFR109 target drift audit` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99/106/108/110 follow-up 离线分析不改变训练失败计数语义，但 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
