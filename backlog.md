@@ -1787,17 +1787,29 @@
 
 ---
 
+## 2026-05-13：Decision-Fusion Repair Follow-up（DFR-111 confirmed-target posthoc scan，analysis）
+
+> **DFR-111 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-110 显示 train-time aux 会改变 weak-view evidence，本轮改为不训练、不改 checkpoint，只在 DFR-25 telemetry 上模拟 sagittal gate-logit residual，直接测 confirmed targets 的可达上限。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果 DFR-108 六个 sagittal target 的 post-hoc 上限明显高于 DFR-25，说明真正问题不是 sagittal evidence 不存在，而是 gate 选择机制无法表达；后续可以把可观测 rule 做成 eval-side calibration 或低风险 runtime gate residual，而不是继续污染训练目标。
+
+- [x] **DFR-111-RESNEXT-DECISION-256X8-CONFIRMED-TARGET-POSTHOC-SCAN-ANALYSIS**：commit `628294e`，新增 [scripts/analyze_dfr111_confirmed_target_posthoc.py](/dataset/HH/ankle-ct/scripts/analyze_dfr111_confirmed_target_posthoc.py)，只读取 DFR-25 seed42 `fusion_weight_analysis.json`，复现 DFR-108 confirmed sagittal target 集合，并在离线概率混合上扫描 oracle target-only 与 label-free observable `fp_risk` 等规则的 sagittal gate-logit residual；完整报告写入 `autoresearch_logs/dfr111_confirmed_target_posthoc_scan.json`。设计思路：不再训练 aux；先证明或否定 “少量 sagittal target 被 gate 压住” 是否有真实 accuracy 上限。预计改进效果：oracle target-only 若能修复 DFR-25 的 FP 而不打坏样本，就说明 routing target 本身是有效的；observable rule 若也能净增，则可作为下一步模型内 eval-side calibration 的候选。
+- **posthoc 扫描结论**：oracle true-target-only residual `6.0` 只触发六个 DFR-108 targets，把它们全部推为 sagittal top，`top-weight axial/coronal/sagittal = 88/0/6`，离线 `val_acc/auc/f1 = 0.978723/0.989091/0.976744`，相对 DFR-25 `fixed=4 / broken=0 / net=+4`，修复 `CTyin__CT24yin113/122/21/95` 四个 FP。最佳非 oracle `fp_risk` rule（`axial_min=0.4`, `axial_max=0.9`, `fused_abnormal_min=0.8`, `sagittal_normal_min=0.55`, `coronal_abnormal_max=0.525`, residual `5.0`）只触发 `CTyin__CT24yin21/95` 两个 target，`top-weight = 92/0/2`，离线 `0.957447/0.983182/0.954545`，`fixed=2 / broken=0 / net=+2`。覆盖更广的 observable rules 能触发 5 个 target，但会同时触发阳性样本并造成 `broken=6`，不可用。
+- **当前判断**：DFR-111 是 **analysis-positive keep**，但不是训练模型 promotion。它回答了用户方向里的关键问题：存在非 `94/0/0` 的离线上限和一个 label-free observable rule 可以超过 equal-weight / DFR-25 seed42，同时保持 axial-majority；问题是训练 aux 会污染 weak-view evidence。下一步若继续，应把最佳 `fp_risk` posthoc rule 做成默认关闭的 eval-side gate residual（只作用 inference/telemetry，不参与训练），先跑 seed42 formal checkpoint-compatible validation；若稳定，再做 3-seed posthoc telemetry，对比是否存在 3-seed 都非 `94/0/0` 且 mean acc 超过 equal-weight 的分布。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-110 DFR109 target drift audit`：analysis-only 比较 DFR-25 / DFR-107 / DFR-109 在 DFR-108 六个 true targets 与 positive non-target-only 样本上的 trigger 覆盖、view evidence drift 和 correctness transition。 |
-| 上次结果 | commit `53cb56e`；报告 [autoresearch_logs/dfr110_dfr109_target_drift_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr110_dfr109_target_drift_audit.json)。DFR-109 trigger 只覆盖 `3/6` true targets，同时命中 `2` 个 positive non-target-only；true-target set 相对 DFR-25 为 `fixed=1/broken=1/stayed_wrong=3/net=0`，且 top_true_margin 从 DFR-25 的 `sagittal=6` 漂移到 DFR-109 的 `coronal=5, axial=1`，top-weight 仍 `94/0/0`。 |
-| 下一步 | 不继续 DFR-109 aux family。第三轮 DFR-111 做 DFR-25 checkpoint 的离线 post-hoc sagittal rescue 上限扫描：只调 eval-side gate logits / weights，不训练，验证 DFR-108 六个 target 是否可由 observable rule 修复而不打坏 DFR-25 正确样本；若离线上限也不能超过 DFR-25 seed42，则暂停该 confirmed-target aux 路线。 |
+| 上次实验 | `DFR-111 confirmed-target posthoc scan`：analysis-only 在 DFR-25 seed42 telemetry 上扫描 sagittal gate-logit residual，上限分 oracle true-target-only 与 label-free observable fp-risk rule。 |
+| 上次结果 | commit `628294e`；报告 [autoresearch_logs/dfr111_confirmed_target_posthoc_scan.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr111_confirmed_target_posthoc_scan.json)。Oracle target-only `residual=6.0` 离线达到 `0.978723/0.989091/0.976744`，top-weight `88/0/6`，`fixed=4/broken=0`；最佳非 oracle `fp_risk` rule 离线达到 `0.957447/0.983182/0.954545`，top-weight `92/0/2`，只触发 `CTyin21/95`，`fixed=2/broken=0`。 |
+| 下一步 | 继续这条方向时，优先把 DFR-111 最佳 `fp_risk` rule 做成默认关闭的 eval-side gate residual / posthoc calibration，并用现有 DFR-25 checkpoint 做 seed42 validation；不要再做 train-time CE aux 阈值扫描。若 eval-side seed42 复现离线增益，再做 3-seed posthoc telemetry，检验是否存在 3-seed 都非 `94/0/0` 且 mean acc 超过 equal-weight 的 learned/posthoc distribution。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 85（自 `DFR-26 seed123` 起至 `DFR-110 DFR109 target drift audit` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99/106/108/110 follow-up 离线分析不改变训练失败计数语义，但 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 0（DFR-111 作为 analysis-positive keep 重置；注意它不是训练模型 promotion，当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
