@@ -17,6 +17,11 @@ echo "Host: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader
 
+DFR129_GPU_IDS=4,5,6
+export CUDA_VISIBLE_DEVICES="${DFR129_GPU_IDS}"
+echo "DFR129 selected physical GPU ids: ${DFR129_GPU_IDS}"
+echo "Overridden CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+
 export TORCH_HOME=.torch-cache/torch
 export HF_HOME=.torch-cache/hf
 export XDG_CACHE_HOME=.torch-cache/xdg
@@ -26,7 +31,7 @@ export HUGGINGFACE_HUB_CACHE=.torch-cache/hf/hub
 
 .venv/bin/python scripts/autoresearch_main.py \
   --search-config configs/optuna_main_search_resnext_decision_256x8_dfr129_axial_fp_risk_normal_aux.yaml \
-  --gpu-ids 0,1,2 \
+  --gpu-ids "${DFR129_GPU_IDS}" \
   --max-workers 3 \
   --max-used-memory-mb 1024 \
   --max-utilization 20
