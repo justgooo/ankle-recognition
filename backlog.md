@@ -1763,17 +1763,29 @@
 
 ---
 
+## 2026-05-13：Decision-Fusion Repair Follow-up（DFR-109 FP-risk axial-sagittal rank auxiliary，main-study）
+
+> **DFR-109 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-108 定位到 DFR-107 的全 batch class-coded CE 会被大量 non-target-only 阳性样本抵消；本轮只在当前模型自身呈现 `fused abnormal + axial abnormal + sagittal normal` 的 FP-risk 形态时更新 axial/sagittal gate rank，并对 inactive 样本 detach，尽量实现 no-op。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？推理期仍是普通 learned decision fusion，不固定均权；目标是保留 axial 在多数样本上的主导，只把少量 DFR-108 normal-rescue 形态样本从 axial top 推到 sagittal top/near-top，预计 top-weight 从 DFR-25 的 `94/0/0` 变成约 `90-92/0-1/2-4`，从而修复 FP 而不引入 broad averaging。
+
+- [x] **DFR-109-RESNEXT-DECISION-256X8-FP-RISK-AXIAL-SAGITTAL-RANK-AUX-SEED42-MAIN-STUDY**：commit `34946a1`，在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增默认关闭的 `ANKLE_DECISION_ENABLE_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_LOSS=1`，并通过 [configs/optuna_main_search_resnext_decision_256x8_dfr109_fp_risk_axsag_rank_aux.yaml](/dataset/HH/ankle-ct/configs/optuna_main_search_resnext_decision_256x8_dfr109_fp_risk_axsag_rank_aux.yaml) 运行 seed42 三个 FP-risk 触发阈值；Slurm job `486086` 在 `RTXA6Kq/node16` 完成。设计思路：绕开 DFR-107 的 broad non-target-only 压力，把监督缩到 detached 当前输出已经像 FP 的 axial+sagittal 对；label0 promotes sagittal-over-axial，label1 preserves axial-over-sagittal，inactive samples detach。预计改进效果：全局仍保持 axial-majority，但少数 sagittal-normal rescue 样本应获得 top/near-top routing，coronal 不被释放，learned full-fusion 有机会超过 matched equal-weight seed42。实验实际结果：trial0 `0.9148936170212766/0.9781818181818183/0.9090909090909091`，trial1 `0.9148936170212766/0.9786363636363637/0.9090909090909091`，trial2 `0.9255319148936170/0.9786363636363636/0.9213483146067416`；best by `val_acc` then `val_auc` 为 trial2，`peak_vram≈2.15 GiB`, `total_seconds≈520.8` → **discard**（只打平 matched equal-weight seed42，低于 DFR-25 seed42 `0.9361702127659575/0.9786363636363636/0.9333333333333333`）。
+- **fusion-weight 结论**：best trial2 的 [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr109_fp_risk_axsag_rank_aux/trials/trial_0002/run/fusion_weight_analysis.json) 显示 FP-risk aux 没有释放 sagittal top routing。mean fusion weight `axial/coronal/sagittal = 0.8771388213685218/0.06678087434711609/0.056080307365652726`；`top_weight_view_distribution = axial 94, coronal 0, sagittal 0`；`top_true_margin_view_distribution = axial 87, coronal 5, sagittal 2`；full-fusion metrics `0.9255319148936170/0.9786363636363636/0.9213483146067416`。更关键的是，本 checkpoint 的 coronal / sagittal per-view sensitivity 都是 `0.0`，说明这条窄 aux 不仅没把 sagittal 推到 top，还让 non-axial 单视图分类器在阳性上失效。
+- **当前判断**：DFR-109 是 negative seed42 candidate study，不应 promotion 到 3-seed formal。它排除了“仅靠更窄的 FP-risk axial-sagittal CE workaround 就能实现 DFR-108 下一步”的假设；由于现有 `train.py` aux hook 只能消费 `_view_logits/_log_vars` CE，真正 label-invariant 的 target-vs-axial scalar loss 不能在不改 `train.py` 的前提下直接表达。下一轮应转为 analysis-first：比较 DFR-25 / DFR-107 / DFR-109 在 DFR-108 六个 true targets 与 non-target-only 阳性样本上的 view logits、gate logits 和触发覆盖，确认 non-axial classifier collapse 是训练目标副作用还是 DFR-109 阈值覆盖错误；不要继续扫 DFR-109 的阈值或 weight。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-108 DFR107 aux encoding audit`：analysis-only 复现 DFR-107 confirmed-target rank-margin target，并审计当前 train.py binary patient-label CE aux hook 对 target-vs-axial gate log-weight 的等价梯度方向。 |
-| 上次结果 | commit `6a4939b`；报告 [autoresearch_logs/dfr107_confirmed_target_aux_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr107_confirmed_target_aux_audit.json)。无新 checkpoint；DFR-25 seed42 reference `0.936170/0.978636/0.933333`，mean weight `0.8886/0.0791/0.0324`，top-weight `94/0/0`；DFR-107 best `0.936170/0.975909/0.930233`，mean weight `0.8185/0.1132/0.0683`，top-weight `94/0/0`。DFR25-source audit：true targets `6` 个、全为 label0 sagittal，覆盖 `4/6` DFR25 errors 与 `6/9` non-axial true-margin，normal-rescue `4` 且 helpful `4/harmful 0`，但 DFR107 target top/near-top `0/6`；同时 `44` 个 non-target-only 样本经 CE hook 产生 axial-reinforcing pressure。 |
-| 下一步 | 不继续扫 DFR-107 的 margin/gap/weight。下一轮若训练，应做一个离散机制：将 confirmed-target supervision 改成 label-invariant target-vs-axial gate objective，并且只对 DFR25 wrong 或 non-axial true-margin confirmed scope 生效；inactive / non-target-only 样本必须 no-op，目标是让少量 confirmed sagittal/coronal target 进入 top/near-top，同时保持全局 axial-majority。 |
+| 上次实验 | `DFR-109 FP-risk axial-sagittal rank aux`：seed42 main-study，三档 FP-risk 触发阈值，尝试用 inactive detach 的 axial/sagittal pair CE workaround 缩小 DFR-107 的 non-target-only 压力。 |
+| 上次结果 | commit `34946a1`；study [runs/optuna_main_resnext_decision_256x8_dfr109_fp_risk_axsag_rank_aux](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr109_fp_risk_axsag_rank_aux)，best trial2 `0.925532/0.978636/0.921348`, peak_vram≈`2.15 GiB`，低于 DFR-25 seed42 且只打平 matched equal-weight seed42；telemetry mean weights `0.8771/0.0668/0.0561`，top-weight `94/0/0`，top_true_margin `87/5/2`，coronal/sagittal per-view sensitivity `0.0/0.0`。 |
+| 下一步 | 不继续扫 DFR-109 阈值/weight。先做 DFR-110 analysis：比较 DFR-25 / DFR-107 / DFR-109 在 DFR-108 六个 true targets 与 non-target-only 阳性样本上的 view logits、gate logits、触发覆盖和 correctness，判断 non-axial classifier collapse 是目标副作用还是阈值选错；再决定第三轮是否做更窄的 train-time mechanism 或直接停止该 aux family。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 83（自 `DFR-26 seed123` 起至 `DFR-108 DFR107 aux encoding audit` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99/106/108 follow-up 离线分析不改变训练失败计数语义，但 ledger 仍按 discard 记录。） |
+| 连续 discard 计数 | 84（自 `DFR-26 seed123` 起至 `DFR-109 FP-risk axial-sagittal rank aux` 连续为 discard；DFR-57/60/61/62/63/64/65/66/67/68/69/70/71/72/73/74/75/76/77/78/79/80/81/82/83/84/85/96/99/106/108 follow-up 离线分析不改变训练失败计数语义，但 ledger 仍按 discard 记录。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
