@@ -2110,17 +2110,29 @@
 
 ---
 
+### DFR-140 autoresearch handoff export（2026-05-14）
+
+> **DFR-140 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-139 已明确没有当前可训练目标；本轮把 DFR-116 branch、DFR-138 review packet 与 DFR-139 training gate 汇总成 handoff，避免后续循环忘记当前边界并误启动训练。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？它本身不提升指标；它保护当前 best posthoc branch，并把下一步必须回答的复核问题收束到 7 个 remaining patients。只有复核答案识别出可表达模型目标后，才可能开启新的有效实验。
+
+- [x] **DFR-140-RESNEXT-DECISION-AUTORESEARCH-HANDOFF-EXPORT-ANALYSIS**：commit `35da418`，新增 [scripts/report_dfr140_handoff.py](/dataset/HH/ankle-ct/scripts/report_dfr140_handoff.py)，读取 DFR-119 DFR116 branch repro report、DFR-138 review packet 与 DFR-139 training gate，生成 [autoresearch_logs/dfr140_handoff.md](/dataset/HH/ankle-ct/autoresearch_logs/dfr140_handoff.md)。设计思路：不训练、不读 test、不改数据，将当前 best posthoc branch、remaining review packet 和 no-training gate 汇总到单一 handoff 文件。
+- **实验实际结果**：handoff 写入成功。DFR-25 reference mean 为 `0.939716/0.967727/0.935893`；DFR-116 strict combo mean 为 `0.950355/0.971515/0.946965`，fixed cases 为 `123:CTyang__CT24yang1__CT2412yang147`、`42:CTyin__CT24yin21`、`42:CTyin__CT24yin95`，broken none；combined-clean DFR-116 诊断指标保持 `0.959707/0.982439/0.955819`。Training gate 仍为 `training_go=false`，原因是 7 个 remaining patients / 11 cases 均需要 duplicate/annotation 或 strong axial FP review answers → **keep as handoff/governance asset**。
+- **当前判断**：当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean；当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。没有人类复核答案前，不应启动新的训练、阈值扩张或采样实验。若必须继续 autoresearch，只允许做只读的 reproducibility/archive/manifest 工作；下一轮 DFR-141 可生成当前 DFR116/DFR138/DFR139/DFR140 资产清单与复现 checklist，继续保持 training blocked。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-139 training gate from review packet`：把 DFR-138 review packet 转成训练 go/no-go 门控。 |
-| 上次结果 | commit `50800a3`；`training_go=false`，`training_allowed_now_count=0`，当前 best branch 仍是 DFR-116 strict combo；训练 blocked until review answers identify a model-expressible target. |
-| 下一步 | DFR-140：read-only handoff/export, summarizing DFR-116 branch, DFR-138 review packet, and DFR-139 training gate into a compact handoff Markdown. Keep training blocked unless human review answers arrive. |
+| 上次实验 | `DFR-140 autoresearch handoff export`：把 DFR-116 branch、DFR-138 review packet 和 DFR-139 training gate 汇总成 compact handoff。 |
+| 上次结果 | commit `35da418`；生成 `autoresearch_logs/dfr140_handoff.md`；DFR-116 strict combo mean `0.950355/0.971515/0.946965`，combined-clean diagnostic `0.959707/0.982439/0.955819`；`training_go=false` 仍成立。 |
+| 下一步 | DFR-141：read-only reproducibility/archive manifest for DFR-116/138/139/140 assets and required review checklist. Keep training blocked unless human review answers identify a model-expressible target. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-139 是 analysis-positive training gate；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-140 是 analysis-positive handoff/governance asset；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
