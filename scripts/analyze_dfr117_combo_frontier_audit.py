@@ -270,7 +270,6 @@ def evaluate_extra_candidate(
         logits, _records = apply_combo_logits(arrays)
         extra_mask, extra_targets, extra_rows = apply_payload(logits, arrays, payload)
         item = evaluate_logits(arrays, logits, combo_preds=combo_pred_cache[seed])
-        top = np.argmax(item["weight_summary"]["_weights"], axis=1) if False else None
         item.pop("preds")
         item.pop("abnormal")
         target_trigger_counts = Counter()

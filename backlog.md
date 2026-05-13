@@ -1854,17 +1854,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-117 combo frontier audit，analysis）
+
+> **DFR-117 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-116 已经把两类高精度 routing rescue 放进模型内；本轮不训练、不改 checkpoint，只审计是否存在第三个同样 label-free 的安全 residual，避免在没有证据的情况下继续放宽当前 gate。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果某个额外 FP-normal 或 FN-abnormal trigger 能在 `broken=0` 且 `incremental_broken_vs_combo=0` 下把 fixed 从 3 提到 4+，就能在保持 DFR-116 主体 routing 的基础上继续提高 mean val_acc；否则应冻结 DFR-116 combo，不再做阈值宽扫。
+
+- [x] **DFR-117-RESNEXT-DECISION-256X8-COMBO-FRONTIER-AUDIT-ANALYSIS**：commit `078560a`，新增 [scripts/analyze_dfr117_combo_frontier_audit.py](/dataset/HH/ankle-ct/scripts/analyze_dfr117_combo_frontier_audit.py)，固定 DFR-116 combo 后，对 DFR-114 FP-normal-rescue family 与 DFR-115 FN-abnormal-rescue family 增加一个额外 residual candidate 做 analysis-only frontier audit；完整报告写入 [autoresearch_logs/dfr117_combo_frontier_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr117_combo_frontier_audit.json)。设计思路：以 DFR-116 的真实可部署 combo 为 baseline，候选必须同时满足不破坏 DFR-25-correct 样本和不破坏 DFR-116 已修复样本；不使用 test，不训练。预计改进效果：若存在安全第三机制，应出现 `improved_no_harm_candidate_count > 0`，并且 aggregate top-weight 仍保持 axial-majority。实验实际结果：审计 `3329` 个去重额外候选，`1556` 个 no-harm，但 `improved_no_harm_candidate_count=0`。best no-harm 是 coronal FN-family residual `4.0`，触发 `20` 个样本，AUC 从 DFR-116 `0.971515` 升到 `0.979091`，但 fixed 仍为 `3`、`val_acc/f1` 仍为 `0.950355/0.946965`，aggregate top-weight 变为 `236/20/26`，没有新增正确预测。best fixed>combo 候选是 sagittal FP-family residual `6.0`，fixed 升到 `4`，但把 seed42 `CTyang176/58` 两个阳性打坏，mean accuracy 降到 `0.946809`。DFR-116 后仍剩 `7` FP + `7` FN；FP 多数 axial abnormal 超过 DFR-113 safety cap，FN 多数只有 sub-threshold abnormal evidence 或 single weak positive view no support → **discard third-stage expansion / keep DFR-116 strict combo**。
+- **当前判断**：DFR-117 关闭了“继续往当前两个 posthoc family 周边加一个第三 residual 就能安全提高 accuracy”的假设。DFR-116 strict combo 应作为当前 posthoc calibration branch 固定；下一轮若继续优化，不应再阈值扩张，而应做 DFR-118：整理 DFR-116 branch 的正式配置/报告，或转向训练侧能减少这些强 axial-FP / weak-FN 的 per-view evidence drift，但必须先 analysis-only 证明候选不破坏 DFR-116 已修复样本。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-116 model-internal posthoc combo gate`：把 DFR-115 axial FN rescue 做成默认关闭模型内 eval-side branch，并与 DFR-113 strict FP gate 同时验证真实 telemetry。 |
-| 上次结果 | commit `1a9752a`；三份 telemetry 写入 `runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s*/fusion_weight_analysis.json`。真实模型前向复现 combo：seed42 `0.957447/0.983182/0.954545` top `92/0/2`，seed123 `0.946809/0.962273/0.943820` top `50/0/44`，seed456 unchanged `0.946809/0.969091/0.942529` top `94/0/0`；mean `0.950355/0.971515/0.946965`，aggregate top `236/0/46`，`fixed=3/broken=0`。 |
-| 下一步 | DFR-117：不要直接放宽 DFR-116 两个规则；先做 combo safety/frontier audit，围绕当前触发集寻找是否存在 `broken=0` 且 `fixed>3` 的第三个 label-free rescue mechanism，并记录剩余 DFR-25/DFR-116 错误的不可覆盖原因。 |
+| 上次实验 | `DFR-117 combo frontier audit`：固定 DFR-116 combo 后，审计一个额外 FP-normal / FN-abnormal residual candidate 是否能安全提高 fixed 覆盖。 |
+| 上次结果 | commit `078560a`；报告 [autoresearch_logs/dfr117_combo_frontier_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr117_combo_frontier_audit.json)。`3329` 个额外候选中 `1556` 个 no-harm，但没有 improved no-harm；best no-harm 只把 AUC 提到 `0.979091`，`val_acc/f1` 与 fixed 都不变；best fixed>3 候选 fixed=4 但 broken=2，mean accuracy 降到 `0.946809`。 |
+| 下一步 | DFR-118：不要再阈值扩张 DFR-116 combo。优先做正式 branch consolidation / reproducibility packaging，或做 analysis-only per-view evidence-drift audit，寻找是否有训练侧改动能减少强 axial-FP 与 weak-FN，同时显式保护 DFR-116 已修复的 3 个样本。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-116 是 model-internal analysis-positive keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 是 DFR-116 combo。） |
+| 连续 discard 计数 | 1（DFR-117 third-stage expansion discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
