@@ -1887,17 +1887,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-120 DFR-116 false-case report，analysis）
+
+> **DFR-120 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-116 已经修复 3 个高精度 routing 错误，本轮只分析剩余错误是否仍是 gate/routing 机制问题，还是已经转成 per-view evidence、slice sampling 或数据审计问题。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果剩余错误中存在历史变体可修且 collateral 很低的子集，后续可以把该机制压缩为更窄训练改动；如果没有，就应停止盲目改 gate，先做数据/采样/单视角敏感性审计，避免把 learned fusion 的既有收益打坏。
+
+- [x] **DFR-120-RESNEXT-DECISION-256X8-DFR116-FALSE-CASE-REPORT-ANALYSIS**：commit `0bf3d71`，新增 [scripts/report_dfr120_dfr116_false_cases.py](/dataset/HH/ankle-ct/scripts/report_dfr120_dfr116_false_cases.py)，读取 DFR-116 剩余错误、DFR-118 历史变体修复索引与 DFR-116 telemetry，按 patient recurrence、evidence bucket、action bucket 和 historical fixer collateral 分层；完整报告写入 [autoresearch_logs/dfr120_dfr116_false_case_report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr120_dfr116_false_case_report.json)。设计思路：不训练、不读 test、不扫新阈值；判断 DFR-116 后剩余 14 个错误是否还有安全模型侧候选。预计改进效果：若有可操作模型机制，应出现 `safe_training_mechanism_candidates` 或低 collateral historical fixer；否则应明确下一轮转向 sampling / per-view sensitivity / data audit。实验实际结果：剩余错误为 `7` FP + `7` FN；evidence bucket 为 `strong_axial_fp_above_safety_cap=6`, `axial_fp_above_safety_cap=1`, `fn_only_subthreshold_abnormal=4`, `fn_single_weak_positive_view_no_support=2`, `fn_no_view_reaches_weak_abnormal=1`。按 patient recurrence，`CTyang...3` 与 `CTyang...1` 两个阳性 FN 各跨 `3` seed 重复，`CTyin113/95` 两个强 axial-FP 各跨 `2` seed 重复。所有 `14` 个 case 都曾被某些历史变体修复，但 `safe_historical_fixer_case_count=0`，`safe_training_mechanism_candidates=[]`；最优 historical fixer 通常仍会带来 `11-21+` 个 combo-correct break → **discard as direct model-side candidate / keep analysis**。
+- **当前判断**：DFR-120 说明 DFR-116 后的剩余错误不适合继续用 gate threshold 或历史训练变体推进；下一轮应做 DFR-121 sampling/per-view sensitivity audit，优先审计跨 seed 重复的 `CTyang...3`、`CTyang...1`、`CTyang...54` 这类 FN 是否因 8-slice sampling/trim 造成关键异常证据缺失，同时审计强 axial-FP 重复样本是否是单视角 classifier 过拟合或标签/病例边界问题。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-119 DFR-116 branch reproduction package`：把当前 DFR-116 strict combo posthoc branch 固化为可复现报告。 |
-| 上次结果 | commit `fca61d0`；报告 [autoresearch_logs/dfr119_dfr116_branch_repro_report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr119_dfr116_branch_repro_report.json)。`status=pass`，`9/9` 个检查通过；DFR116 mean `0.950355/0.971515/0.946965`、top-weight `236/0/46`，fixed exactly `42:CTyin21`, `42:CTyin95`, `123:CTyang147`，broken `[]`。 |
-| 下一步 | DFR-120：围绕 DFR-116 剩余 `14` 个错误做 branch-aware false-case report，拆分强 axial-FP、弱 FN、疑似数据/标注/采样问题与仍可能值得训练侧机制处理的子集；继续不使用 test，不做 broad threshold expansion。 |
+| 上次实验 | `DFR-120 DFR-116 false-case report`：对 DFR-116 剩余 `14` 个 validation 错误做 branch-aware 分层报告。 |
+| 上次结果 | commit `0bf3d71`；报告 [autoresearch_logs/dfr120_dfr116_false_case_report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr120_dfr116_false_case_report.json)。剩余 `7` FP + `7` FN；`safe_training_mechanism_candidates=[]`，`safe_historical_fixer_case_count=0`。高优先级为跨 seed 重复 FN `CTyang...3` / `CTyang...1` 与强 axial-FP `CTyin113/95`。 |
+| 下一步 | DFR-121：做 sampling/per-view sensitivity audit，优先检查跨 seed 重复 FN 是否因 8-slice sampling/trim 缺失异常证据，以及强 axial-FP 是否是单视角 classifier 过拟合或标签/病例边界问题；继续不读 test、不改数据文件。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-119 branch consolidation keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 1（DFR-120 无直接模型侧候选；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
