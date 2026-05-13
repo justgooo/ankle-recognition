@@ -1102,6 +1102,81 @@ class SagittalNormalRescueGate(nn.Module):
         return residual
 
 
+class PosthocFPRiskSagittalGate(nn.Module):
+    """DFR-112 eval-side sagittal boost for high-precision axial-FP risk cases."""
+
+    def __init__(
+        self,
+        residual: float = 5.0,
+        axial_abnormal_min: float = 0.4,
+        axial_abnormal_max: float = 0.88,
+        sagittal_normal_min: float = 0.55,
+        coronal_abnormal_max: float = 0.525,
+        fused_abnormal_min: float = 0.8,
+        confidence_gap_max: float = 5.0,
+    ) -> None:
+        super().__init__()
+        if residual <= 0.0:
+            raise ValueError("residual must be > 0.")
+        for name, value in (
+            ("axial_abnormal_min", axial_abnormal_min),
+            ("axial_abnormal_max", axial_abnormal_max),
+            ("sagittal_normal_min", sagittal_normal_min),
+            ("coronal_abnormal_max", coronal_abnormal_max),
+            ("fused_abnormal_min", fused_abnormal_min),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1], got {value}.")
+        if axial_abnormal_min > axial_abnormal_max:
+            raise ValueError("axial_abnormal_min must be <= axial_abnormal_max.")
+        if confidence_gap_max <= 0.0:
+            raise ValueError("confidence_gap_max must be > 0.")
+        self.residual = float(residual)
+        self.axial_abnormal_min = float(axial_abnormal_min)
+        self.axial_abnormal_max = float(axial_abnormal_max)
+        self.sagittal_normal_min = float(sagittal_normal_min)
+        self.coronal_abnormal_max = float(coronal_abnormal_max)
+        self.fused_abnormal_min = float(fused_abnormal_min)
+        self.confidence_gap_max = float(confidence_gap_max)
+
+    def forward(
+        self,
+        confidences: torch.Tensor,
+        view_logits: torch.Tensor,
+        fusion_temperature: float,
+    ) -> torch.Tensor:
+        if confidences.ndim != 3 or confidences.shape[1:] != (3, 1):
+            raise ValueError("confidences must have shape (batch, 3, 1).")
+        if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+            raise ValueError("view_logits must have shape (batch, 3, classes).")
+        if view_logits.shape[-1] != 2:
+            raise ValueError("PosthocFPRiskSagittalGate requires binary logits.")
+
+        detached_logits = view_logits.detach()
+        detached_confidences = confidences.detach().squeeze(-1)
+        scaled_confidences = detached_confidences / max(float(fusion_temperature), 1e-6)
+        base_weights = torch.softmax(scaled_confidences, dim=1)
+        fused_logits = (detached_logits * base_weights.unsqueeze(-1)).sum(dim=1)
+        fused_abnormal = torch.softmax(fused_logits, dim=-1)[:, 1]
+        view_probs = torch.softmax(detached_logits, dim=-1)
+        abnormal_probs = view_probs[..., 1]
+        normal_probs = view_probs[..., 0]
+        confidence_gap = scaled_confidences[:, 0] - scaled_confidences[:, 2]
+
+        trigger = (
+            scaled_confidences.argmax(dim=1).eq(0)
+            & fused_abnormal.ge(self.fused_abnormal_min)
+            & abnormal_probs[:, 0].ge(self.axial_abnormal_min)
+            & abnormal_probs[:, 0].le(self.axial_abnormal_max)
+            & normal_probs[:, 2].ge(self.sagittal_normal_min)
+            & abnormal_probs[:, 1].le(self.coronal_abnormal_max)
+            & confidence_gap.le(self.confidence_gap_max)
+        )
+        residual = torch.zeros_like(confidences)
+        residual[:, 2, 0] = self.residual * trigger.to(dtype=residual.dtype)
+        return residual
+
+
 class SagittalReliabilityCalibrator(nn.Module):
     """Learn low-capacity sagittal reliability residuals from detached evidence."""
 
@@ -2348,6 +2423,37 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_SAGITTAL_NORMAL_RESCUE_GATE_WINDOW",
             0.15,
         )
+        self.enable_posthoc_fp_risk_sagittal_gate = _env_flag(
+            "ANKLE_DECISION_ENABLE_POSTHOC_FP_RISK_SAGITTAL_GATE"
+        )
+        self.posthoc_fp_risk_sagittal_gate_residual = _env_positive_float(
+            "ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_RESIDUAL",
+            5.0,
+        )
+        self.posthoc_fp_risk_sagittal_gate_axial_abnormal_min = _env_unit_float(
+            "ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_AXIAL_ABNORMAL_MIN",
+            0.4,
+        )
+        self.posthoc_fp_risk_sagittal_gate_axial_abnormal_max = _env_unit_float(
+            "ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_AXIAL_ABNORMAL_MAX",
+            0.88,
+        )
+        self.posthoc_fp_risk_sagittal_gate_sagittal_normal_min = _env_unit_float(
+            "ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_SAGITTAL_NORMAL_MIN",
+            0.55,
+        )
+        self.posthoc_fp_risk_sagittal_gate_coronal_abnormal_max = _env_unit_float(
+            "ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_CORONAL_ABNORMAL_MAX",
+            0.525,
+        )
+        self.posthoc_fp_risk_sagittal_gate_fused_abnormal_min = _env_unit_float(
+            "ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_FUSED_ABNORMAL_MIN",
+            0.8,
+        )
+        self.posthoc_fp_risk_sagittal_gate_confidence_gap_max = _env_positive_float(
+            "ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_CONFIDENCE_GAP_MAX",
+            5.0,
+        )
         self.enable_sagittal_reliability_calibrator = _env_flag(
             "ANKLE_DECISION_ENABLE_SAGITTAL_RELIABILITY_CALIBRATOR"
         )
@@ -2869,6 +2975,28 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                             self.sagittal_normal_rescue_gate_fused_abnormal_threshold
                         ),
                         window=self.sagittal_normal_rescue_gate_window,
+                    )
+                if self.enable_posthoc_fp_risk_sagittal_gate:
+                    self.posthoc_fp_risk_sagittal_gate = PosthocFPRiskSagittalGate(
+                        residual=self.posthoc_fp_risk_sagittal_gate_residual,
+                        axial_abnormal_min=(
+                            self.posthoc_fp_risk_sagittal_gate_axial_abnormal_min
+                        ),
+                        axial_abnormal_max=(
+                            self.posthoc_fp_risk_sagittal_gate_axial_abnormal_max
+                        ),
+                        sagittal_normal_min=(
+                            self.posthoc_fp_risk_sagittal_gate_sagittal_normal_min
+                        ),
+                        coronal_abnormal_max=(
+                            self.posthoc_fp_risk_sagittal_gate_coronal_abnormal_max
+                        ),
+                        fused_abnormal_min=(
+                            self.posthoc_fp_risk_sagittal_gate_fused_abnormal_min
+                        ),
+                        confidence_gap_max=(
+                            self.posthoc_fp_risk_sagittal_gate_confidence_gap_max
+                        ),
                     )
                 if self.enable_sagittal_reliability_calibrator:
                     self.sagittal_reliability_calibrator = SagittalReliabilityCalibrator(
@@ -3604,6 +3732,12 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 self.training and self.sagittal_normal_rescue_gate_eval_only
             ):
                 confidences = confidences + self.sagittal_normal_rescue_gate(
+                    confidences,
+                    view_logits,
+                    self.fusion_temperature,
+                )
+            if self.enable_posthoc_fp_risk_sagittal_gate and not self.training:
+                confidences = confidences + self.posthoc_fp_risk_sagittal_gate(
                     confidences,
                     view_logits,
                     self.fusion_temperature,
