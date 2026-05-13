@@ -2098,17 +2098,29 @@
 
 ---
 
+### DFR-139 training gate from review packet（2026-05-14）
+
+> **DFR-139 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。当前剩余错误已被复核包归为 duplicate/annotation/no-view-evidence/strong axial FP review；本轮把这些 review prompts 转成训练 go/no-go gate，防止在没有可表达目标时继续训练。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果 gate 发现已有可表达目标，可以开窄实验；如果没有，保留 DFR-116 并阻止无依据训练，避免把验证集数据质量问题当成模型结构问题。
+
+- [x] **DFR-139-RESNEXT-DECISION-TRAINING-GATE-FROM-REVIEW-PACKET-ANALYSIS**：commit `50800a3`，新增 [scripts/report_dfr139_training_gate_from_review_packet.py](/dataset/HH/ankle-ct/scripts/report_dfr139_training_gate_from_review_packet.py)，读取 DFR-138 packet，生成 [autoresearch_logs/dfr139_training_gate_from_review_packet.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr139_training_gate_from_review_packet.json)。设计思路：不训练、不读 test、不改数据，将每个 remaining patient 的复核问题转成训练门控与复核后允许动作。
+- **实验实际结果**：`training_go=false`，`training_allowed_now_count=0`，覆盖 `7` patients / `11` cases。门控要求先回答：duplicate positive `CTyang3` 是否为独立病例且阳性 finding 是否可见；positive no-view-evidence `CTyang54` 的阳性 label 是否可见；五个 strong axial FP negative (`CTyin113/95/109/122/21`) 的 axial high-abnormal evidence 是否为 subtle pathology/artifact/normal anatomy，以及是否存在正例保护特征。当前 best branch 仍为 DFR-116 strict posthoc combo → **keep as governance report / training blocked**。
+- **当前判断**：autoresearch 不应再启动训练或阈值/采样搜索，除非人类提供复核答案或新数据证据。下一轮若必须继续，应只做 DFR-140 read-only handoff/export：把 DFR-138 Markdown、DFR-139 gate 和 DFR-116 branch reproduction links 汇总成 `autoresearch_logs/dfr140_handoff.md`，并保持训练 blocked 状态。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-138 clean remaining review packet`：生成 7 个 DFR-116 combined-clean remaining patients 的 JSON/Markdown 复核包。 |
-| 上次结果 | commit `f19473d`；复核包覆盖 7 patients / 11 cases，分桶为 duplicate positive 1、positive no-view-evidence 1、negative strong axial FP 5；`immediate_training_recommended=false` → keep as review asset. |
-| 下一步 | DFR-139：read-only parse DFR-138 packet into a training-go/no-go decision. If no human/data review is available, mark training blocked and prepare the minimal review checklist; do not launch training by default. |
+| 上次实验 | `DFR-139 training gate from review packet`：把 DFR-138 review packet 转成训练 go/no-go 门控。 |
+| 上次结果 | commit `50800a3`；`training_go=false`，`training_allowed_now_count=0`，当前 best branch 仍是 DFR-116 strict combo；训练 blocked until review answers identify a model-expressible target. |
+| 下一步 | DFR-140：read-only handoff/export, summarizing DFR-116 branch, DFR-138 review packet, and DFR-139 training gate into a compact handoff Markdown. Keep training blocked unless human review answers arrive. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-138 是 analysis-positive review asset；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-139 是 analysis-positive training gate；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
