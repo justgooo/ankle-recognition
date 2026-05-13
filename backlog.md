@@ -2038,17 +2038,29 @@
 
 ---
 
+### DFR-134 sampling-size evidence drift audit（2026-05-14）
+
+> **DFR-134 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-132/133 已证明全局增加 slice 数的训练指标失败；本轮只读比较 baseline/n32/n24 的实际 per-view abnormal / true-margin / routing drift，区分这是 gate 问题、classifier evidence 问题，还是 DFR-131 静态 coverage 代理不够预测分类证据。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？若失败源是训练时多 slice 稀释或输入分布漂移，下一轮可以做 frozen-checkpoint eval-side replay 或更窄的 evidence calibration；若 frozen replay 也失败，则应停止 slice-count 方向，避免继续消耗 formal budget。
+
+- [x] **DFR-134-RESNEXT-DECISION-SAMPLING-SIZE-EVIDENCE-DRIFT-AUDIT-ANALYSIS**：commit `f007223`，新增 [scripts/report_dfr134_sampling_size_evidence_drift.py](/dataset/HH/ankle-ct/scripts/report_dfr134_sampling_size_evidence_drift.py)，只读取 DFR-25 seed42、DFR-116 seed42、DFR-132 n32、DFR-133 n24 的 validation `fusion_weight_analysis.json` 与 DFR-131 static sampling report；报告写入 [autoresearch_logs/dfr134_sampling_size_evidence_drift.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr134_sampling_size_evidence_drift.json)。设计思路：不训练、不读 test、不改数据，把 DFR-131 静态 coverage 改善和真实 classifier evidence drift 放在同一病例表中审计。预计改进效果：如果 n24/n32 只是 gate 没用上 coronal，coronal abnormal/true-margin 应该上升但权重未上升；如果 coronal classifier 本身退化，则应关闭全局 slice-count formal family。
+- **实验实际结果**：DFR-132/133 均为 non-axial evidence drift，而不是单纯 gate 问题。DFR-25 seed42 coronal view `f1=0.588235`、mean weight `0.079051`；DFR-132 n32 coronal `f1=0.0`、mean weight `0.012623`；DFR-133 n24 coronal `f1=0.0`、mean weight `0.096262`，top-weight 仍全是 `94/0/0`。对 DFR-131 的两个 positive remaining patients，coronal evidence 相对 DFR-25 反而下降：n32 `abnormal_delta=-0.164075`, `true_margin_delta=-0.707789`, `fusion_weight_delta=-0.052581`；n24 `abnormal_delta=-0.177025`, `true_margin_delta=-0.769615`, `fusion_weight_delta=+0.040474`。n32/n24 都修复 `CTyin122/21` 但引入 6-7 个新错误；n24 只是比 n32 少打坏 `CTyin17` → **analysis-positive keep / branch closure**。
+- **当前判断**：关闭 `n16/n24/n32` 全局 slice-count formal family，不做 multi-seed。DFR-131 的静态 HU/STD coverage 改善没有转化为训练后 classifier evidence，实际是 per-view evidence drift/collapse。下一轮 DFR-135 应做 frozen-checkpoint eval-side sampling replay：用 DFR-25 seed42 checkpoint 不训练，分别以 8/24/32 slice dataloader 重跑 validation telemetry；若 frozen replay 改善 coronal evidence，说明训练大 S 是问题，可考虑 eval-side sampling ensemble；若 frozen replay也下降，则 static sampling proxy 不足，应转向 view evidence calibration 或标注审计。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-133 global n24 sampling formal`：从 DFR-25 anchor 只改 `data.num_slices_per_view=24`，保持 trim/scalars/runtime env 不变，并生成 validation fusion telemetry。 |
-| 上次结果 | commit `46151cc`；run [runs/resnext_decision_256x8_mainline/dfr133_sampling_256x24_formal_s42](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr133_sampling_256x24_formal_s42)。`val_acc/auc/f1=0.893617/0.963636/0.891304`，mean weights `0.7975/0.0963/0.1062`，top-weight `94/0/0`；coronal/sagittal per-view F1 both `0.0`; vs DFR116 fixed 1 / broken 7 → discard. |
-| 下一步 | DFR-134：read-only sampling-size evidence drift audit comparing DFR-25/132/133 telemetry plus DFR-131 coverage flags. Goal: explain why static coronal coverage did not translate into per-view evidence, and decide the next minimal expressible variable; do not run another global slice-count formal until this audit is done. |
+| 上次实验 | `DFR-134 sampling-size evidence drift audit`：只读比较 DFR-25/116/132/133 telemetry 与 DFR-131 static sampling flags，定位 n24/n32 训练失败机制。 |
+| 上次结果 | commit `f007223`；报告 [autoresearch_logs/dfr134_sampling_size_evidence_drift.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr134_sampling_size_evidence_drift.json)。结论：n24/n32 都让 positive remaining coronal abnormal/true-margin 相对 DFR-25 下降，non-axial F1 均为 0；这是 classifier/evidence drift，不只是 gate 未采用 → analysis-positive keep / close global slice-count formal family. |
+| 下一步 | DFR-135：frozen-checkpoint eval-side sampling replay。用 DFR-25 seed42 `best.pt` 不训练，分别以 n24/n32 dataloader 重跑 validation `fusion_weight_analysis.json`；判断大 slice 数在 frozen checkpoint 下是否能改善 coronal evidence，决定是否考虑 eval-side sampling ensemble。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 2（DFR-132/133 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-134 为 analysis-positive keep / branch closure；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
