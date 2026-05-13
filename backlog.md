@@ -1967,17 +1967,28 @@
 
 ---
 
+### DFR-128 axial calibration trainability audit（2026-05-14）
+
+> **DFR-128 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-127 已经证明 label-free axial-risk gate 不安全；本轮只读检查现有 `train.py` auxiliary CE hook 与 `src/model.py` 输出路径，判断能否用监督信号校准 strong axial FP，同时保护真阳性 axial evidence。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果该目标能在不改 `train.py` 的约束下表达，就可以下一轮只改 `src/model.py` 增加默认关闭的 axial classifier calibration auxiliary，让标签通过 CE 对触发样本产生 label0 normal-up / label1 normal-down 的正例保护梯度，目标是减少 high-axial FP 而不做 broad gate rerouting。
+
+- [x] **DFR-128-RESNEXT-DECISION-256X8-AXIAL-CALIBRATION-TRAINABILITY-AUDIT-ANALYSIS**：commit `8801f9a`，新增 [scripts/report_dfr128_axial_calibration_trainability.py](/dataset/HH/ankle-ct/scripts/report_dfr128_axial_calibration_trainability.py)，只读汇总 DFR-127 frontier、`train.py` aux hook、`src/model.py` 现有 auxiliary modes 与历史 DFR-66/90-93/109 结果；完整报告写入 [autoresearch_logs/dfr128_axial_calibration_trainability_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr128_axial_calibration_trainability_audit.json)。设计思路：不训练、不读 test、不改数据，先判断 supervised positive-protected axial classifier calibration 是否可表达，避免直接进入又一轮无效 gate-rank aux。预计改进效果：若可表达，应明确无需修改 `train.py`，只需模型暴露一个窄作用域 `_view_logits/_log_vars` aux；如果不可表达，则应停止这条训练侧想法。实验实际结果：报告结论 `positive_protected_axial_classifier_aux_feasible=true`, `can_run_without_train_py_change=true`, `needs_model_code_before_training=true`。机制依据是 `train.py` 已经对模型暴露的 `_view_logits` 逐 view 做 `cross_entropy(..., labels)`，而模型可在 inactive samples 使用 detached logits 做 no-op；因此下一轮可以新增 `ANKLE_DECISION_ENABLE_AXIAL_FP_RISK_NORMAL_AUX_LOSS`，在 DFR-127 high axial-risk trigger 上暴露 `[axial_normal_logit, detach(axial_abnormal_logit)]`：label0 会提高 normal logit、降低 axial abnormal probability，label1 会降低 normal logit、保护/锐化 axial abnormal evidence。限制也明确：`train.py` 无 class/sample weights，模型 forward 拿不到 label，DFR-127 trigger 在 validation 上 positive-heavy（`51` TP vs `7` FP），所以首轮只能用很低 aux weights `0.0005/0.001/0.0025` → **analysis-positive keep / not model promotion**。
+- **当前判断**：DFR-128 把 DFR-127 的 negative frontier 转化为一个可执行但高风险的窄训练假设。下一轮 DFR-129 应只改 `src/model.py` 增加默认关闭的 `axial_fp_risk_normal_aux_loss`，不改 `train.py`、不改数据、不改 DFR-25 geometry/scalars；用 low-weight seed42 main-study 先验证是否能降低 axial FP recurrence 而不造成 positive-heavy trigger 下的真阳性损伤。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-127 axial FP calibration frontier`：只读扫描 clean FP/TN/TP 的 axial-risk 与 non-axial-normal frontier，判断是否存在 label-free strong axial FP 降噪条件。 |
-| 上次结果 | commit `01ef7ad`；报告 [autoresearch_logs/dfr127_axial_fp_calibration_frontier.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr127_axial_fp_calibration_frontier.json)。clean confusion=`TN=143/TP=119/FP=7/FN=4`，`zero_positive_candidate_count=0`；best full-FP coverage candidate 覆盖 `7/7` FP 但同时触发 `51` TP，说明 label-free axial-risk gate 不安全。 |
-| 下一步 | DFR-128：做 supervised/view-specific axial calibration trainability audit，检查现有 `train.py` auxiliary hook 与 `src/model.py` 输出是否能在不改训练入口、不用 test、不改数据的约束下表达 positive-protected axial classifier calibration；若不能表达，转向 sampling/augmentation 或只读标注审计。 |
+| 上次实验 | `DFR-128 axial calibration trainability audit`：只读检查 DFR-127 后的 supervised positive-protected axial classifier calibration 是否可由现有 aux hook 表达。 |
+| 上次结果 | commit `8801f9a`；报告 [autoresearch_logs/dfr128_axial_calibration_trainability_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr128_axial_calibration_trainability_audit.json)。结论=`positive_protected_axial_classifier_aux_feasible=true`、`can_run_without_train_py_change=true`、`needs_model_code_before_training=true`；下一轮可只改 `src/model.py`，新增默认关闭的 axial FP-risk normal aux。 |
+| 下一步 | DFR-129：实现 `ANKLE_DECISION_ENABLE_AXIAL_FP_RISK_NORMAL_AUX_LOSS`，用 DFR-127 high axial-risk trigger 暴露 `[axial_normal_logit, detach(axial_abnormal_logit)]` 的低权重 aux；先跑 seed42 low-weight main-study `0.0005/0.001/0.0025`，验证是否减少 axial FP recurrence 且不打坏 high-axial TP。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1（DFR-127 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-128 analysis-positive keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
