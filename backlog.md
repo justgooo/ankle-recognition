@@ -1799,17 +1799,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-112 multiseed posthoc fp-risk，analysis）
+
+> **DFR-112 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-111 在 seed42 上证明 label-free `fp_risk` sagittal residual 可以修复两个轴位 FP；本轮把同一规则改成模型等价的 logits-level 计算，并扩展到 DFR-25 seeds `42/123/456`，验证它是否只是单 seed 伪增益。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？它不训练、不固定均权，只在极少数 `fused abnormal + axial abnormal + sagittal normal + coronal not abnormal` 的高精度样本上把 sagittal gate logit 推到 top；预期整体仍 axial-majority，但少量 FP-risk 样本从 axial top 迁为 sagittal top，从而以 learned/posthoc routing 方式超过 DFR-25 和 matched equal-weight。
+
+- [x] **DFR-112-RESNEXT-DECISION-256X8-MULTISEED-POSTHOC-FP-RISK-ANALYSIS**：commit `5ff6b7e`，新增 [scripts/analyze_dfr112_multiseed_posthoc.py](/dataset/HH/ankle-ct/scripts/analyze_dfr112_multiseed_posthoc.py)，读取 DFR-25 三 seed `fusion_weight_analysis.json`，使用 `scaled_confidence_logit` 与 per-view binary logit margin 做模型等价 posthoc 融合，确保 no-trigger 候选复现存储 telemetry（max abnormal delta `<=1.824e-7`）；完整报告写入 [autoresearch_logs/dfr112_multiseed_posthoc_fp_risk.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr112_multiseed_posthoc_fp_risk.json)。设计思路：把 DFR-111 的 seed42 probability-mixture 上限提升为 3-seed checkpoint-compatible 离线验证，避免把非模型等价的概率混合误认为可部署收益。预计改进效果：固定 `fp_risk` residual 只应触发 seed42 的 `CTyin__CT24yin21/95`，seed123/456 不应触发或打坏；top-weight aggregate 应仍以 axial 为绝对多数，只增加两个 sagittal top。实验实际结果：最佳 grid 与固定规则一致，`residual=5.0`、`axial_min=0.4`、`axial_max=0.88`、`fused_abnormal_min=0.8`、`sagittal_normal_min=0.55`、`coronal_abnormal_max=0.525`、`confidence_gap_max=5.0`；3-seed mean `val_acc/val_auc/val_f1 = 0.9468085106382979 / 0.9692424242424242 / 0.9429639438315076`，高于 DFR-25 mean `0.9397163120567376 / 0.9677272727272728 / 0.9358934169278997`，也高于 matched equal-weight mean `val_acc=0.9219858156028368`。aggregate top-weight 从 DFR-25 `axial/coronal/sagittal = 237/0/45` 变为 `235/0/47`；只在 seed42 触发 `CTyin__CT24yin21/95`，`fixed=2 / broken=0 / net=+2` → **analysis-positive keep**（不是训练 checkpoint promotion）。
+- **当前判断**：DFR-112 确认 DFR-111 的 label-free `fp_risk` 不是单 seed 概率混合伪增益；它在三 seed、模型等价 logits-level 上仍给出 no-harm mean 提升。下一轮应把该规则做成默认关闭的模型内 eval-side gate residual（DFR-113），使用现有 DFR-25 checkpoint 运行 `analyze_fusion_weights.py` 生成真实 `forward_with_decision_info` telemetry；若模型内 telemetry 复现 `235/0/47` 和 `0.946809` mean，再考虑是否作为 posthoc calibration branch 写入主线叙事。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-111 confirmed-target posthoc scan`：analysis-only 在 DFR-25 seed42 telemetry 上扫描 sagittal gate-logit residual，上限分 oracle true-target-only 与 label-free observable fp-risk rule。 |
-| 上次结果 | commit `628294e`；报告 [autoresearch_logs/dfr111_confirmed_target_posthoc_scan.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr111_confirmed_target_posthoc_scan.json)。Oracle target-only `residual=6.0` 离线达到 `0.978723/0.989091/0.976744`，top-weight `88/0/6`，`fixed=4/broken=0`；最佳非 oracle `fp_risk` rule 离线达到 `0.957447/0.983182/0.954545`，top-weight `92/0/2`，只触发 `CTyin21/95`，`fixed=2/broken=0`。 |
-| 下一步 | 继续这条方向时，优先把 DFR-111 最佳 `fp_risk` rule 做成默认关闭的 eval-side gate residual / posthoc calibration，并用现有 DFR-25 checkpoint 做 seed42 validation；不要再做 train-time CE aux 阈值扫描。若 eval-side seed42 复现离线增益，再做 3-seed posthoc telemetry，检验是否存在 3-seed 都非 `94/0/0` 且 mean acc 超过 equal-weight 的 learned/posthoc distribution。 |
+| 上次实验 | `DFR-112 multiseed posthoc fp-risk`：analysis-only 对 DFR-25 seeds `42/123/456` 做模型等价 logits-level sagittal gate residual 验证。 |
+| 上次结果 | commit `5ff6b7e`；报告 [autoresearch_logs/dfr112_multiseed_posthoc_fp_risk.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr112_multiseed_posthoc_fp_risk.json)。固定/最佳 `fp_risk` rule：`residual=5.0`, `axial_min=0.4`, `axial_max=0.88`, `fused_abnormal_min=0.8`, `sagittal_normal_min=0.55`, `coronal_abnormal_max=0.525`, `confidence_gap_max=5.0`；3-seed mean `0.946809/0.969243/0.942964`，aggregate top-weight `235/0/47`，只触发 seed42 `CTyin21/95`，`fixed=2/broken=0`。 |
+| 下一步 | 把 DFR-112 最佳 `fp_risk` 规则做成默认关闭的模型内 eval-side gate residual（DFR-113），用现有 DFR-25 checkpoints 运行真实 `forward_with_decision_info` telemetry；若模型内结果复现 3-seed no-harm 提升，再把它作为 posthoc calibration branch 保留。不要回到 train-time CE aux 阈值扫描。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-111 作为 analysis-positive keep 重置；注意它不是训练模型 promotion，当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean。） |
+| 连续 discard 计数 | 0（DFR-112 作为 analysis-positive keep 重置；注意它不是训练模型 promotion，当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
