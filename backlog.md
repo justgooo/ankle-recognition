@@ -1832,17 +1832,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-115 FN abnormal rescue audit，analysis）
+
+> **DFR-115 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-113/114 只处理“阴性样本被 axial abnormal 锁死”的 FP normal-rescue；本轮转向剩余阳性 FN，检查是否存在低覆盖、label-free 的 abnormal-evidence rescue，让被 fused normal 压住的真实阳性样本重新由可用异常视角进入决策。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？它不平均权重、不训练新 checkpoint，只在 `fused abnormal` 很低但某一视角仍有 bounded abnormal evidence 且 confidence gap 可控时给目标视角一个 eval-side residual；若该触发与 DFR-113 的 FP-risk 触发互补，就能在保持 axial-majority routing 的同时同时减少 FP 与 FN。
+
+- [x] **DFR-115-RESNEXT-DECISION-256X8-FN-ABNORMAL-RESCUE-AUDIT-ANALYSIS**：commit `c42a4ff`，新增 [scripts/analyze_dfr115_fn_abnormal_rescue.py](/dataset/HH/ankle-ct/scripts/analyze_dfr115_fn_abnormal_rescue.py)，只读取 DFR-25 seeds `42/123/456` 的 validation telemetry，扫描 positive-FN abnormal-evidence rescue 候选，并把最佳 FN-only 候选与 DFR-113 strict FP gate 做组合复算；完整报告写入 [autoresearch_logs/dfr115_fn_abnormal_rescue_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr115_fn_abnormal_rescue_audit.json)。设计思路：不训练、不改 checkpoint、不用 test；先独立寻找能修复 FN 且 `broken=0` 的低覆盖 abnormal rescue，再验证它是否与 DFR-113 的 sagittal normal-rescue FP gate 互补。预计改进效果：FN-only 规则应只触发少量 DFR-25 FN，避免 broad coronal/sagittal 重路由；组合规则应在 DFR-113 `fixed=2/broken=0` 基础上继续增加 fixed 而不打坏原正确样本。实验实际结果：审计 `3505` 个候选，`1792` 个 no-harm。最佳 FN-only 规则为 `target_mode=axial`, residual `6.0`, `fused_abnormal_max=0.2`, `target_abnormal_min=0.45`, `max_abnormal_min=0.45`, `second_abnormal_min=0.0`, `target_confidence_gap_max=1.0`, `axial_abnormal_max=0.65`，只触发 seed123 `CTyang__CT24yang1__CT2412yang147`，`fixed=1/broken=0`，3-seed mean `0.943263/0.970000/0.939894`，aggregate top-weight `238/0/44`。与 DFR-113 strict FP gate 组合后，seed42 修复 `CTyin__CT24yin21/95`，seed123 修复 `CTyang__CT24yang1__CT2412yang147`，seed456 不变；组合 mean `val_acc/auc/f1 = 0.950355/0.971515/0.946965`，aggregate top-weight `236/0/46`，`fixed=3/broken=0` → **analysis-positive keep**（posthoc combo candidate，不是训练 checkpoint promotion）。
+- **当前判断**：DFR-115 给出一个与 DFR-113 互补的 no-harm FN rescue 信号。剩余 FN 多数只有 sub-threshold abnormal evidence 或 single weak positive view with no support，继续放宽会进入不安全区域；下一轮应做 DFR-116：把 `PosthocFNAbnormalRescueGate` 做成默认关闭的模型内 eval-side branch，并与 DFR-113 strict FP gate 同时开启，用既有 DFR-25 checkpoints 跑真实 `forward_with_decision_info` telemetry，验证是否复现组合 `0.950355/0.971515/0.946965`、top-weight `236/0/46`、`fixed=3/broken=0`。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-114 fp-risk safety/coverage audit`：analysis-only 审计 DFR-113 strict rule 的 label-free 触发边界与可安全扩展空间。 |
-| 上次结果 | commit `f7e19ac`；报告 [autoresearch_logs/dfr114_fp_risk_safety_coverage_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr114_fp_risk_safety_coverage_audit.json)。300 个邻域候选中 best no-harm relaxed rule 触发 5 个 seed42 样本，top-weight `232/0/50`，mean `0.946809/0.969394/0.942964`，但 `fixed` 仍为 2；任何 `fixed=3` frontier 候选至少 `broken=2` 并降低 val_acc。expanded rule discard，DFR-113 strict rule 继续保留。 |
-| 下一步 | DFR-115：不要再扫 FP-risk 阈值。若继续优化，优先做 positive-FN abnormal evidence rescue 的 analysis-only label-free audit，专门针对 DFR-25 剩余 FN（不同于 sagittal normal-rescue FP 机制），要求先证明 `broken=0` 或明确失败原因；或把 DFR-113 strict branch整理成正式配置/文档供后续验证。 |
+| 上次实验 | `DFR-115 FN abnormal rescue audit`：analysis-only 审计 DFR-25 剩余 positive FN 的 label-free abnormal-evidence rescue，并与 DFR-113 strict FP gate 做组合复算。 |
+| 上次结果 | commit `c42a4ff`；报告 [autoresearch_logs/dfr115_fn_abnormal_rescue_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr115_fn_abnormal_rescue_audit.json)。最佳 FN-only axial rule 只触发 seed123 `CTyang__CT24yang1__CT2412yang147`，`fixed=1/broken=0`，mean `0.943263/0.970000/0.939894`；与 DFR-113 strict FP gate 组合后修复 `CTyin__CT24yin21/95` + `CTyang__CT24yang1__CT2412yang147`，aggregate top-weight `236/0/46`，mean `0.950355/0.971515/0.946965`，`fixed=3/broken=0`。 |
+| 下一步 | DFR-116：把 DFR-115 的 axial FN abnormal rescue 做成默认关闭的模型内 eval-side `PosthocFNAbnormalRescueGate`，与 DFR-113 strict FP gate 同时开启；用既有 DFR-25 checkpoints 跑 `analyze_fusion_weights.py` telemetry，验证真实 `forward_with_decision_info` 是否复现组合 metrics/top-weight/fixed-broken。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1（DFR-114 expanded-rule candidate discard；DFR-113 strict posthoc branch 仍是 analysis-positive keep，当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean。） |
+| 连续 discard 计数 | 0（DFR-115 是 analysis-positive keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration candidate 是 DFR-113 + DFR-115 combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
