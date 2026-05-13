@@ -2122,17 +2122,29 @@
 
 ---
 
+### DFR-141 reproducibility/archive manifest（2026-05-14）
+
+> **DFR-141 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。它不引入新模型假设，而是把 DFR-116 strict combo 的复现资产、DFR-138/139/140 review gate 资产和 remaining checklist 固化，确保当前有效的 posthoc decision-fusion branch 可复现，且不会在无复核答案时误开训练。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？它本身不提升指标；它确认现有 DFR-116 branch 与 review gate 的资产完整性。下一次只有在复核答案识别出可表达模型目标后，才会重新进入可能提升指标的训练或校准实验。
+
+- [x] **DFR-141-RESNEXT-DECISION-REPRODUCIBILITY-ARCHIVE-MANIFEST-ANALYSIS**：commit `d7dcb12`，新增 [scripts/report_dfr141_repro_manifest.py](/dataset/HH/ankle-ct/scripts/report_dfr141_repro_manifest.py)，读取 DFR-119/138/139/140 资产，生成 [autoresearch_logs/dfr141_repro_manifest.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr141_repro_manifest.json) 与 [autoresearch_logs/dfr141_repro_manifest.md](/dataset/HH/ankle-ct/autoresearch_logs/dfr141_repro_manifest.md)。设计思路：不训练、不读 test、不改数据，检查 DFR-116 configs、DFR-25 checkpoints、DFR-25/116 telemetry、报告脚本、backlog/results ledger 与 review gate 报告是否完整，并导出可复现命令与 required review checklist。
+- **实验实际结果**：manifest status=`pass`；`24` 个关键资产全部 present，`missing_asset_count=0`；DFR-119 的 `9` 项 validation checks 全部 pass。指标保持：DFR-25 reference mean `0.939716/0.967727/0.935893`，DFR-116 strict combo mean `0.950355/0.971515/0.946965`，combined-clean diagnostic `0.959707/0.982439/0.955819`；DFR-116 fixed cases 仍为 `123:CTyang147` 与 `42:CTyin21/95`，broken none。Review checklist 覆盖 `7` patients / `11` cases，`training_allowed_now_count=0`，`training_go=false` → **keep as archive/governance asset**。
+- **当前判断**：可复现归档已完整。当前没有新的模型侧可执行目标；继续训练会违背 DFR-139 gate。若人类提供复核答案，应先把答案转成新的 narrow model-expressible hypothesis；否则下一轮只能做只读的 status/watchdog 或外部交付说明，不能启动 formal/proxy 训练。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-140 autoresearch handoff export`：把 DFR-116 branch、DFR-138 review packet 和 DFR-139 training gate 汇总成 compact handoff。 |
-| 上次结果 | commit `35da418`；生成 `autoresearch_logs/dfr140_handoff.md`；DFR-116 strict combo mean `0.950355/0.971515/0.946965`，combined-clean diagnostic `0.959707/0.982439/0.955819`；`training_go=false` 仍成立。 |
-| 下一步 | DFR-141：read-only reproducibility/archive manifest for DFR-116/138/139/140 assets and required review checklist. Keep training blocked unless human review answers identify a model-expressible target. |
+| 上次实验 | `DFR-141 reproducibility/archive manifest`：检查并归档 DFR-116 branch 与 DFR-138/139/140 review-gate 资产。 |
+| 上次结果 | commit `d7dcb12`；生成 `autoresearch_logs/dfr141_repro_manifest.json/.md`；manifest status=`pass`，24/24 关键资产 present，DFR-119 9/9 validation checks pass；`training_go=false` 仍成立。 |
+| 下一步 | Training remains blocked. Only proceed if human review answers identify a model-expressible target; otherwise only read-only status/watchdog or delivery notes are allowed. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-140 是 analysis-positive handoff/governance asset；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-141 是 analysis-positive archive/governance asset；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
