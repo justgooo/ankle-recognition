@@ -2002,17 +2002,29 @@
 
 ---
 
+### DFR-131 clean sampling variable audit（2026-05-14）
+
+> **DFR-131 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-126/130 已经把剩余改进空间从 gate/aux 转向 weak-positive FN 的 per-view evidence extraction；本轮只读检查 baseline 8-slice/trim2 是否让 coronal 异常峰值在 clean remaining positives 中系统性缺失。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果一个全局 runtime sampling 变量能提高 coronal positive evidence 覆盖而不引入 clean-correct collateral，后续训练可在仍保持 learned decision-fusion 和 DFR-25 标量的前提下给 gate/classifier更多真实证据，而不是继续阈值或 aux 修补。
+
+- [x] **DFR-131-RESNEXT-DECISION-256X8-CLEAN-SAMPLING-VARIABLE-AUDIT-ANALYSIS**：commit `99102b2`，新增 [scripts/report_dfr131_sampling_variable_audit.py](/dataset/HH/ankle-ct/scripts/report_dfr131_sampling_variable_audit.py)，把 DFR-126 的 clean remaining 采样审计扩展到 DFR-124 combined-clean 全验证集；只读取 metadata、DFR-116 telemetry、DFR-123 duplicate report 与 DFR-126 report，不读取 test、不修改数据。报告写入 [autoresearch_logs/dfr131_sampling_variable_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr131_sampling_variable_audit.json)。设计思路：比较 baseline `8` slices / `trim=2` 与 `n8_trim0/n8_trim1/n16_trim2/n24_trim2/n32_trim2` 的 HU300/HU500/STD/mean peak 覆盖，判断是否存在无需修改 `src/dataset.py` 的全局采样变量。预计改进效果：positive remaining 的 coronal coverage flags 应显著高于 clean-correct，且候选 grid 应解决这些 flags，同时不在 clean-correct coronal 上制造新 flag。
+- **实验实际结果**：报告覆盖 `91` 个 clean patient / `273` 个 seed-cases，remaining errors 仍为 `7` patients / `11` cases（`negative_strong_axial_classifier_fp=5`, `positive_no_view_reaches_weak_abnormal=1`, `positive_recurrent_subthreshold_evidence=1`）。baseline flags 中 positive remaining 的 `coronal:baseline_low_hu300_peak_coverage=2/2`, `coronal:baseline_misses_std_top10=1/2`，高于 positive clean-correct 的 `15/39` 与 `7/39`。候选排序显示 `n32_trim2` 最强：resolved positive-remaining coronal `low_hu300_peak_coverage=2`, `misses_std_top10=1`；resolved all remaining-error coronal `low_hu300=3`, `misses_hu300_top10=1`, `misses_std_top10=3`；并且 `clean_correct_coronal_created={}`。`n24_trim2` 接近但少 resolved 一个 remaining-error low-HU300；`n16_trim2` 虽可解决 positive remaining，但会给 clean-correct coronal 新增 `low_hu300=2` 和 `misses_hu300_top10=2`；`trim=0/1` 新增 clean-correct coronal flags 过多 → **analysis-positive keep**。
+- **当前判断**：DFR-131 指向唯一可表达的下一轮变量：全局 `data.num_slices_per_view 8 -> 32` 且保持 `trim_edge_slices=2`。view-specific coronal sampling/trim 在不改 `src/dataset.py` 的约束下不可表达；`trim=0/1` 已有 clean-correct collateral，不推进。下一轮 DFR-132 应跑一个 DFR-25 anchor 的 single-seed formal probe，只改 `num_slices_per_view=32`，训练后必须补 `fusion_weight_analysis.json`，重点看是否修复 DFR-126 positive FN 或改善 coronal evidence，同时确认 strong axial FP 不扩大。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-130 axial aux drift audit`：只读比较 DFR-25、DFR-129 best 和 DFR-116 combo telemetry，判断 DFR-129 train-time axial-normal aux 是否可继续。 |
-| 上次结果 | commit `5b8ccad`；报告 [autoresearch_logs/dfr130_axial_aux_drift_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr130_axial_aux_drift_audit.json)。结论：DFR-129 `fixed=1/broken=1/net=0/top_changed=0`；训练触发在 DFR-25 上命中 `34` 样本，其中 `32` TP；打坏的 `CTyin109` 是 off-trigger 最大 axial abnormal increase；DFR-116 修复的 `CTyin21/95` 均未修复 → discard / stop train-time axial aux. |
-| 下一步 | DFR-131：回到 DFR-116 后的剩余 clean error，做 analysis-only sampling / evidence view audit，优先围绕 DFR-126 提示的 coronal sampling coverage 与 recurrent subthreshold FN，判断是否存在不改 split 的 runtime sampling变量值得新开 formal。 |
+| 上次实验 | `DFR-131 clean sampling variable audit`：只读把 DFR-126 sampling/evidence audit 扩展到 combined-clean 全验证集，比较 baseline 8-slice/trim2 与候选 runtime sampling grids。 |
+| 上次结果 | commit `99102b2`；报告 [autoresearch_logs/dfr131_sampling_variable_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr131_sampling_variable_audit.json)。结论：positive remaining 的 coronal low-HU300/std coverage flags 高于 clean-correct；`n32_trim2` 解决 positive remaining coronal flags 且不新增 clean-correct coronal flags → analysis-positive keep. |
+| 下一步 | DFR-132：single-seed formal probe from DFR-25 anchor，只改 `data.num_slices_per_view=32`、保持 `trim_edge_slices=2`，训练后补 `fusion_weight_analysis.json`；重点看 DFR-126 positive FN 和 coronal evidence 是否改善，同时确认 strong axial FP 不扩大。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 2（DFR-129/130 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-131 为 analysis-positive keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
