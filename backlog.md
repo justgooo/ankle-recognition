@@ -2086,17 +2086,29 @@
 
 ---
 
+### DFR-138 clean remaining review packet（2026-05-14）
+
+> **DFR-138 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-137 已说明剩余错误不再是简单 gate/sampling 问题；本轮把每个剩余病例的 view evidence、duplicate/hash、sampling flags 和 DFR25/DFR116 prediction diff 压缩成可复核包，为判断是否存在可表达的下一步模型目标提供依据。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？它本身不提升指标；它的价值是防止继续在数据/标注不清的病例上盲训。如果复核包发现可表达的 label/evidence pattern，下一轮才允许开窄模型实验。
+
+- [x] **DFR-138-RESNEXT-DECISION-CLEAN-REMAINING-REVIEW-PACKET-ANALYSIS**：commit `f19473d`，新增 [scripts/report_dfr138_clean_remaining_review_packet.py](/dataset/HH/ankle-ct/scripts/report_dfr138_clean_remaining_review_packet.py)，读取 DFR-126/137 与 DFR-25/116 validation telemetry，生成 [autoresearch_logs/dfr138_clean_remaining_review_packet.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr138_clean_remaining_review_packet.json) 与 [autoresearch_logs/dfr138_clean_remaining_review_packet.md](/dataset/HH/ankle-ct/autoresearch_logs/dfr138_clean_remaining_review_packet.md)。设计思路：不训练、不读 test、不改数据，将 7 个 DFR-116 combined-clean remaining patients 的 paths/hashes、duplicate membership、sampling flags、per-seed DFR25/DFR116 predictions、view abnormal probabilities 和 review prompts 汇总到单一复核包。
+- **实验实际结果**：复核包覆盖 `7` patients / `11` cases；DFR-116 combined-clean 指标仍引用 `0.959707/0.982439/0.955819`。分桶保持 `duplicate_positive_annotation_review=1`（`CTyang__CT24yang1__CT2412yang3`，duplicate member `CTyang__CT24yang2__CT2412yang1`）、`positive_no_view_evidence_annotation_review=1`（`CTyang__CT24yang1__CT2412yang54`）、`negative_strong_axial_fp_label_or_view_classifier_review=5`（`CTyin113/95/109/122/21`）。`model_side_supported_patient_count=0`，`immediate_training_recommended=false` → **keep as review asset**。
+- **当前判断**：不要启动新的训练作业。下一轮 DFR-139 应只读解析 DFR-138 packet，输出“是否存在可表达模型目标”的决策：若人工/数据复核尚未完成，则记录为 blocked-for-training，并继续准备最小复核清单；若从包内可直接导出模型目标，只能是极窄、默认关闭、正例保护明确的候选。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-137 remaining-error decision audit`：合并 DFR-120/125/126/127/136 报告，判断 DFR-116 clean remaining 是否还有立即可表达的模型侧实验。 |
-| 上次结果 | commit `70002d9`；7 个 clean remaining patients 分为 duplicate positive review 1、positive no-view-evidence review 1、negative strong axial FP review 5；`model_side_supported_patient_count=0` → keep as decision audit / no immediate training. |
-| 下一步 | DFR-138：generate compact read-only review packet for the 7 DFR116 clean remaining patients, including paths/hashes, duplicate membership, per-seed view evidence, sampling flags, prediction diffs, and human-review prompts. Do not start another training run until the packet identifies a model-expressible target. |
+| 上次实验 | `DFR-138 clean remaining review packet`：生成 7 个 DFR-116 combined-clean remaining patients 的 JSON/Markdown 复核包。 |
+| 上次结果 | commit `f19473d`；复核包覆盖 7 patients / 11 cases，分桶为 duplicate positive 1、positive no-view-evidence 1、negative strong axial FP 5；`immediate_training_recommended=false` → keep as review asset. |
+| 下一步 | DFR-139：read-only parse DFR-138 packet into a training-go/no-go decision. If no human/data review is available, mark training blocked and prepare the minimal review checklist; do not launch training by default. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-137 是 analysis-positive decision audit；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-138 是 analysis-positive review asset；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
