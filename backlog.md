@@ -1876,17 +1876,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-119 DFR-116 branch reproduction package，analysis）
+
+> **DFR-119 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-116 已经是当前最优 posthoc calibration branch；DFR-118 证明没有安全历史训练候选可直接继承。本轮把 DFR-116 固化为可复现分支，防止后续实验误用 config、checkpoint、env flag 或 split。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？它不再追求额外阈值增益，而是把已经超过 DFR-25 与 matched equal-weight 的 DFR-116 combo 变成可验证资产：只要报告能复现 `0.950355/0.971515/0.946965`、top-weight `236/0/46`、fixed=3/broken=0，就能为后续更窄的研究提供稳定锚点。
+
+- [x] **DFR-119-RESNEXT-DECISION-256X8-DFR116-BRANCH-REPRO-PACKAGE-ANALYSIS**：commit `fca61d0`，新增 [scripts/report_dfr119_dfr116_branch.py](/dataset/HH/ankle-ct/scripts/report_dfr119_dfr116_branch.py)，读取 DFR-116 三 seed configs 与 telemetry，校验 `val` split、runtime env、config paths、DFR-25 checkpoint paths、patient order/label、aggregate metrics、top-weight count 与 patient-level diff；完整报告写入 [autoresearch_logs/dfr119_dfr116_branch_repro_report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr119_dfr116_branch_repro_report.json)。设计思路：分支固化，不训练、不读 test、不扩大阈值；如果任一复现检查失败，脚本退出非零。预计改进效果：报告应显示 `status=pass`，并精确固定 DFR-116 当前 keep branch 的 configs/checkpoints/env flags/commands/patient diff。实验实际结果：报告 `status=pass`，`9/9` 个 validation checks 全部通过；DFR-25 reference mean `0.939716/0.967727/0.935893`、top-weight `237/0/45`；DFR-116 combo mean `0.950355/0.971515/0.946965`、top-weight `236/0/46`；fixed patients exactly `42:CTyin__CT24yin21`, `42:CTyin__CT24yin95`, `123:CTyang__CT24yang1__CT2412yang147`，broken `[]` → **keep as reproducibility package / branch consolidation**。
+- **当前判断**：DFR-119 把 DFR-116 strict combo 固化为当前 posthoc branch。下一轮如果继续优化，应避免再做 broad threshold expansion；更合格的 DFR-120 是围绕 DFR-116 剩余 14 个错误做 branch-aware false-case report，拆分哪些是可由数据/标注/采样审计解释，哪些才值得训练侧新机制处理，继续不使用 test。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-118 variant evidence-drift audit`：对已有完整三 seed formal telemetry 做 analysis-only 审计，检查 stored variant 与 DFR-116 combo replay 是否能安全修复 DFR-116 剩余错误。 |
-| 上次结果 | commit `d1377de`；报告 [autoresearch_logs/dfr118_variant_evidence_drift_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr118_variant_evidence_drift_audit.json)。发现完整 group `22` 个，其中 trained `20`、combo replay `14`；safe stored/replay 都是 `0`，improved safe stored/replay 也都是 `0`。best stored `DFR-62` 修复 combo error `5` 个但 broken_combo `14`；best replay `DFR-63+combo` 修复 `6` 个但 broken_combo `33`。 |
-| 下一步 | DFR-119：优先做 DFR-116 branch consolidation / reproducibility packaging，汇总三 seed configs、checkpoint paths、env flags、telemetry verification 与 fixed/broken patient diff；不要再阈值扩张或从历史训练变体中直接挑机制。 |
+| 上次实验 | `DFR-119 DFR-116 branch reproduction package`：把当前 DFR-116 strict combo posthoc branch 固化为可复现报告。 |
+| 上次结果 | commit `fca61d0`；报告 [autoresearch_logs/dfr119_dfr116_branch_repro_report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr119_dfr116_branch_repro_report.json)。`status=pass`，`9/9` 个检查通过；DFR116 mean `0.950355/0.971515/0.946965`、top-weight `236/0/46`，fixed exactly `42:CTyin21`, `42:CTyin95`, `123:CTyang147`，broken `[]`。 |
+| 下一步 | DFR-120：围绕 DFR-116 剩余 `14` 个错误做 branch-aware false-case report，拆分强 axial-FP、弱 FN、疑似数据/标注/采样问题与仍可能值得训练侧机制处理的子集；继续不使用 test，不做 broad threshold expansion。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 2（DFR-117 third-stage expansion discard + DFR-118 evidence-drift audit discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-119 branch consolidation keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
