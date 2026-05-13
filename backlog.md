@@ -1898,17 +1898,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-121 sampling/per-view sensitivity audit，analysis）
+
+> **DFR-121 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-120 指向剩余错误已经不是单纯 gate 阈值问题；本轮只读目标 validation 病例的 metadata/NIfTI 和 DFR-116 telemetry，检查 8-slice/trim=2 采样是否错过关键证据、重复 FN 是否来自重复数据，以及强 axial-FP 是否有单视角异常覆盖问题。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？若能确认一部分剩余错误来自重复文件、采样覆盖或单视角证据缺失，后续就可以把研究变量切到数据质量 / 采样策略 / per-view sensitivity，而不是继续破坏 DFR-116 现有 learned routing。
+
+- [x] **DFR-121-RESNEXT-DECISION-256X8-SAMPLING-SENSITIVITY-AUDIT-ANALYSIS**：commit `a2924d4`，新增 [scripts/report_dfr121_sampling_sensitivity.py](/dataset/HH/ankle-ct/scripts/report_dfr121_sampling_sensitivity.py)，只读 DFR-116 剩余 false-case 的 metadata 与 NIfTI 体数据，记录 baseline `num_slices_per_view=8 / trim_edge_slices=2` 的实际采样索引、不同采样网格、HU/STD 覆盖代理、NIfTI SHA256 与 DFR-116 prediction signature；完整报告写入 [autoresearch_logs/dfr121_sampling_sensitivity_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr121_sampling_sensitivity_audit.json)。设计思路：不训练、不读 test、不改数据文件，先判断剩余 repeated FN/FP 是否存在数据/采样层面的可解释原因。预计改进效果：如果跨 seed FN 是数据层面重复或采样覆盖问题，应看到重复 hash / 重复 prediction signature 或低覆盖 flags；如果不是，则下一轮才考虑新采样训练候选。实验实际结果：8 个 target patients 覆盖 14 个 false cases；`CTyang__CT24yang1__CT2412yang3` 与 `CTyang__CT24yang2__CT2412yang1` 的 NIfTI `sha256` 完全相同，并且在 seeds `42/123/456` 上 DFR-116 prediction signature 逐 seed 成对完全一致，解释了 `6/7` 个剩余 FN 实际来自重复验证证据。采样 flags 显示 `coronal:low_hu300_peak_coverage=6`、`coronal:baseline_misses_std_top10=4`、`sagittal:baseline_misses_hu300_top10=1`，强 FP 中 `CTyin21/95/122` 的 coronal/sagittal 峰值也经常落在 baseline 8-slice 栅格之外 → **keep as data/sampling audit signal**（不修改数据文件）。
+- **当前判断**：DFR-121 把 DFR-116 后的主要 remaining FN 从模型机制问题转成数据质量/采样问题：`CTyang...3` 与 `CTyang...1` 是重复 NIfTI，且重复预测贡献了 6 个 FN case。下一轮 DFR-122 应在不修改数据划分的前提下做 duplicate-aware metric sensitivity report：只对 validation 评估做只读去重/病例族聚合敏感性计算，量化 DFR-25 与 DFR-116 在去重后 mean val_acc/f1/AUC 的变化；这不是新的模型选择指标，只用于判断当前 validation ceiling 是否被重复病例扭曲。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-120 DFR-116 false-case report`：对 DFR-116 剩余 `14` 个 validation 错误做 branch-aware 分层报告。 |
-| 上次结果 | commit `0bf3d71`；报告 [autoresearch_logs/dfr120_dfr116_false_case_report.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr120_dfr116_false_case_report.json)。剩余 `7` FP + `7` FN；`safe_training_mechanism_candidates=[]`，`safe_historical_fixer_case_count=0`。高优先级为跨 seed 重复 FN `CTyang...3` / `CTyang...1` 与强 axial-FP `CTyin113/95`。 |
-| 下一步 | DFR-121：做 sampling/per-view sensitivity audit，优先检查跨 seed 重复 FN 是否因 8-slice sampling/trim 缺失异常证据，以及强 axial-FP 是否是单视角 classifier 过拟合或标签/病例边界问题；继续不读 test、不改数据文件。 |
+| 上次实验 | `DFR-121 sampling/per-view sensitivity audit`：只读目标 validation false-case 的 metadata/NIfTI，审计重复文件、采样索引与 HU/STD 覆盖。 |
+| 上次结果 | commit `a2924d4`；报告 [autoresearch_logs/dfr121_sampling_sensitivity_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr121_sampling_sensitivity_audit.json)。`CTyang__CT24yang1__CT2412yang3` 与 `CTyang__CT24yang2__CT2412yang1` 的 NIfTI hash 完全相同，且三 seed 预测签名逐 seed 成对完全一致；这解释了 `6/7` 个剩余 FN。采样 flags 主要集中在 coronal peak 覆盖不足。 |
+| 下一步 | DFR-122：做 duplicate-aware validation metric sensitivity report，只读地计算 DFR-25 与 DFR-116 在 validation 去重/病例族聚合后的 mean val_acc/AUC/F1 变化；不要修改数据文件或把去重指标当正式模型选择指标。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1（DFR-120 无直接模型侧候选；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-121 data/sampling audit keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
