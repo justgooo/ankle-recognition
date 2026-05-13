@@ -1865,17 +1865,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-118 variant evidence-drift audit，analysis）
+
+> **DFR-118 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-117 证明继续扩大 posthoc 阈值没有安全 accuracy 增益；本轮转而检查历史 3-seed 训练变体是否已经学到能减少 DFR-116 剩余强 axial-FP / weak-FN 的 per-view evidence drift，并显式保护 DFR-116 已修复的三个样本。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？若某个训练侧机制在 stored telemetry 或 DFR-116 combo replay 下能 `broken_combo=0` 且修复至少一个剩余 combo error，就说明下一轮可以把该机制压缩成更窄的 bounded training change，而不是继续手写阈值；预期 routing 仍应保持 axial-majority，只在证据侧变得更安全。
+
+- [x] **DFR-118-RESNEXT-DECISION-256X8-VARIANT-EVIDENCE-DRIFT-AUDIT-ANALYSIS**：commit `d1377de`，新增 [scripts/analyze_dfr118_variant_evidence_drift.py](/dataset/HH/ankle-ct/scripts/analyze_dfr118_variant_evidence_drift.py)，自动发现 [runs/resnext_decision_256x8_mainline](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline) 下已有完整三 seed formal telemetry，对比 stored variant 与模型等价 DFR-116 combo replay 是否能修复 DFR-116 剩余错误并保护 DFR-116 已修复样本；完整报告写入 [autoresearch_logs/dfr118_variant_evidence_drift_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr118_variant_evidence_drift_audit.json)。设计思路：不训练、不读 test、不改 checkpoint；只用历史验证 telemetry 判断是否已有训练侧信号值得继续压缩。预计改进效果：如果存在可继承机制，应出现 safe stored/replay group，且 `fixed_dfr116_combo_errors > 0`、`broken_dfr116_combo_correct = 0`、`protected_dfr116_fixed_broken = 0`。实验实际结果：发现完整三 seed group `22` 个，其中 trained group `20` 个、combo replay `14` 个；`safe_stored_group_count=0`、`safe_replay_group_count=0`、`improved_safe_stored_group_count=0`、`improved_safe_replay_group_count=0`。best stored by safety 是 `DFR-62 positive-evidence floor`，可修 `5` 个 combo error 但打坏 `14` 个 combo-correct；best replay 是 `DFR-63 + DFR116 combo`，可修 `6` 个 combo error 但打坏 `33` 个 combo-correct。历史变体的 FP 修复信号全部伴随大量 FN/FP break，不能作为下一轮训练侧候选 → **discard / keep DFR-116 strict combo**。
+- **当前判断**：DFR-118 关闭了“从已有训练变体中挑一个安全 evidence-drift 机制继续压缩”的假设。DFR-116 strict combo 仍是当前最佳 posthoc calibration branch；下一轮应优先做 DFR-119 branch consolidation / reproducibility packaging：把 DFR-116 的三 seed configs、checkpoint paths、env flags、telemetry verification 与 fixed/broken patient diff 汇总成可复现报告，避免继续在无安全证据的阈值或训练变体上消耗。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-117 combo frontier audit`：固定 DFR-116 combo 后，审计一个额外 FP-normal / FN-abnormal residual candidate 是否能安全提高 fixed 覆盖。 |
-| 上次结果 | commit `078560a`；报告 [autoresearch_logs/dfr117_combo_frontier_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr117_combo_frontier_audit.json)。`3329` 个额外候选中 `1556` 个 no-harm，但没有 improved no-harm；best no-harm 只把 AUC 提到 `0.979091`，`val_acc/f1` 与 fixed 都不变；best fixed>3 候选 fixed=4 但 broken=2，mean accuracy 降到 `0.946809`。 |
-| 下一步 | DFR-118：不要再阈值扩张 DFR-116 combo。优先做正式 branch consolidation / reproducibility packaging，或做 analysis-only per-view evidence-drift audit，寻找是否有训练侧改动能减少强 axial-FP 与 weak-FN，同时显式保护 DFR-116 已修复的 3 个样本。 |
+| 上次实验 | `DFR-118 variant evidence-drift audit`：对已有完整三 seed formal telemetry 做 analysis-only 审计，检查 stored variant 与 DFR-116 combo replay 是否能安全修复 DFR-116 剩余错误。 |
+| 上次结果 | commit `d1377de`；报告 [autoresearch_logs/dfr118_variant_evidence_drift_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr118_variant_evidence_drift_audit.json)。发现完整 group `22` 个，其中 trained `20`、combo replay `14`；safe stored/replay 都是 `0`，improved safe stored/replay 也都是 `0`。best stored `DFR-62` 修复 combo error `5` 个但 broken_combo `14`；best replay `DFR-63+combo` 修复 `6` 个但 broken_combo `33`。 |
+| 下一步 | DFR-119：优先做 DFR-116 branch consolidation / reproducibility packaging，汇总三 seed configs、checkpoint paths、env flags、telemetry verification 与 fixed/broken patient diff；不要再阈值扩张或从历史训练变体中直接挑机制。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1（DFR-117 third-stage expansion discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 2（DFR-117 third-stage expansion discard + DFR-118 evidence-drift audit discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
