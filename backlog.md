@@ -2134,17 +2134,29 @@
 
 ---
 
+### DFR-142 human review answer template（2026-05-14）
+
+> **DFR-142 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。它不做新训练，而是把 DFR-141 checklist 转成可填写、可解析的复核答案模板，保证未来若有人类 review answers，能先被映射成明确的模型侧 go/no-go，而不是直接重启搜索。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？它本身不提升指标；它减少后续从复核结果到 narrow hypothesis 的歧义。只有当模板中出现具体 view/slice target 或 positive-protection feature 时，才可能开启新的有效训练或校准实验。
+
+- [x] **DFR-142-RESNEXT-DECISION-HUMAN-REVIEW-ANSWER-TEMPLATE-ANALYSIS**：commit `eef1939`，新增 [scripts/report_dfr142_review_answer_template.py](/dataset/HH/ankle-ct/scripts/report_dfr142_review_answer_template.py)，读取 DFR-141 manifest，生成 [autoresearch_logs/dfr142_review_answer_template.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr142_review_answer_template.json) 与 [autoresearch_logs/dfr142_review_answer_template.md](/dataset/HH/ankle-ct/autoresearch_logs/dfr142_review_answer_template.md)。设计思路：不训练、不读 test、不改数据，将 7 个 remaining patients 的 required review answers 转成字段化 answer template，包含 allowed values、go_rule 和 action_hint。
+- **实验实际结果**：模板生成成功，覆盖 `7` entries / `11` cases；`training_go=false` 与 `training_allowed_now_count=0` 保持不变。模板按 bucket 给出显式字段：duplicate positive 需要 `duplicate_status`、`positive_finding_visible`、`visible_views_or_slice_range`；positive no-view evidence 需要 `positive_label_supported_in_volume`、`evidence_views_or_slice_range`、`missed_evidence_pattern`；strong axial FP negatives 需要 `negative_label_confirmed`、`axial_high_abnormal_explanation`、`positive_protection_feature_exists`、`positive_protection_feature` → **keep as review-intake asset**。
+- **当前判断**：DFR-142 仍不允许训练。当前 best branch 是 DFR-116 strict combo；没有人类复核答案前，任何新的 formal/proxy 训练、阈值扩张或 sampling replay 都没有有效目标。下一步如果继续 autoresearch，只能做只读状态检查；若复核答案被填入模板，则先运行 answer-intake/gate 解析，再决定是否存在 narrow model-expressible target。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-141 reproducibility/archive manifest`：检查并归档 DFR-116 branch 与 DFR-138/139/140 review-gate 资产。 |
-| 上次结果 | commit `d7dcb12`；生成 `autoresearch_logs/dfr141_repro_manifest.json/.md`；manifest status=`pass`，24/24 关键资产 present，DFR-119 9/9 validation checks pass；`training_go=false` 仍成立。 |
-| 下一步 | Training remains blocked. Only proceed if human review answers identify a model-expressible target; otherwise only read-only status/watchdog or delivery notes are allowed. |
+| 上次实验 | `DFR-142 human review answer template`：把 DFR-141 checklist 导出为可填写、可解析的 review answer template。 |
+| 上次结果 | commit `eef1939`；生成 `autoresearch_logs/dfr142_review_answer_template.json/.md`；7 entries / 11 cases，`training_go=false` 与 `training_allowed_now_count=0` 保持不变。 |
+| 下一步 | Training remains blocked. If review answers are filled, first run answer-intake/gate parsing; otherwise only read-only status/watchdog is allowed. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-141 是 analysis-positive archive/governance asset；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-142 是 analysis-positive review-intake asset；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
