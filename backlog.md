@@ -1843,17 +1843,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-116 model-internal posthoc combo gate）
+
+> **DFR-116 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-115 仍是离线 logits-level replay，本轮把 FN abnormal rescue 放进真实模型 eval path，并与 DFR-113 strict FP gate 一起输出真实 fusion weights，验证 combo 是否是可复现的模型内 routing calibration。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？两个 gate 都是默认关闭、label-free、低覆盖 residual：一个把高精度 FP-risk 样本交给 sagittal normal evidence，另一个把低 fused-abnormal 但 axial abnormal evidence 足够的 FN 样本交给 axial；组合预期只改 3 个 DFR-25 错误样本，不破坏 DFR-25 的主体 learned routing。
+
+- [x] **DFR-116-RESNEXT-DECISION-256X8-MODEL-INTERNAL-POSTHOC-COMBO-GATE-TELEMETRY**：commit `1a9752a`，在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增默认关闭的 `PosthocFNAbnormalRescueGate`，并新增三份 telemetry config：[configs/cmp_resnext_decision_256x8_dfr116_posthoc_combo_gate_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr116_posthoc_combo_gate_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr116_posthoc_combo_gate_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr116_posthoc_combo_gate_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr116_posthoc_combo_gate_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr116_posthoc_combo_gate_formal_s456.yaml)。设计思路：把 DFR-115 的 axial FN abnormal rescue 变成 eval-only、checkpoint-compatible 的模型内 residual，并与 DFR-113 strict FP gate 基于同一份 base confidence 并行计算 residual。预计改进效果：真实 `forward_with_decision_info` telemetry 应复现 DFR-115 combo：seed42 只修复 `CTyin21/95` 并迁到 sagittal top，seed123 只修复 `CTyang147` 并迁到 axial top，seed456 不变，`broken=0`。实验实际结果：Slurm `RTXA6Kq/node08` 单卡 telemetry 对既有 DFR-25 checkpoints 完成，输出 [runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s42/fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s42/fusion_weight_analysis.json)、[runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s123/fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s123/fusion_weight_analysis.json)、[runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s456/fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s456/fusion_weight_analysis.json)。seed42 `0.957447/0.983182/0.954545`，top-weight `92/0/2`；seed123 `0.946809/0.962273/0.943820`，top-weight `50/0/44`；seed456 unchanged `0.946809/0.969091/0.942529`，top-weight `94/0/0`。3-seed mean `0.950355/0.971515/0.946965`，aggregate top-weight `236/0/46`，patient-level diff 相对 DFR-25 只修复 seed42 `CTyin__CT24yin21/95` 与 seed123 `CTyang__CT24yang1__CT2412yang147`，`fixed=3/broken=0` → **model-internal analysis-positive keep**（posthoc calibration branch，不是训练 checkpoint promotion）。
+- **当前判断**：DFR-116 证明 DFR-115 combo 不是离线脚本伪影，而是能通过真实模型前向复现的默认关闭 posthoc calibration branch；当前最优 posthoc candidate 提升到 `0.950355` mean val_acc，明确高于 DFR-25 mean `0.939716` 与 matched equal-weight mean `0.921986`。下一轮不要立刻扩大两个阈值；优先做 DFR-117 的 combo safety/frontier audit：在 DFR-116 当前触发集周围扫描是否存在 `broken=0` 且 `fixed>3` 的独立 third-stage candidate，并记录剩余错误为什么不可安全覆盖。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-115 FN abnormal rescue audit`：analysis-only 审计 DFR-25 剩余 positive FN 的 label-free abnormal-evidence rescue，并与 DFR-113 strict FP gate 做组合复算。 |
-| 上次结果 | commit `c42a4ff`；报告 [autoresearch_logs/dfr115_fn_abnormal_rescue_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr115_fn_abnormal_rescue_audit.json)。最佳 FN-only axial rule 只触发 seed123 `CTyang__CT24yang1__CT2412yang147`，`fixed=1/broken=0`，mean `0.943263/0.970000/0.939894`；与 DFR-113 strict FP gate 组合后修复 `CTyin__CT24yin21/95` + `CTyang__CT24yang1__CT2412yang147`，aggregate top-weight `236/0/46`，mean `0.950355/0.971515/0.946965`，`fixed=3/broken=0`。 |
-| 下一步 | DFR-116：把 DFR-115 的 axial FN abnormal rescue 做成默认关闭的模型内 eval-side `PosthocFNAbnormalRescueGate`，与 DFR-113 strict FP gate 同时开启；用既有 DFR-25 checkpoints 跑 `analyze_fusion_weights.py` telemetry，验证真实 `forward_with_decision_info` 是否复现组合 metrics/top-weight/fixed-broken。 |
+| 上次实验 | `DFR-116 model-internal posthoc combo gate`：把 DFR-115 axial FN rescue 做成默认关闭模型内 eval-side branch，并与 DFR-113 strict FP gate 同时验证真实 telemetry。 |
+| 上次结果 | commit `1a9752a`；三份 telemetry 写入 `runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s*/fusion_weight_analysis.json`。真实模型前向复现 combo：seed42 `0.957447/0.983182/0.954545` top `92/0/2`，seed123 `0.946809/0.962273/0.943820` top `50/0/44`，seed456 unchanged `0.946809/0.969091/0.942529` top `94/0/0`；mean `0.950355/0.971515/0.946965`，aggregate top `236/0/46`，`fixed=3/broken=0`。 |
+| 下一步 | DFR-117：不要直接放宽 DFR-116 两个规则；先做 combo safety/frontier audit，围绕当前触发集寻找是否存在 `broken=0` 且 `fixed>3` 的第三个 label-free rescue mechanism，并记录剩余 DFR-25/DFR-116 错误的不可覆盖原因。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-115 是 analysis-positive keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration candidate 是 DFR-113 + DFR-115 combo。） |
+| 连续 discard 计数 | 0（DFR-116 是 model-internal analysis-positive keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 是 DFR-116 combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
