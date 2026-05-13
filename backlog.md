@@ -1990,17 +1990,29 @@
 
 ---
 
+### DFR-130 axial aux drift audit（2026-05-14）
+
+> **DFR-130 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-129 指标只是 seed42 tie，需要只读定位它是否真正修复 strong axial FP，还是在 axial classifier 内部产生 off-target drift；这决定是否继续训练式 calibration，还是退回 DFR-116 eval-side calibration / sampling audit。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果 DFR-129 的 fixed/broken 可由可观测条件分开，就能下一轮设计更窄、净正的 calibration；如果 fixed 与 broken 来自不可控训练漂移，则应停止该 family，避免再浪费 formal budget。
+
+- [x] **DFR-130-RESNEXT-DECISION-256X8-AXIAL-AUX-DRIFT-AUDIT-ANALYSIS**：commit `5b8ccad`，新增 [scripts/report_dfr130_axial_aux_drift_audit.py](/dataset/HH/ankle-ct/scripts/report_dfr130_axial_aux_drift_audit.py)，只读取 DFR-25 seed42、DFR-129 best trial1 与 DFR-116 combo seed42 的 validation `fusion_weight_analysis.json`，报告写入 [autoresearch_logs/dfr130_axial_aux_drift_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr130_axial_aux_drift_audit.json)。设计思路：不训练、不读 test、不改数据；把 DFR-129 trigger coverage、fixed/broken、top routing、轴位 abnormal drift 与 DFR-116 已修复目标放在一起，判断 DFR-129 是 near-miss 还是应关闭。预计改进效果：若 DFR-129 可救，应看到 fixed sample 属于 intended trigger，broken 不应是 off-trigger，且 DFR-116 的 `CTyin21/95` 至少部分被同类机制覆盖。
+- **实验实际结果**：DFR-129 best 仍为 `val_acc/auc/f1=0.936170/0.980909/0.933333` 且 top-weight `94/0/0`。DFR-25 上 DFR-129 训练触发条件命中 `34` 个样本，其中 `32` 个 TP、`2` 个 FP，确认 DFR-127/128 预警的 positive-heavy pressure；DFR-129 checkpoint 后触发仍有 `14` 个样本，其中 `13` 个 TP、`1` 个 FP。相对 DFR-25，DFR-129 只修复 intended-trigger FP `CTyin__CT24yin122`，但打坏 off-trigger TN `CTyin__CT24yin109`；`CTyin109` 是全验证集中最大 axial abnormal increase（`+0.428313`，fusion abnormal `+0.421836`），从 TN 变 FP，而 top route 仍 axial。DFR-116 combo 修复的 `CTyin__CT24yin21/95` DFR-129 均未修复。报告 assessment=`discard_stop_train_time_axial_aux`, `should_continue_weight_or_threshold_sweep=false` → **discard**。
+- **当前判断**：DFR-130 关闭了 DFR-129 family。训练式 axial-normal aux 的触发集合太 positive-heavy，且实际最坏 drift 出现在 off-trigger 样本；继续扫 aux weight/threshold 不是有根据的 autoresearch。下一轮应回到 DFR-116 之后的剩余 clean error：做一个 analysis-only sampling / evidence view audit，优先围绕 DFR-126 已指出的 coronal sampling coverage 与 recurrent subthreshold FN，判断是否存在不改数据 split 的 runtime sampling变量（例如 view-specific sampling/trim）值得新开 formal。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-129 axial FP-risk normal auxiliary`：实现并训练低权重 supervised axial-normal aux，验证 DFR-127/128 的 strong axial FP calibration 假设。 |
-| 上次结果 | commits `78bb4af` + `f0c45ab`；study [runs/optuna_main_resnext_decision_256x8_dfr129_axial_fp_risk_normal_aux](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr129_axial_fp_risk_normal_aux)。best trial1 weight `0.001`，`val_acc/auc/f1=0.936170/0.980909/0.933333`，与 DFR-25 seed42 accuracy/F1 持平但 AUC 更高；fusion telemetry top-weight 仍 `94/0/0`，相对 DFR-25 `fixed=1/broken=1/net=0` → discard。 |
-| 下一步 | DFR-130：只读 drift audit，对比 DFR-25、DFR-129 best 和 DFR-116 clean branch 的 axial probability / trigger activation / changed cases，确认训练式 axial classifier calibration 是否应停止，或是否存在能修 `CTyin122` 且避开 `CTyin109` 的更窄可观测条件。 |
+| 上次实验 | `DFR-130 axial aux drift audit`：只读比较 DFR-25、DFR-129 best 和 DFR-116 combo telemetry，判断 DFR-129 train-time axial-normal aux 是否可继续。 |
+| 上次结果 | commit `5b8ccad`；报告 [autoresearch_logs/dfr130_axial_aux_drift_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr130_axial_aux_drift_audit.json)。结论：DFR-129 `fixed=1/broken=1/net=0/top_changed=0`；训练触发在 DFR-25 上命中 `34` 样本，其中 `32` TP；打坏的 `CTyin109` 是 off-trigger 最大 axial abnormal increase；DFR-116 修复的 `CTyin21/95` 均未修复 → discard / stop train-time axial aux. |
+| 下一步 | DFR-131：回到 DFR-116 后的剩余 clean error，做 analysis-only sampling / evidence view audit，优先围绕 DFR-126 提示的 coronal sampling coverage 与 recurrent subthreshold FN，判断是否存在不改 split 的 runtime sampling变量值得新开 formal。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1（DFR-129 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 2（DFR-129/130 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
