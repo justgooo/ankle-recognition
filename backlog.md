@@ -2026,17 +2026,29 @@
 
 ---
 
+### DFR-133 global n24 sampling formal（2026-05-14）
+
+> **DFR-133 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-132 说明 `n32` 虽能静态覆盖异常峰值，但训练后造成 non-axial evidence collapse；DFR-131 中 `n24_trim2` 是第二候选且无 clean-correct coronal collateral，可能比 n32 更少破坏 pretrained slice-stack 分布。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果 n24 能在不压掉 coronal classifier 的情况下增加异常峰值覆盖，full fusion 仍可保持 learned decision fusion 语义，同时让 weak-positive FN 的 coronal/sagittal evidence 更可用。
+
+- [x] **DFR-133-RESNEXT-DECISION-256X24-SAMPLING-FORMAL-SEED42**：commit `46151cc`，新增 [configs/cmp_resnext_decision_256x24_dfr133_sampling_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x24_dfr133_sampling_formal_s42.yaml) 与 [scripts/slurm_dfr133_sampling_256x24_formal.sbatch](/dataset/HH/ankle-ct/scripts/slurm_dfr133_sampling_256x24_formal.sbatch)，从 DFR-25 anchor 只改 `data.num_slices_per_view=24`，保持 `trim_edge_slices=2` 与其他训练变量不变。Slurm job `486936` 在 node16 显式覆盖到空闲物理 GPU `4` 后完成，输出目录为 [runs/resnext_decision_256x8_mainline/dfr133_sampling_256x24_formal_s42](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr133_sampling_256x24_formal_s42)。设计思路：验证 DFR-131 第二 sampling candidate 是否能避免 DFR-132 的 n32 训练分布破坏，同时保留更多 coronal coverage。预计改进效果：coronal/sagittal per-view evidence 不应出现 F1=0，mean non-axial weight 应可用，且 DFR-126 weak-positive FN 应至少部分改善。
+- **实验实际结果**：best validation `val_acc/auc/f1=0.8936170212765957/0.9636363636363636/0.8913043478260869`，比 DFR-132 好但仍显著低于 DFR-25 seed42 `0.9361702127659575/0.9786363636363636/0.9333333333333333` 与 DFR-116 seed42 `0.9574468085106383/0.9831818181818182/0.9545454545454546`；峰值显存约 `5.1GB`。Telemetry: mean weight `axial/coronal/sagittal = 0.7975024968 / 0.0962617475 / 0.1062357542`，top-weight 仍 `94/0/0`，top true-margin `79/2/13`；coronal 与 sagittal 单视角均为 `accuracy=0.5319148936170213`, `f1=0.0`（coronal AUC `0.7963636364`, sagittal AUC `0.8204545455`）。相对 DFR-25，DFR-133 修复 `CTyin__CT24yin122` 与 `CTyin__CT24yin21`，但打坏 `6` 个病例（`CTyang__CT24yang1__CT2412yang17`, `CTyin__CT24yin109`, `CTyin__CT24yin116`, `CTyin__CT24yin125`, `CTyin__CT24yin182`, `CTyin__CT24yin39`）；相对 DFR-116 仅 fixed `1`、broken `7`，仍失去 `CTyin__CT24yin95` → **discard**。
+- **当前判断**：`n24_trim2` 说明 n32 的极端 weight collapse 可以缓和，但全局增加 slice 数仍未把 DFR-131 的静态 coverage 转化为 coronal classifier evidence；coronal/sagittal per-view F1=0 是决定性失败。不要继续跑 `n16/n24/n32` formal 或多 seed。下一轮 DFR-134 应做 read-only sampling-size evidence drift audit：比较 DFR-25/132/133 的 per-view abnormal probability、true margin、top-true-margin、fixed/broken 病例与 DFR-131 coverage flags，判断失败来自多 slice 训练稀释、pretrained input distribution mismatch、augmentation/CE 对 non-axial 的 collapse，还是仅 gate 权重问题；然后再选择一个可表达的最小变量（例如恢复 8-slice 训练但增加 eval-side sampling ensemble、或非改 dataset 的 view evidence calibration）。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-132 global n32 sampling formal`：从 DFR-25 anchor 只改 `data.num_slices_per_view=32`，保持 trim/scalars/runtime env 不变，并生成 validation fusion telemetry。 |
-| 上次结果 | commit `5f791cb`；run [runs/resnext_decision_256x8_mainline/dfr132_sampling_256x32_formal_s42](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr132_sampling_256x32_formal_s42)。`val_acc/auc/f1=0.882979/0.951818/0.881720`，mean weights `0.9687/0.0126/0.0187`，top-weight `94/0/0`；相对 DFR116 fixed 1 / broken 8 → discard. |
-| 下一步 | DFR-133：single-seed formal probe from DFR-25 anchor，只改 `data.num_slices_per_view=24`、保持 `trim_edge_slices=2`；这是 DFR-131 第二候选且无 clean-correct coronal collateral。若 n24 仍 coronal F1/weight 塌缩，则关闭全局 sampling-size family。 |
+| 上次实验 | `DFR-133 global n24 sampling formal`：从 DFR-25 anchor 只改 `data.num_slices_per_view=24`，保持 trim/scalars/runtime env 不变，并生成 validation fusion telemetry。 |
+| 上次结果 | commit `46151cc`；run [runs/resnext_decision_256x8_mainline/dfr133_sampling_256x24_formal_s42](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr133_sampling_256x24_formal_s42)。`val_acc/auc/f1=0.893617/0.963636/0.891304`，mean weights `0.7975/0.0963/0.1062`，top-weight `94/0/0`；coronal/sagittal per-view F1 both `0.0`; vs DFR116 fixed 1 / broken 7 → discard. |
+| 下一步 | DFR-134：read-only sampling-size evidence drift audit comparing DFR-25/132/133 telemetry plus DFR-131 coverage flags. Goal: explain why static coronal coverage did not translate into per-view evidence, and decide the next minimal expressible variable; do not run another global slice-count formal until this audit is done. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1（DFR-132 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 2（DFR-132/133 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
