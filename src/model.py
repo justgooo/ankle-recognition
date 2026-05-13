@@ -2446,6 +2446,29 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_MARGIN",
             0.25,
         )
+        self.enable_axial_fp_risk_normal_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_AXIAL_FP_RISK_NORMAL_AUX_LOSS"
+        )
+        self.axial_fp_risk_normal_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_AXIAL_FP_RISK_NORMAL_AUX_WEIGHT",
+            0.001,
+        )
+        self.axial_fp_risk_normal_aux_axial_abnormal_min = _env_unit_float(
+            "ANKLE_DECISION_AXIAL_FP_RISK_NORMAL_AUX_AXIAL_ABNORMAL_MIN",
+            0.925,
+        )
+        self.axial_fp_risk_normal_aux_sagittal_normal_min = _env_unit_float(
+            "ANKLE_DECISION_AXIAL_FP_RISK_NORMAL_AUX_SAGITTAL_NORMAL_MIN",
+            0.60,
+        )
+        self.axial_fp_risk_normal_aux_fused_abnormal_min = _env_unit_float(
+            "ANKLE_DECISION_AXIAL_FP_RISK_NORMAL_AUX_FUSED_ABNORMAL_MIN",
+            0.75,
+        )
+        self.axial_fp_risk_normal_aux_coronal_abnormal_max = _env_unit_float(
+            "ANKLE_DECISION_AXIAL_FP_RISK_NORMAL_AUX_CORONAL_ABNORMAL_MAX",
+            0.525,
+        )
         self.enable_coronal_pair_abnormal_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS"
         )
@@ -2918,6 +2941,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_gate_confirmed_target_rank_margin_aux_loss,
             self.enable_axial_sagittal_rank_aux_loss,
             self.enable_fp_risk_axial_sagittal_rank_aux_loss,
+            self.enable_axial_fp_risk_normal_aux_loss,
             self.enable_coronal_pair_abnormal_aux_loss,
             self.enable_nonaxial_abnormal_aux_loss,
             self.enable_sagittal_normal_rescue_aux_loss,
@@ -2934,6 +2958,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_GATE_CONFIRMED_TARGET_RANK_MARGIN_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_AXIAL_FP_RISK_NORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_SAGITTAL_NORMAL_RESCUE_AUX_LOSS are mutually exclusive."
@@ -4366,6 +4391,56 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 rank_logits.detach(),
             ).unsqueeze(1)
             aux_weight = self.fp_risk_axial_sagittal_rank_aux_weight
+        elif self.enable_axial_fp_risk_normal_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "Axial FP-risk normal auxiliary loss is enabled but fusion weights "
+                    "were not produced."
+                )
+            if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+                raise RuntimeError(
+                    "Axial FP-risk normal auxiliary loss expects view logits with "
+                    "shape (batch, 3, classes)."
+                )
+            if view_logits.shape[-1] != 2:
+                raise RuntimeError(
+                    "Axial FP-risk normal auxiliary loss requires binary logits."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "Axial FP-risk normal auxiliary loss expects fusion weights with "
+                    "shape (batch, 3, 1) matching view logits."
+                )
+
+            detached_probs = torch.softmax(view_logits.detach(), dim=-1)
+            abnormal_probs = detached_probs[..., 1]
+            axial_abnormal = abnormal_probs[:, 0]
+            coronal_abnormal = abnormal_probs[:, 1]
+            sagittal_normal = detached_probs[:, 2, 0]
+            detached_weights = fusion_weights.detach()
+            detached_fused_logits = (view_logits.detach() * detached_weights).sum(dim=1)
+            fused_abnormal = torch.softmax(detached_fused_logits, dim=-1)[:, 1]
+
+            risk_mask = (
+                fused_abnormal.ge(self.axial_fp_risk_normal_aux_fused_abnormal_min)
+                & axial_abnormal.ge(self.axial_fp_risk_normal_aux_axial_abnormal_min)
+                & sagittal_normal.ge(self.axial_fp_risk_normal_aux_sagittal_normal_min)
+                & coronal_abnormal.le(
+                    self.axial_fp_risk_normal_aux_coronal_abnormal_max
+                )
+            )
+            axial_normal_logits = view_logits[:, 0:1, 0:1]
+            axial_abnormal_logits = view_logits[:, 0:1, 1:2].detach()
+            active_aux_logits = torch.cat(
+                [axial_normal_logits, axial_abnormal_logits],
+                dim=-1,
+            )
+            aux_logits = torch.where(
+                risk_mask.view(-1, 1, 1),
+                active_aux_logits,
+                active_aux_logits.detach(),
+            )
+            aux_weight = self.axial_fp_risk_normal_aux_weight
         elif self.enable_coronal_pair_abnormal_aux_loss:
             if fusion_weights is None:
                 raise RuntimeError(
