@@ -1918,6 +1918,15 @@
 - [x] **DFR-122-RESNEXT-DECISION-256X8-DUPLICATE-METRIC-SENSITIVITY-ANALYSIS**：commit `415da88`，新增 [scripts/report_dfr122_duplicate_metric_sensitivity.py](/dataset/HH/ankle-ct/scripts/report_dfr122_duplicate_metric_sensitivity.py)，以 DFR-121 发现的 duplicate group `CTyang__CT24yang1__CT2412yang3 / CTyang__CT24yang2__CT2412yang1` 为只读诊断权重，分别计算 DFR-25 与 DFR-116 的 full validation、duplicate-group-weighted、keep-first duplicate-only 指标；完整报告写入 [autoresearch_logs/dfr122_duplicate_metric_sensitivity.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr122_duplicate_metric_sensitivity.json)。设计思路：不改数据文件、不改 split、不把去重指标作为官方模型选择，只量化重复阳性 FN 对当前 validation ceiling 的影响。预计改进效果：如果重复 FN 确实压低 absolute metric，去重/降权后 DFR-25 与 DFR-116 都应上升；如果 DFR-116 combo 是真实相对收益，`DFR116-DFR25` delta 应仍为正。实验实际结果：DFR-25 full mean `0.939716/0.967727/0.935893`，duplicate-weighted `0.949821/0.977675/0.946612`；DFR-116 full mean `0.950355/0.971515/0.946965`，duplicate-weighted `0.960573/0.981550/0.957850`。DFR-116 相对 DFR-25 的增益在 full 下为 `acc +0.010639 / auc +0.003788 / f1 +0.011072`，在 duplicate-weighted 下为 `acc +0.010752 / auc +0.003875 / f1 +0.011238`，说明重复病例压低了 absolute ceiling，但没有抹掉 DFR-116 的相对增益 → **keep as validation-sensitivity report**。
 - **当前判断**：DFR-122 说明 DFR-116 的相对收益稳定，但官方 validation absolute metric 被重复阳性 FN 扭曲。下一轮不应修改数据文件；更合格的 DFR-123 是做只读 duplicate scan across full metadata（train/val/test 只报告 hash/group/split，不用 test 指标），确认是否还有跨 split 或同 split 重复体数据，作为后续人工数据清理依据。
 
+### DFR-123 full metadata duplicate scan（2026-05-14）
+
+> **DFR-123 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-121/122 已证明 remaining FN 与 duplicate validation evidence 相关；本轮只读扩大到 full metadata，确认是否还有跨 split 重复体数据，避免把数据泄漏/重复病例误解释成 learned gate 机制收益或失败。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？它不改模型也不改官方选择规则，但能决定当前 validation ceiling 和训练/验证边界是否可信；如果存在 train-val 重复，应先量化其影响，再判断 DFR-116 相对收益是否仍是模型/校准机制本身。
+
+- [x] **DFR-123-RESNEXT-DECISION-256X8-FULL-METADATA-DUPLICATE-SCAN-ANALYSIS**：commit `acc0cc3`，新增 [scripts/report_dfr123_full_metadata_duplicate_scan.py](/dataset/HH/ankle-ct/scripts/report_dfr123_full_metadata_duplicate_scan.py)，只读扫描 `data/realdata/metadata.csv` 的 train/val/test NIfTI 路径；先按 resolved path 报告重复路径，再只对同文件大小的 NIfTI 候选组计算 SHA256（exact duplicate 不可能跨不同文件大小），完整报告写入 [autoresearch_logs/dfr123_full_metadata_duplicate_scan.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr123_full_metadata_duplicate_scan.json)。设计思路：不读取预测、不读取 test 指标、不修改数据文件或 split，只报告 hash/group/split/label 分布。预计改进效果：若 DFR-121 duplicate 只是孤立 val-val 现象，full scan 应只发现该组；若存在 train-val 重复，则需要把 validation 指标解释改为包含 leakage/duplicate sensitivity。实验实际结果：metadata `376` 行，`376` 个唯一 patient_id，`376` 个唯一 NIfTI 路径，missing/invalid path `0`，duplicate patient_id `0`，multi-patient same-path group `0`；size prefilter 只需 hash `6` 个路径，发现 `3` 个 content duplicate groups / `6` 个 patient，其中 `2` 个是 train-val 阳性重复：`CTyang__CT24yang1__CT2412yang17`(val) = `CTyang__CT24yang2__CT2412yang13`(train)，`CTyang__CT24yang1__CT2412yang29`(val) = `CTyang__CT24yang2__CT2412yang19`(train)；另 `1` 个是 DFR-121 已知 val-val 阳性重复 `CTyang__CT24yang1__CT2412yang3` = `CTyang__CT24yang2__CT2412yang1`。所有重复均同 label，无 cross-label duplicate → **keep as data-integrity audit**。
+- **当前判断**：DFR-123 把问题从单个 validation duplicate 扩展为 small but real metadata duplicate/leakage concern。下一轮仍不改数据文件；应做 DFR-124 read-only metric sensitivity，把 val-val duplicate 与 train-val duplicated validation patients 分开降权/剔除，比较 DFR-25 与 DFR-116 的 official full-validation mean、duplicate-clean sensitivity mean 与 DFR116-DFR25 delta，确认当前 posthoc branch 相对收益是否仍稳定。
+
 ---
 
 ## Agent 状态
@@ -1926,11 +1935,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-122 duplicate-aware validation sensitivity`：只读计算 duplicate group 降权/去重对 DFR-25 与 DFR-116 validation 指标的影响。 |
-| 上次结果 | commit `415da88`；报告 [autoresearch_logs/dfr122_duplicate_metric_sensitivity.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr122_duplicate_metric_sensitivity.json)。重复 FN 降权后 DFR-25 从 `0.939716/0.967727/0.935893` 升到 `0.949821/0.977675/0.946612`，DFR-116 从 `0.950355/0.971515/0.946965` 升到 `0.960573/0.981550/0.957850`；DFR-116 相对 DFR-25 的增益仍为正且略增。 |
-| 下一步 | DFR-123：做 full-metadata duplicate scan，只读扫描 train/val/test 的 NIfTI hash/group/split 分布，确认是否存在更多同 split 或跨 split 重复体数据；只报告，不使用 test 指标、不修改数据文件。 |
+| 上次实验 | `DFR-123 full metadata duplicate scan`：只读扫描 train/val/test NIfTI path/hash/group/split 分布。 |
+| 上次结果 | commit `acc0cc3`；报告 [autoresearch_logs/dfr123_full_metadata_duplicate_scan.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr123_full_metadata_duplicate_scan.json)。full metadata 中发现 `3` 个阳性 content duplicate groups：`2` 个 train-val 重复（`CTyang17`/`CTyang13`、`CTyang29`/`CTyang19`）和 `1` 个 DFR-121 已知 val-val 重复（`CTyang3`/`CTyang1`）；无 missing path、无 duplicate patient_id、无 same-path multi-patient、无 cross-label duplicate。 |
+| 下一步 | DFR-124：做 duplicate/leakage-aware validation metric sensitivity report，只读地区分 val-val duplicate 降权、train-val duplicated validation patients 剔除/降权、两者 combined，对 DFR-25 与 DFR-116 计算 mean acc/AUC/F1 与 delta；不使用 test 指标、不修改数据文件。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-121 data/sampling audit keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-123 data-integrity audit keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
