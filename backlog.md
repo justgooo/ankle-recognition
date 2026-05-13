@@ -2062,17 +2062,29 @@
 
 ---
 
+### DFR-136 sampling replay frontier audit（2026-05-14）
+
+> **DFR-136 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-135 证明直接 n24/n32 frozen replay 会扰动 DFR-25 证据；本轮只读检查 alternate sampling 是否仍含有可通过 label-free blend/selector 提取的局部 view-evidence 修复信号。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果采样 replay 能在 `broken=0` 下新增修复，且不破坏 DFR-116 strict combo 已修复样本，就可以把 sampling 作为 eval-side calibration 候选；如果只能重复 DFR-116 已覆盖的修复或破坏 DFR-116，则应关闭 sampling family。
+
+- [x] **DFR-136-RESNEXT-DECISION-SAMPLING-REPLAY-FRONTIER-AUDIT-ANALYSIS**：commit `c5c9b11`，新增 [scripts/report_dfr136_sampling_replay_frontier.py](/dataset/HH/ankle-ct/scripts/report_dfr136_sampling_replay_frontier.py)，只读取 DFR-25 seed42、DFR-116 seed42、DFR-135 frozen n24/n32 的 validation telemetry，扫描 fixed probability blends、3-way blends、order-statistic blends，以及 lower/raise/near-boundary/consensus selectors；完整报告写入 [autoresearch_logs/dfr136_sampling_replay_frontier.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr136_sampling_replay_frontier.json)。设计思路：不训练、不读 test、不改数据，验证大 slice-count replay 是否还有安全 label-free ensemble 信号。
+- **实验实际结果**：共扫描 `2048` 个候选，`no_harm_vs_dfr25_count=327`，`improved_no_harm_vs_dfr25_count=263`，但 `dfr116_safe_count=0`、`dfr116_improved_safe_count=0`。最佳候选 `lower_n24_base0.80_alt0.550_d0.30` 只触发 `CTyin__CT24yin21`，相对 DFR-25 seed42 `fixed=1/broken=0`，得到 `val_acc/auc/f1=0.946809/0.980909/0.943820`；但它相对 DFR-116 seed42 `fixed=0/broken=1`，失去 DFR-116 已修复的 `CTyin__CT24yin95`，且低于 DFR-116 seed42 `0.957447/0.983182/0.954545` → **analysis-positive keep / sampling branch closure**。
+- **当前判断**：关闭 sampling-count / frozen replay / label-free ensemble family。DFR-131 的 static coverage、DFR-132/133 的 global S training、DFR-135 的 frozen replay、DFR-136 的 frontier selector 都不能在保护 DFR-116 strict combo 的同时提供新增收益。下一轮应转向不改数据的 view-evidence / annotation-quality 审计：优先围绕 DFR-116 clean remaining strong axial FP 与 weak-positive FN，判断是否存在可表达的 per-view calibration 或数据质量标记，而不是继续调整 `num_slices_per_view`。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-135 frozen DFR25 sampling replay`：用 DFR-25 seed42 checkpoint 不训练，分别以 n24/n32 dataloader 重跑 validation telemetry。 |
-| 上次结果 | commit `3e1c262`；n24/n32 frozen replay 都只有 `val_acc=0.882979`，AUC `0.960000/0.961818`，均低于 DFR-25；n24 fixed 1/broken 6，n32 fixed 0/broken 5 → discard direct frozen replay. |
-| 下一步 | DFR-136：read-only sampling ensemble/frontier audit using DFR25 baseline + DFR135 n24/n32 frozen telemetry. Check whether any label-free no-harm selector or probability blend can exploit the alternate samplings; if not, stop sampling family. |
+| 上次实验 | `DFR-136 sampling replay frontier audit`：只读扫描 DFR25 + DFR135 frozen n24/n32 telemetry 的 label-free blend/selector frontier。 |
+| 上次结果 | commit `c5c9b11`；最佳 selector 只修复 DFR25 的 `CTyin21`，但所有候选 `dfr116_safe_count=0`，最佳候选会失去 DFR116 的 `CTyin95`，整体低于 DFR116 seed42 → keep as branch closure / no model promotion. |
+| 下一步 | DFR-137：view-evidence / annotation-quality audit for DFR116 clean remaining errors after sampling-family closure. Focus on strong axial FP and weak-positive FN to decide whether any expressible per-view calibration or data-quality marker remains; do not continue `num_slices_per_view` family. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 1（DFR-135 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-136 是 analysis-positive branch closure；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
