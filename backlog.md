@@ -1810,17 +1810,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-113 model-internal posthoc fp-risk gate）
+
+> **DFR-113 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-112 只是离线 logits-level replay，本轮把同一个 label-free `fp_risk` 规则放进模型内部的 eval-side gate path，让真实 `forward_with_decision_info` 输出直接反映 sagittal residual 后的 fusion weights。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？它保持 DFR-25 learned scorer/classifier 不变，不训练、不平均，只在 `fused abnormal + axial moderate-high abnormal + sagittal normal + coronal not abnormal + axial top but gap bounded` 的高精度 FP 风险样本上给 sagittal confidence 一个固定 residual；预期是把 DFR-25 已验证的 routing 保住，同时释放极少数被 axial lock-in 打坏的阴性样本。
+
+- [x] **DFR-113-RESNEXT-DECISION-256X8-MODEL-INTERNAL-POSTHOC-FP-RISK-GATE-TELEMETRY**：commits `32820d2` + `77b163f`，在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增默认关闭的 `PosthocFPRiskSagittalGate`，通过 `ANKLE_DECISION_ENABLE_POSTHOC_FP_RISK_SAGITTAL_GATE=1` 启用；新增三份 telemetry config：[configs/cmp_resnext_decision_256x8_dfr113_posthoc_fp_risk_gate_formal_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr113_posthoc_fp_risk_gate_formal_s42.yaml)、[configs/cmp_resnext_decision_256x8_dfr113_posthoc_fp_risk_gate_formal_s123.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr113_posthoc_fp_risk_gate_formal_s123.yaml)、[configs/cmp_resnext_decision_256x8_dfr113_posthoc_fp_risk_gate_formal_s456.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x8_dfr113_posthoc_fp_risk_gate_formal_s456.yaml)。设计思路：把 DFR-112 最佳规则实现为 eval-only、默认关闭、checkpoint-compatible 的 gate residual，验证它是否在真实模型前向中复现离线结果。预计改进效果：seed42 只释放 `CTyin__CT24yin21/95` 到 sagittal top-weight，seed123/456 不触发或不改变预测；aggregate top-weight 应从 DFR-25 `237/0/45` 变为 `235/0/47`，并保持 `fixed=2 / broken=0`。实验实际结果：Slurm `RTXA6Kq/node11` 单卡 telemetry 对既有 DFR-25 checkpoints 运行 `scripts/analyze_fusion_weights.py`，输出 [runs/resnext_decision_256x8_mainline/dfr113_posthoc_fp_risk_gate_formal_s42/fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr113_posthoc_fp_risk_gate_formal_s42/fusion_weight_analysis.json)、[runs/resnext_decision_256x8_mainline/dfr113_posthoc_fp_risk_gate_formal_s123/fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr113_posthoc_fp_risk_gate_formal_s123/fusion_weight_analysis.json)、[runs/resnext_decision_256x8_mainline/dfr113_posthoc_fp_risk_gate_formal_s456/fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr113_posthoc_fp_risk_gate_formal_s456/fusion_weight_analysis.json)。seed42 `val_acc/auc/f1 = 0.9574468085106383 / 0.9831818181818182 / 0.9545454545454546`，top-weight `92/0/2`；seed123 unchanged `0.9361702127659575 / 0.9554545454545454 / 0.9318181818181818`，top-weight `49/0/45`；seed456 unchanged `0.9468085106382979 / 0.9690909090909091 / 0.9425287356321839`，top-weight `94/0/0`。3-seed mean `0.9468085106382979 / 0.9692424242424242 / 0.9429641239986067`，aggregate top-weight `235/0/47`；patient-level diff 相对 DFR-25 只修复 seed42 `CTyin__CT24yin21` 与 `CTyin__CT24yin95`，`fixed=2 / broken=0` → **model-internal analysis-positive keep**（posthoc calibration branch，不是训练 checkpoint promotion）。
+- **当前判断**：DFR-113 证明 DFR-112 不是脚本重算伪影；该规则已经能作为默认关闭的模型内 eval-side calibration branch 保留。下一轮不应扩大为 broad train-time aux，也不应把 test 指标用于选择；优先做 DFR-114 的 label-free safety/coverage audit：围绕 DFR-113 trigger 边界扫描更严格或同等精度的 second-stage candidates，要求跨三 seed `broken=0`，并显式记录哪些未修复 DFR-25 错误不能用当前可观测条件安全覆盖。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-112 multiseed posthoc fp-risk`：analysis-only 对 DFR-25 seeds `42/123/456` 做模型等价 logits-level sagittal gate residual 验证。 |
-| 上次结果 | commit `5ff6b7e`；报告 [autoresearch_logs/dfr112_multiseed_posthoc_fp_risk.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr112_multiseed_posthoc_fp_risk.json)。固定/最佳 `fp_risk` rule：`residual=5.0`, `axial_min=0.4`, `axial_max=0.88`, `fused_abnormal_min=0.8`, `sagittal_normal_min=0.55`, `coronal_abnormal_max=0.525`, `confidence_gap_max=5.0`；3-seed mean `0.946809/0.969243/0.942964`，aggregate top-weight `235/0/47`，只触发 seed42 `CTyin21/95`，`fixed=2/broken=0`。 |
-| 下一步 | 把 DFR-112 最佳 `fp_risk` 规则做成默认关闭的模型内 eval-side gate residual（DFR-113），用现有 DFR-25 checkpoints 运行真实 `forward_with_decision_info` telemetry；若模型内结果复现 3-seed no-harm 提升，再把它作为 posthoc calibration branch 保留。不要回到 train-time CE aux 阈值扫描。 |
+| 上次实验 | `DFR-113 model-internal posthoc fp-risk gate`：把 DFR-112 label-free rule 做成默认关闭 eval-side gate，并用既有 DFR-25 checkpoints 生成真实 `forward_with_decision_info` telemetry。 |
+| 上次结果 | commits `32820d2` + `77b163f`；telemetry 写入 `runs/resnext_decision_256x8_mainline/dfr113_posthoc_fp_risk_gate_formal_s{42,123,456}/fusion_weight_analysis.json`。3-seed mean `0.946809/0.969242/0.942964`，aggregate top-weight `235/0/47`；seed42 only `CTyin21/95` 从 axial top 迁到 sagittal top，`fixed=2/broken=0`。 |
+| 下一步 | DFR-114：做 label-free safety/coverage audit，围绕 DFR-113 trigger 边界扫描更严格或同等精度的 candidate，不训练、不用测试集；目标是判断能否安全覆盖 DFR-25 其余 FP 或确认当前 high-precision 规则已经到达可观测条件上限。不要回到 train-time CE aux 阈值扫描。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-112 作为 analysis-positive keep 重置；注意它不是训练模型 promotion，当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean。） |
+| 连续 discard 计数 | 0（DFR-113 作为 model-internal analysis-positive keep 重置；注意它不是训练模型 promotion，当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
