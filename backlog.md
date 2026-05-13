@@ -1956,17 +1956,28 @@
 
 ---
 
+### DFR-127 axial FP calibration frontier（2026-05-14）
+
+> **DFR-127 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-126 已经把 clean remaining FP 收束为 strong axial classifier FP；本轮只读比较 clean FP/TN/TP 的 axial abnormal、non-axial normal evidence 与候选 frontier，判断是否存在可安全表达的 axial-risk calibration signal。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？若 clean FP 与 clean TP 可由 label-free axial-risk 条件分开，则可以在不破坏 DFR-116 已修复样本和真阳性的前提下继续降低 FP，保持 DFR-116 axial-majority routing 并提高 clean mean val_acc。
+
+- [x] **DFR-127-RESNEXT-DECISION-256X8-AXIAL-FP-CALIBRATION-FRONTIER-ANALYSIS**：commit `01ef7ad`，新增 [scripts/report_dfr127_axial_fp_calibration_frontier.py](/dataset/HH/ankle-ct/scripts/report_dfr127_axial_fp_calibration_frontier.py)，读取 DFR-124/125 clean policy、DFR-116 telemetry 与 DFR-126 false-case buckets，只读扫描 axial-risk / non-axial-normal candidate frontier；完整报告写入 [autoresearch_logs/dfr127_axial_fp_calibration_frontier.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr127_axial_fp_calibration_frontier.json)。设计思路：不训练、不读取 test、不修改数据文件；如果存在安全 axial FP calibration frontier，应出现 `zero_positive_candidate_count > 0`，或至少 full-FP coverage 的 positive collateral 很低。预计改进效果：clean FP 的 axial abnormal 应能与 clean TN 分开，同时仍能通过 non-axial normal / fused margin 与 clean TP 分开，从而形成正例保护的 label-free FP 降噪门控。实验实际结果：clean sample `273`，DFR-116 clean confusion 为 `TN=143 / TP=119 / FP=7 / FN=4`。扫描 `1830` 个候选，`zero_positive_candidate_count=0`；虽然有 `45` 个候选覆盖全部 `7` 个 clean FP，但最优 full-coverage 条件 `axial_min=0.925, fused_min=0.75, sagittal_normal_min=0.6, coronal_max=0.525` 会同时触发 `51` 个 TP（共触发 `58` 个样本，FP precision only `0.12069`）。feature separability 显示 axial abnormal 对 FP vs TN 几乎可分（AUC `0.997003`），但对 FP vs predicted-positive TP 是反向/不可用信号（AUC `0.121248`）；`113` 个 clean TP 也有 high axial abnormal，TP axial median `0.998788` 高于 FP median `0.966726`。`axial_minus_max_nonaxial` 对 FP vs TN AUC `0.999001`，但 FP vs TP AUC 仅 `0.609844`，仍不足以形成 label-free 正例保护 → **discard as no safe label-free axial-risk gate**。
+- **当前判断**：DFR-127 关闭了“只靠 axial-risk / non-axial-normal threshold 就能安全消掉 strong axial FP”的路径。clean FP 确实不是 TN-like，而是与大量真阳性的 high-axial-abnormal evidence 重叠；下一轮不应继续阈值扩张，应做 DFR-128 supervised/view-specific calibration trainability audit：先确认现有 `train.py` auxiliary hook 与 `src/model.py` 输出能否在不改训练入口的约束下表达 positive-protected axial classifier calibration；如果不能表达，就转向 sampling/augmentation 或只读标注审计。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-126 clean remaining evidence/sampling audit`：只读检查 clean remaining 7 个 patient 的 per-view evidence、NIfTI metadata 与 baseline sampling coverage。 |
-| 上次结果 | commit `8cf074c`；报告 [autoresearch_logs/dfr126_clean_remaining_evidence_sampling.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr126_clean_remaining_evidence_sampling.json)。bucket=`negative_strong_axial_classifier_fp=5`、`positive_recurrent_subthreshold_evidence=1`、`positive_no_view_reaches_weak_abnormal=1`；5 个 negative FP 在 error seed 的 axial abnormal 都 `>=0.90`，两个 positive FN 伴随 coronal sampling coverage flags。 |
-| 下一步 | DFR-127：做 axial FP calibration frontier，只读比较 DFR-25/DFR-116 validation telemetry 中 clean FP/TN 的 axial abnormal、non-axial normal evidence 与可分性，判断是否存在训练侧可表达的 axial-risk calibration signal；不修改数据文件、不使用 test 指标。 |
+| 上次实验 | `DFR-127 axial FP calibration frontier`：只读扫描 clean FP/TN/TP 的 axial-risk 与 non-axial-normal frontier，判断是否存在 label-free strong axial FP 降噪条件。 |
+| 上次结果 | commit `01ef7ad`；报告 [autoresearch_logs/dfr127_axial_fp_calibration_frontier.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr127_axial_fp_calibration_frontier.json)。clean confusion=`TN=143/TP=119/FP=7/FN=4`，`zero_positive_candidate_count=0`；best full-FP coverage candidate 覆盖 `7/7` FP 但同时触发 `51` TP，说明 label-free axial-risk gate 不安全。 |
+| 下一步 | DFR-128：做 supervised/view-specific axial calibration trainability audit，检查现有 `train.py` auxiliary hook 与 `src/model.py` 输出是否能在不改训练入口、不用 test、不改数据的约束下表达 positive-protected axial classifier calibration；若不能表达，转向 sampling/augmentation 或只读标注审计。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-126 mechanism audit keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 1（DFR-127 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
