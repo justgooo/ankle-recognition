@@ -2264,6 +2264,37 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             "ANKLE_DECISION_AXIAL_SAGITTAL_RANK_AUX_WEIGHT",
             0.001,
         )
+        self.enable_fp_risk_axial_sagittal_rank_aux_loss = _env_flag(
+            "ANKLE_DECISION_ENABLE_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_LOSS"
+        )
+        self.fp_risk_axial_sagittal_rank_aux_weight = _env_positive_float(
+            "ANKLE_DECISION_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_WEIGHT",
+            0.001,
+        )
+        self.fp_risk_axial_sagittal_rank_aux_axial_abnormal_min = _env_unit_float(
+            "ANKLE_DECISION_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_AXIAL_ABNORMAL_MIN",
+            0.82,
+        )
+        self.fp_risk_axial_sagittal_rank_aux_axial_abnormal_max = _env_unit_float(
+            "ANKLE_DECISION_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_AXIAL_ABNORMAL_MAX",
+            0.93,
+        )
+        self.fp_risk_axial_sagittal_rank_aux_sagittal_normal_min = _env_unit_float(
+            "ANKLE_DECISION_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_SAGITTAL_NORMAL_MIN",
+            0.70,
+        )
+        self.fp_risk_axial_sagittal_rank_aux_fused_abnormal_min = _env_unit_float(
+            "ANKLE_DECISION_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_FUSED_ABNORMAL_MIN",
+            0.75,
+        )
+        self.fp_risk_axial_sagittal_rank_aux_coronal_abnormal_max = _env_unit_float(
+            "ANKLE_DECISION_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_CORONAL_ABNORMAL_MAX",
+            0.525,
+        )
+        self.fp_risk_axial_sagittal_rank_aux_margin = _env_positive_float(
+            "ANKLE_DECISION_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_MARGIN",
+            0.25,
+        )
         self.enable_coronal_pair_abnormal_aux_loss = _env_flag(
             "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS"
         )
@@ -2673,6 +2704,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
             self.enable_gate_targeted_evidence_rank_aux_loss,
             self.enable_gate_confirmed_target_rank_margin_aux_loss,
             self.enable_axial_sagittal_rank_aux_loss,
+            self.enable_fp_risk_axial_sagittal_rank_aux_loss,
             self.enable_coronal_pair_abnormal_aux_loss,
             self.enable_nonaxial_abnormal_aux_loss,
             self.enable_sagittal_normal_rescue_aux_loss,
@@ -2688,6 +2720,7 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 "ANKLE_DECISION_ENABLE_GATE_TARGETED_EVIDENCE_RANK_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_GATE_CONFIRMED_TARGET_RANK_MARGIN_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_AXIAL_SAGITTAL_RANK_AUX_LOSS, and "
+                "ANKLE_DECISION_ENABLE_FP_RISK_AXIAL_SAGITTAL_RANK_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_CORONAL_PAIR_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_NONAXIAL_ABNORMAL_AUX_LOSS, and "
                 "ANKLE_DECISION_ENABLE_SAGITTAL_NORMAL_RESCUE_AUX_LOSS are mutually exclusive."
@@ -4002,6 +4035,67 @@ class MultiViewDecisionFusionClassifier(MultiViewEncoder):
                 rank_logits.detach(),
             ).unsqueeze(1)
             aux_weight = self.axial_sagittal_rank_aux_weight
+        elif self.enable_fp_risk_axial_sagittal_rank_aux_loss:
+            if fusion_weights is None:
+                raise RuntimeError(
+                    "FP-risk axial-sagittal rank auxiliary loss is enabled but fusion "
+                    "weights were not produced."
+                )
+            if view_logits.ndim != 3 or view_logits.shape[1] != 3:
+                raise RuntimeError(
+                    "FP-risk axial-sagittal rank auxiliary loss expects view logits "
+                    "with shape (batch, 3, classes)."
+                )
+            if view_logits.shape[-1] != 2:
+                raise RuntimeError(
+                    "FP-risk axial-sagittal rank auxiliary loss requires binary logits."
+                )
+            if fusion_weights.ndim != 3 or fusion_weights.shape[:2] != view_logits.shape[:2]:
+                raise RuntimeError(
+                    "FP-risk axial-sagittal rank auxiliary loss expects fusion weights "
+                    "with shape (batch, 3, 1) matching view logits."
+                )
+
+            detached_probs = torch.softmax(view_logits.detach(), dim=-1)
+            abnormal_probs = detached_probs[..., 1]
+            axial_abnormal = abnormal_probs[:, 0]
+            coronal_abnormal = abnormal_probs[:, 1]
+            sagittal_normal = detached_probs[:, 2, 0]
+            detached_weights = fusion_weights.detach()
+            detached_fused_logits = (view_logits.detach() * detached_weights).sum(dim=1)
+            fused_abnormal = torch.softmax(detached_fused_logits, dim=-1)[:, 1]
+
+            rank_mask = (
+                fused_abnormal.ge(self.fp_risk_axial_sagittal_rank_aux_fused_abnormal_min)
+                & axial_abnormal.ge(
+                    self.fp_risk_axial_sagittal_rank_aux_axial_abnormal_min
+                )
+                & axial_abnormal.le(
+                    self.fp_risk_axial_sagittal_rank_aux_axial_abnormal_max
+                )
+                & sagittal_normal.ge(
+                    self.fp_risk_axial_sagittal_rank_aux_sagittal_normal_min
+                )
+                & coronal_abnormal.le(
+                    self.fp_risk_axial_sagittal_rank_aux_coronal_abnormal_max
+                )
+            )
+            pair_log_weights = fusion_weights.squeeze(-1)[:, [0, 2]].clamp_min(1e-8).log()
+            margin = self.fp_risk_axial_sagittal_rank_aux_margin
+            # class 0 promotes sagittal normal rescue; class 1 preserves axial abnormal evidence.
+            rank_logits = torch.stack(
+                [
+                    pair_log_weights[:, 1] - pair_log_weights[:, 0] - margin,
+                    pair_log_weights[:, 0] - pair_log_weights[:, 1] - margin,
+                ],
+                dim=1,
+            )
+            aux_logits = torch.where(
+                rank_mask.view(-1, 1),
+                rank_logits,
+                rank_logits.detach(),
+            ).unsqueeze(1)
+            aux_weight = self.fp_risk_axial_sagittal_rank_aux_weight
         elif self.enable_coronal_pair_abnormal_aux_loss:
             if fusion_weights is None:
                 raise RuntimeError(
