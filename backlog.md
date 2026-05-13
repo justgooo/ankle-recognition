@@ -2074,17 +2074,29 @@
 
 ---
 
+### DFR-137 remaining-error decision audit（2026-05-14）
+
+> **DFR-137 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-116 后剩余错误已被 DFR-125/127/136 证明不能靠阈值扩张、label-free axial FP gate 或 sampling replay 安全解决；本轮把这些证据合并成 stop/go 决策表，避免继续在已关闭轴上训练。
+> - 如果成功，为什么有机会把 learned/posthoc full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果发现仍有模型侧可表达候选，就能开窄实验；如果没有，正确动作是先生成病例复核包，避免把数据/标注问题误当成 gate 结构问题。
+
+- [x] **DFR-137-RESNEXT-DECISION-REMAINING-ERROR-DECISION-AUDIT-ANALYSIS**：commit `70002d9`，新增 [scripts/report_dfr137_remaining_error_decision_audit.py](/dataset/HH/ankle-ct/scripts/report_dfr137_remaining_error_decision_audit.py)，读取 DFR-120/123/125/126/127/136 已生成 validation 报告，输出 [autoresearch_logs/dfr137_remaining_error_decision_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr137_remaining_error_decision_audit.json)。设计思路：不训练、不读 test、不改数据，只合并 DFR-116 clean remaining 错误、duplicate 信息、sampling flags、axial FP frontier 与 sampling replay frontier，判断是否还有立即可执行的模型侧实验。
+- **实验实际结果**：DFR-116 combined-clean 指标仍为 `val_acc/auc/f1=0.959707/0.982439/0.955819`。`7` 个 clean remaining patients / `11` cases 被分到：`duplicate_positive_annotation_review=1`（`CTyang...3`，validation duplicate content group，3 seed FN）、`positive_no_view_evidence_annotation_review=1`（`CTyang...54`，no error-seed view reaches weak abnormal evidence）、`negative_strong_axial_fp_label_or_view_classifier_review=5`（`CTyin109/113/122/21/95`，strong axial FP）。`model_side_supported_patient_count=0`；closed families 包括 posthoc threshold expansion、label-free axial FP gate、global slice-count training、frozen sampling replay、sampling replay blend/selector → **analysis-positive keep / no immediate model-side training**。
+- **当前判断**：当前最优模型侧资产仍是 DFR-116 strict combo；继续训练或阈值/采样搜索没有足够依据。下一轮 DFR-138 应生成一个 compact read-only review packet：7 个 clean remaining patients 的 paths/hashes、duplicate membership、per-seed view evidence、sampling flags、DFR-116/DFR-25 prediction diff 和建议人工复核点。只有复核包发现可表达的模型目标后，才重新启动训练实验。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-136 sampling replay frontier audit`：只读扫描 DFR25 + DFR135 frozen n24/n32 telemetry 的 label-free blend/selector frontier。 |
-| 上次结果 | commit `c5c9b11`；最佳 selector 只修复 DFR25 的 `CTyin21`，但所有候选 `dfr116_safe_count=0`，最佳候选会失去 DFR116 的 `CTyin95`，整体低于 DFR116 seed42 → keep as branch closure / no model promotion. |
-| 下一步 | DFR-137：view-evidence / annotation-quality audit for DFR116 clean remaining errors after sampling-family closure. Focus on strong axial FP and weak-positive FN to decide whether any expressible per-view calibration or data-quality marker remains; do not continue `num_slices_per_view` family. |
+| 上次实验 | `DFR-137 remaining-error decision audit`：合并 DFR-120/125/126/127/136 报告，判断 DFR-116 clean remaining 是否还有立即可表达的模型侧实验。 |
+| 上次结果 | commit `70002d9`；7 个 clean remaining patients 分为 duplicate positive review 1、positive no-view-evidence review 1、negative strong axial FP review 5；`model_side_supported_patient_count=0` → keep as decision audit / no immediate training. |
+| 下一步 | DFR-138：generate compact read-only review packet for the 7 DFR116 clean remaining patients, including paths/hashes, duplicate membership, per-seed view evidence, sampling flags, prediction diffs, and human-review prompts. Do not start another training run until the packet identifies a model-expressible target. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-136 是 analysis-positive branch closure；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（DFR-137 是 analysis-positive decision audit；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
