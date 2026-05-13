@@ -2050,17 +2050,29 @@
 
 ---
 
+### DFR-135 frozen DFR25 sampling replay（2026-05-14）
+
+> **DFR-135 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-134 证明训练 n24/n32 后 coronal classifier evidence 下降，但还不能区分是训练大 S 导致漂移，还是 DFR-25 checkpoint 在不同 slice sampling 下本身不稳定；本轮用同一个 DFR-25 checkpoint 做 frozen replay。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果 frozen n24/n32 replay 能改善 weak-positive coronal evidence且不打坏 DFR-25 正确样本，就可以考虑 eval-side sampling ensemble 或 label-free sampling selector，而不是重训大 S。
+
+- [x] **DFR-135-RESNEXT-DECISION-FROZEN-DFR25-SAMPLING-REPLAY-ANALYSIS**：commit `3e1c262`，新增 [configs/cmp_resnext_decision_256x24_dfr135_frozen_dfr25_replay_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x24_dfr135_frozen_dfr25_replay_s42.yaml)、[configs/cmp_resnext_decision_256x32_dfr135_frozen_dfr25_replay_s42.yaml](/dataset/HH/ankle-ct/configs/cmp_resnext_decision_256x32_dfr135_frozen_dfr25_replay_s42.yaml) 与 [scripts/slurm_dfr135_frozen_dfr25_sampling_replay.sbatch](/dataset/HH/ankle-ct/scripts/slurm_dfr135_frozen_dfr25_sampling_replay.sbatch)。Slurm job `486937` 只运行 `scripts/analyze_fusion_weights.py`，checkpoint 固定为 DFR-25 seed42 [best.pt](/dataset/HH/ankle-ct/runs/optuna_main_autoloop/iter_0001_20260423_021418_retry1/trials/trial_0001/run/best.pt)，分别以 n24/n32 dataloader 输出 [n24 telemetry](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr135_frozen_dfr25_replay_256x24_s42/fusion_weight_analysis.json) 与 [n32 telemetry](/dataset/HH/ankle-ct/runs/resnext_decision_256x8_mainline/dfr135_frozen_dfr25_replay_256x32_s42/fusion_weight_analysis.json)。设计思路：不训练、不读 test、不改数据，只验证静态 sampling coverage 是否能在 frozen checkpoint 下转化为更好 evidence。预计改进效果：如果训练大 S 是主因，frozen replay 应至少保留 DFR-25 accuracy，并改善 positive remaining coronal evidence。
+- **实验实际结果**：frozen replay 也失败。n24 frozen `val_acc/auc/f1=0.8829787234042553/0.9600000000000001/0.8817204301075269`；n32 frozen `0.8829787234042553/0.9618181818181818/0.8817204301075269`，均低于 DFR-25 seed42 `0.9361702127659575/0.9786363636363636/0.9333333333333333`。n24 frozen mean weights `0.898344/0.072362/0.029295`，coronal F1 `0.483871`；n32 frozen `0.899530/0.070967/0.029503`，coronal F1 `0.459016`；两者 top-weight 仍 `94/0/0`。相对 DFR-25，n24 frozen 只修复 `CTyin__CT24yin21`，但打坏 `6` 个 DFR-25 正确病例；n32 frozen fixed `0`、broken `5`。positive remaining `CTyang3` 仍 FN，coronal abnormal/true-margin 基本没有越过分类边界 → **discard**。
+- **当前判断**：DFR-135 关闭了直接 eval-side 大 slice-count replay。DFR-131 静态 coverage 代理不能直接预测 DFR-25 classifier 证据；大 S 采样会扰动 axial evidence 并引入新 FP/FN。唯一还值得检查的是 label-free ensemble/frontier：用 DFR25 baseline + frozen n24/n32 的现有 telemetry 做只读候选组合，确认是否存在 no-harm selector；如果没有，应停止 sampling family，转向 view-evidence calibration 或标注审计。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-134 sampling-size evidence drift audit`：只读比较 DFR-25/116/132/133 telemetry 与 DFR-131 static sampling flags，定位 n24/n32 训练失败机制。 |
-| 上次结果 | commit `f007223`；报告 [autoresearch_logs/dfr134_sampling_size_evidence_drift.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr134_sampling_size_evidence_drift.json)。结论：n24/n32 都让 positive remaining coronal abnormal/true-margin 相对 DFR-25 下降，non-axial F1 均为 0；这是 classifier/evidence drift，不只是 gate 未采用 → analysis-positive keep / close global slice-count formal family. |
-| 下一步 | DFR-135：frozen-checkpoint eval-side sampling replay。用 DFR-25 seed42 `best.pt` 不训练，分别以 n24/n32 dataloader 重跑 validation `fusion_weight_analysis.json`；判断大 slice 数在 frozen checkpoint 下是否能改善 coronal evidence，决定是否考虑 eval-side sampling ensemble。 |
+| 上次实验 | `DFR-135 frozen DFR25 sampling replay`：用 DFR-25 seed42 checkpoint 不训练，分别以 n24/n32 dataloader 重跑 validation telemetry。 |
+| 上次结果 | commit `3e1c262`；n24/n32 frozen replay 都只有 `val_acc=0.882979`，AUC `0.960000/0.961818`，均低于 DFR-25；n24 fixed 1/broken 6，n32 fixed 0/broken 5 → discard direct frozen replay. |
+| 下一步 | DFR-136：read-only sampling ensemble/frontier audit using DFR25 baseline + DFR135 n24/n32 frozen telemetry. Check whether any label-free no-harm selector or probability blend can exploit the alternate samplings; if not, stop sampling family. |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-134 为 analysis-positive keep / branch closure；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 1（DFR-135 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
