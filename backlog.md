@@ -1978,17 +1978,29 @@
 
 ---
 
+### DFR-129 axial FP-risk normal auxiliary（2026-05-14）
+
+> **DFR-129 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-127/128 指向 strong axial classifier FP，而现有训练入口可以通过 `_view_logits/_log_vars` 给触发样本施加 label-aware axial-normal CE；这轮只在模型内新增默认关闭的窄 aux，验证它能否减少 axial FP 而不伤害 high-axial TP。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果 axial FP calibration 成功，full fusion 可继续保持 DFR-25 的 axial-majority routing，同时降低少数 strong axial FP；预期不是 broad non-axial averaging，而是把错误的 axial abnormal evidence 校准回正常，从而提升 seed42 accuracy 并保留/改善 AUC。
+
+- [x] **DFR-129-RESNEXT-DECISION-256X8-AXIAL-FP-RISK-NORMAL-AUX-SEED42-MAIN-STUDY**：commits `78bb4af` + `f0c45ab`，在 [src/model.py](/dataset/HH/ankle-ct/src/model.py) 新增默认关闭的 `ANKLE_DECISION_ENABLE_AXIAL_FP_RISK_NORMAL_AUX_LOSS=1`，并通过 [configs/optuna_main_search_resnext_decision_256x8_dfr129_axial_fp_risk_normal_aux.yaml](/dataset/HH/ankle-ct/configs/optuna_main_search_resnext_decision_256x8_dfr129_axial_fp_risk_normal_aux.yaml) 跑 seed42 三个低权重候选 `0.0005/0.001/0.0025`；Slurm runner [scripts/slurm_dfr129_axial_fp_risk_normal_aux.sbatch](/dataset/HH/ankle-ct/scripts/slurm_dfr129_axial_fp_risk_normal_aux.sbatch) 在初次 job `486932` 因 Slurm 映射到忙卡 `0,1,2` 失败后，修正为显式使用 node16 已确认空闲物理 GPU `4,5,6`，job `486933` 完成。设计思路：使用 DFR-127 high axial-risk trigger，仅在 active samples 暴露 `[axial_normal_logit, detach(axial_abnormal_logit)]`，inactive samples 全 detach；label0 推高 axial normal，label1 下压 normal/保护 abnormal，避免 DFR-109/107 那种 broad weak-view 污染。预计改进效果：best candidate 应在不改变 DFR-25 geometry/scalars/runtime 的前提下修复 strong axial FP，mean fusion weight 可保持 axial-majority，但预测错误应净减少，且不应打坏 DFR-25 正确样本。
+- **实验实际结果**：3 trial 均有效，monitor 汇总为 trial0 `0.9148936170212766/0.9795454545454546/0.9090909090909091`（weight `0.0005`）、trial1 `0.9361702127659575/0.980909090909091/0.9333333333333333`（weight `0.001`）、trial2 `0.925531914893617/0.9722727272727273/0.9213483146067416`（weight `0.0025`）。best trial1 与 DFR-25 seed42 `val_acc/f1` 持平、AUC 从 `0.9786363636363636` 升到 `0.980909090909091`，但 [fusion_weight_analysis.json](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr129_axial_fp_risk_normal_aux/trials/trial_0001/run/fusion_weight_analysis.json) 显示 routing 没有完成主线目标：mean weight `axial/coronal/sagittal = 0.9031369965 / 0.0487057968 / 0.0481572037`，top-weight 仍是 `94/0/0`，top true-margin 分布 `86/6/2`。相对 DFR-25 seed42，预测变化只有两个阴性样本：修复 `CTyin__CT24yin122`，但打坏 `CTyin__CT24yin109`，`fixed=1 / broken=1 / net=0 / top_changed=0` → **discard**。
+- **当前判断**：DFR-129 证明 supervised axial-normal aux 可以改变轴位分类器，但在 positive-heavy trigger 下仍是净零，而且完全没有释放 non-axial top routing。不要继续扫 `AXIAL_FP_RISK_NORMAL_AUX_WEIGHT` 或阈值；下一轮应做 DFR-130 只读 drift audit：比较 DFR-25、DFR-129 best 与 DFR-116 clean branch 的 axial probability / trigger activation / changed cases，确认训练式 axial classifier calibration 是否已经应停止，或是否存在只对 `CTyin122` 类样本安全、能避开 `CTyin109` 的更窄可观测条件。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-128 axial calibration trainability audit`：只读检查 DFR-127 后的 supervised positive-protected axial classifier calibration 是否可由现有 aux hook 表达。 |
-| 上次结果 | commit `8801f9a`；报告 [autoresearch_logs/dfr128_axial_calibration_trainability_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr128_axial_calibration_trainability_audit.json)。结论=`positive_protected_axial_classifier_aux_feasible=true`、`can_run_without_train_py_change=true`、`needs_model_code_before_training=true`；下一轮可只改 `src/model.py`，新增默认关闭的 axial FP-risk normal aux。 |
-| 下一步 | DFR-129：实现 `ANKLE_DECISION_ENABLE_AXIAL_FP_RISK_NORMAL_AUX_LOSS`，用 DFR-127 high axial-risk trigger 暴露 `[axial_normal_logit, detach(axial_abnormal_logit)]` 的低权重 aux；先跑 seed42 low-weight main-study `0.0005/0.001/0.0025`，验证是否减少 axial FP recurrence 且不打坏 high-axial TP。 |
+| 上次实验 | `DFR-129 axial FP-risk normal auxiliary`：实现并训练低权重 supervised axial-normal aux，验证 DFR-127/128 的 strong axial FP calibration 假设。 |
+| 上次结果 | commits `78bb4af` + `f0c45ab`；study [runs/optuna_main_resnext_decision_256x8_dfr129_axial_fp_risk_normal_aux](/dataset/HH/ankle-ct/runs/optuna_main_resnext_decision_256x8_dfr129_axial_fp_risk_normal_aux)。best trial1 weight `0.001`，`val_acc/auc/f1=0.936170/0.980909/0.933333`，与 DFR-25 seed42 accuracy/F1 持平但 AUC 更高；fusion telemetry top-weight 仍 `94/0/0`，相对 DFR-25 `fixed=1/broken=1/net=0` → discard。 |
+| 下一步 | DFR-130：只读 drift audit，对比 DFR-25、DFR-129 best 和 DFR-116 clean branch 的 axial probability / trigger activation / changed cases，确认训练式 axial classifier calibration 是否应停止，或是否存在能修 `CTyin122` 且避开 `CTyin109` 的更窄可观测条件。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-128 analysis-positive keep；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 1（DFR-129 discard；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
