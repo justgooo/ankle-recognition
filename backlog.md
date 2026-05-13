@@ -1821,17 +1821,28 @@
 
 ---
 
+## 2026-05-14：Decision-Fusion Repair Follow-up（DFR-114 fp-risk safety/coverage audit，analysis）
+
+> **DFR-114 自检**
+> - 这项改动是否直接帮助 decision fusion 还原各视角应有作用？是。DFR-113 已经给出一个可部署的高精度 sagittal normal-rescue gate，本轮只审计它的 label-free 触发边界，判断能否在不打坏样本的前提下多覆盖 DFR-25 错误。
+> - 如果成功，为什么有机会把 learned full-fusion `val_acc` 推到 matched `equal-weight` 之上？如果同一 FP-risk 语义能继续覆盖更多 axial-FP / non-axial-normal 样本且 `broken=0`，则可以把 DFR-113 默认规则安全放宽，继续保持 learned axial-majority routing，同时提高 validation accuracy；如果不能，则应保持 DFR-113 strict rule，不再做 broad threshold/CE aux 扫描。
+
+- [x] **DFR-114-RESNEXT-DECISION-256X8-FP-RISK-SAFETY-COVERAGE-AUDIT-ANALYSIS**：commit `f7e19ac`，新增 [scripts/analyze_dfr114_fp_risk_coverage.py](/dataset/HH/ankle-ct/scripts/analyze_dfr114_fp_risk_coverage.py)，只读取 DFR-25 seeds `42/123/456` 的 validation telemetry，围绕 DFR-113 的 `fp_risk` 规则做 bounded neighborhood audit；完整报告写入 [autoresearch_logs/dfr114_fp_risk_safety_coverage_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr114_fp_risk_safety_coverage_audit.json)。设计思路：不训练、不改 checkpoint、不用 test；枚举 strict/relaxed sagittal、coronal、best-nonaxial-normal 候选，并按 `broken`、`fixed`、`val_acc`、routing 分布排序，补充 remaining-error reason。预计改进效果：如果 DFR-113 strict rule 太保守，应存在 `broken=0` 且 `fixed>2` 的 relaxed rule；否则 frontier 会显示继续修复需要牺牲 DFR-25-correct 样本。实验实际结果：bounded audit 评估 `300` 个唯一可观测动作，`41` 个 no-harm。DFR-113 strict rule保持 `fixed=2/broken=0`、mean `0.946809/0.969243/0.942964`、aggregate top-weight `235/0/47`；best no-harm relaxed rule为 sagittal `residual=5.0`, `axial_max=0.93`, `target_normal_min=0.60`，触发 seed42 `5` 个样本，top-weight `232/0/50`，AUC 小升到 `0.969394`，但仍只 `fixed=2/broken=0`，`val_acc/f1` 不变。frontier 中能 `fixed=3` 的候选至少 `broken=2`，mean `val_acc` 降到 `0.943263`。remaining-error audit 显示未覆盖 FP 多数因 axial abnormal 超过 safety cap，FN 则不是 normal-rescue gate 能修的机制 → **discard expanded rule / keep boundary knowledge**。
+- **当前判断**：DFR-114 关闭了“简单放宽 DFR-113 触发边界即可继续提高 val_acc”的假设。DFR-113 strict rule 仍是当前应保留的 posthoc calibration branch；下一轮如果继续优化，不应再扫 FP-risk 阈值，而应转到独立机制：positive-FN abnormal evidence rescue（必须先 analysis-only、label-free、no test），或把 DFR-113 strict branch整理成正式配置/文档以便后续验证。
+
+---
+
 ## Agent 状态
 
 > Agent 每次实验后必须更新此表。新 Agent 启动时以此表为起点。
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-113 model-internal posthoc fp-risk gate`：把 DFR-112 label-free rule 做成默认关闭 eval-side gate，并用既有 DFR-25 checkpoints 生成真实 `forward_with_decision_info` telemetry。 |
-| 上次结果 | commits `32820d2` + `77b163f`；telemetry 写入 `runs/resnext_decision_256x8_mainline/dfr113_posthoc_fp_risk_gate_formal_s{42,123,456}/fusion_weight_analysis.json`。3-seed mean `0.946809/0.969242/0.942964`，aggregate top-weight `235/0/47`；seed42 only `CTyin21/95` 从 axial top 迁到 sagittal top，`fixed=2/broken=0`。 |
-| 下一步 | DFR-114：做 label-free safety/coverage audit，围绕 DFR-113 trigger 边界扫描更严格或同等精度的 candidate，不训练、不用测试集；目标是判断能否安全覆盖 DFR-25 其余 FP 或确认当前 high-precision 规则已经到达可观测条件上限。不要回到 train-time CE aux 阈值扫描。 |
+| 上次实验 | `DFR-114 fp-risk safety/coverage audit`：analysis-only 审计 DFR-113 strict rule 的 label-free 触发边界与可安全扩展空间。 |
+| 上次结果 | commit `f7e19ac`；报告 [autoresearch_logs/dfr114_fp_risk_safety_coverage_audit.json](/dataset/HH/ankle-ct/autoresearch_logs/dfr114_fp_risk_safety_coverage_audit.json)。300 个邻域候选中 best no-harm relaxed rule 触发 5 个 seed42 样本，top-weight `232/0/50`，mean `0.946809/0.969394/0.942964`，但 `fixed` 仍为 2；任何 `fixed=3` frontier 候选至少 `broken=2` 并降低 val_acc。expanded rule discard，DFR-113 strict rule 继续保留。 |
+| 下一步 | DFR-115：不要再扫 FP-risk 阈值。若继续优化，优先做 positive-FN abnormal evidence rescue 的 analysis-only label-free audit，专门针对 DFR-25 剩余 FN（不同于 sagittal normal-rescue FP 机制），要求先证明 `broken=0` 或明确失败原因；或把 DFR-113 strict branch整理成正式配置/文档供后续验证。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-113 作为 model-internal analysis-positive keep 重置；注意它不是训练模型 promotion，当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean。） |
+| 连续 discard 计数 | 1（DFR-114 expanded-rule candidate discard；DFR-113 strict posthoc branch 仍是 analysis-positive keep，当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
