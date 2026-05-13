@@ -1,0 +1,56 @@
+experiment_name: cmp_resnext_decision_256x8_dfr116_posthoc_combo_gate_formal_s456
+output_dir: runs/resnext_decision_256x8_mainline/dfr116_posthoc_combo_gate_formal_s456
+seed: 456
+
+runtime_env:
+  ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: "1"
+  ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: "0.25"
+  ANKLE_DECISION_ENABLE_POSTHOC_FP_RISK_SAGITTAL_GATE: "1"
+  ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_RESIDUAL: "5.0"
+  ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_AXIAL_ABNORMAL_MIN: "0.4"
+  ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_AXIAL_ABNORMAL_MAX: "0.88"
+  ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_FUSED_ABNORMAL_MIN: "0.8"
+  ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_SAGITTAL_NORMAL_MIN: "0.55"
+  ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_CORONAL_ABNORMAL_MAX: "0.525"
+  ANKLE_DECISION_POSTHOC_FP_RISK_SAGITTAL_GATE_CONFIDENCE_GAP_MAX: "5.0"
+  ANKLE_DECISION_ENABLE_POSTHOC_FN_ABNORMAL_RESCUE_GATE: "1"
+  ANKLE_DECISION_POSTHOC_FN_ABNORMAL_RESCUE_GATE_RESIDUAL: "6.0"
+  ANKLE_DECISION_POSTHOC_FN_ABNORMAL_RESCUE_GATE_FUSED_ABNORMAL_MAX: "0.2"
+  ANKLE_DECISION_POSTHOC_FN_ABNORMAL_RESCUE_GATE_AXIAL_ABNORMAL_MIN: "0.45"
+  ANKLE_DECISION_POSTHOC_FN_ABNORMAL_RESCUE_GATE_MAX_ABNORMAL_MIN: "0.45"
+  ANKLE_DECISION_POSTHOC_FN_ABNORMAL_RESCUE_GATE_SECOND_ABNORMAL_MIN: "0.0"
+  ANKLE_DECISION_POSTHOC_FN_ABNORMAL_RESCUE_GATE_CONFIDENCE_GAP_MAX: "1.0"
+  ANKLE_DECISION_POSTHOC_FN_ABNORMAL_RESCUE_GATE_AXIAL_ABNORMAL_MAX: "0.65"
+
+data:
+  csv_path: data/realdata/metadata.csv
+  base_dir: .
+  image_size: 256
+  num_slices_per_view: 8
+  trim_edge_slices: 2
+  batch_size: 6
+  num_workers: 12
+  val_ratio: 0.25
+  hu_min: -1000
+  hu_max: 1000
+
+model:
+  backbone: resnext
+  fusion_type: decision
+  share_backbone: false
+  use_pretrained: true
+  freeze_layers: 3
+  fusion_hidden_dim: 256
+  dropout: 0.25
+  use_attention_pooling: false
+
+train:
+  epochs: 15
+  lr: 0.0001
+  weight_decay: 0.00025
+  class_weight: true
+  device: auto
+  augmentation: true
+  scheduler: none
+  label_smoothing: 0.0
+  gradient_clip_norm: 2.5
