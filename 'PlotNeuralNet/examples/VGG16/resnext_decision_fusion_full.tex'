@@ -1,0 +1,252 @@
+\documentclass[border=15pt, multi, tikz]{standalone}
+\usepackage{import}
+\subimport{../../layers/}{init}
+\usetikzlibrary{positioning,calc}
+
+\def\InputColor{rgb:cyan,5;blue,2;white,7}
+\def\StemColor{rgb:yellow,5;red,2.5;white,5}
+\def\StemReluColor{rgb:yellow,5;red,5;white,5}
+\def\StageColor{rgb:green,5;blue,2.5;white,5}
+\def\StageReluColor{rgb:green,5;blue,5;white,5}
+\def\PoolColor{rgb:red,1;black,0.3}
+\def\GapColor{rgb:cyan,5;blue,2;white,5}
+\def\VectorColor{rgb:magenta,5;black,7}
+\def\HeadColor{rgb:blue,5;red,2.5;white,5}
+\def\ReliabilityColor{rgb:green,4;yellow,2;white,5}
+\def\CalibColor{rgb:orange,5;yellow,2;white,4}
+\def\FusionColor{rgb:red,4;yellow,3;white,4}
+\def\OutputColor{rgb:blue,4;green,3;white,5}
+\def\SoftmaxColor{rgb:magenta,5;black,7}
+\def\SumColor{rgb:blue,5;green,15}
+
+\begin{document}
+\begin{tikzpicture}[x=1cm,y=1cm,>=Stealth]
+\tikzstyle{connection}=[ultra thick,every node/.style={sloped,allow upside down},draw=\edgecolor,opacity=0.72]
+\tikzstyle{flowline}=[very thick,draw=\edgecolor,opacity=0.72,-{Stealth[length=3.0mm,width=2.2mm]}]
+\tikzstyle{softline}=[thick,draw=black!45,opacity=0.75,-{Stealth[length=2.4mm,width=1.8mm]}]
+\tikzstyle{titletext}=[font=\bfseries\Large,align=center]
+\tikzstyle{viewlabel}=[font=\bfseries\scriptsize,align=center,text width=2.2cm]
+\tikzstyle{flowbox}=[draw=black!55,rounded corners=2pt,fill=white,
+    align=center,font=\scriptsize,text width=2.55cm,minimum height=1.0cm]
+\tikzstyle{widebox}=[draw=black!55,rounded corners=2pt,fill=white,
+    align=center,font=\scriptsize,text width=3.05cm,minimum height=1.25cm]
+\tikzstyle{trainbox}=[draw=black!55,rounded corners=2pt,dashed,fill=white,
+    align=center,font=\scriptsize,text width=2.55cm,minimum height=1.15cm]
+\tikzstyle{smallnote}=[font=\scriptsize,align=center,text width=3.1cm]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Complete three-view ResNeXt decision-fusion architecture.
+%% This file intentionally leaves resnext_feature_vector.tex unchanged.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\node[titletext] at (22.6,5.75)
+    {ResNeXt-50 feature-vector encoder feeding decision fusion};
+\node[font=\scriptsize,align=center,text=black!68] at (22.6,5.30)
+    {single detailed view stream shown; axial / coronal / sagittal use non-shared copies};
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Single detailed ResNeXt-50 feature-vector stream, adapted from
+%% resnext_feature_vector.tex. The three view copies are not drawn in parallel here.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\pic[shift={(0,0,0)}] at (0,0,0) {RightBandedBox={name=stem,caption=stem,%
+        xlabel={{"64",""}},ylabel=128,zlabel=128,fill=\StemColor,bandfill=\StemReluColor,%
+        height=30,width={1.2,0.8},depth=30}};
+\path (stem-north) ++(0,1.18,0) node[smallnote] {7x7 conv\\stride 2};
+
+\pic[shift={(0,0,0)}] at (stem-east) {Box={name=pool,caption=,%
+        fill=\PoolColor,opacity=0.5,height=25,width=1.1,depth=25,zlabel=64}};
+\path (pool-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {pool};
+
+\pic[shift={(1.00,0,0)}] at (pool-east) {RightBandedBox={name=res2,caption=res2,%
+        xlabel={{"","256 x 3",""}},zlabel=64,fill=\StageColor,bandfill=\StageReluColor,%
+        height=25,width={1.2,1.2,1.2},depth=25}};
+\path ($(res2-farnorthwest)!0.5!(res2-farnortheast)$) ++(0,0.35,0)
+    node[smallnote] {3 bottleneck\\blocks};
+
+\pic[shift={(0.85,0,0)}] at (res2-east) {RightBandedBox={name=res3,caption=res3,%
+        xlabel={{"","512 x 4","",""}},zlabel=32,fill=\StageColor,bandfill=\StageReluColor,%
+        height=20,width={1.35,1.35,1.35,1.35},depth=20}};
+\path ($(res3-farnorthwest)!0.5!(res3-farnortheast)$) ++(0,0.35,0)
+    node[smallnote] {4 bottleneck\\blocks};
+
+\pic[shift={(0.78,0,0)}] at (res3-east) {RightBandedBox={name=res4,caption=res4,%
+        xlabel={{"","","1024 x 6","","",""}},zlabel=16,%
+        fill=\StageColor,bandfill=\StageReluColor,height=14,%
+        width={1.55,1.55,1.55,1.55,1.55,1.55},depth=14}};
+\path ($(res4-farnorthwest)!0.5!(res4-farnortheast)$) ++(0,0.35,0)
+    node[smallnote] {6 bottleneck blocks\\32x4d grouped conv};
+
+\pic[shift={(0.72,0,0)}] at (res4-east) {RightBandedBox={name=res5,caption=res5,%
+        xlabel={{"","2048 x 3",""}},zlabel=8,fill=\StageColor,bandfill=\StageReluColor,%
+        height=9,width={1.75,1.75,1.75},depth=9}};
+\path ($(res5-farnorthwest)!0.5!(res5-farnortheast)$) ++(0,0.35,0)
+    node[smallnote] {3 bottleneck\\blocks};
+
+\pic[shift={(1.55,0,0)}] at (res5-east) {Box={name=gap,caption=GAP,%
+        xlabel={{"1",""}},zlabel={\ \ 2048},fill=\GapColor,opacity=0.8,%
+        height=3,width=1.8,depth=42}};
+
+\pic[shift={(0.92,0,0)}] at (gap-east) {RightBandedBox={name=proj,caption=,%
+        xlabel={{"",""}},zlabel=512,fill=\HeadColor,bandfill=\StemReluColor,%
+        height=3,width={1.4,0.8},depth=24}};
+\path ($(proj-nearsouthwest)!0.5!(proj-nearsoutheast)$) ++(0,-0.52,0)
+    node[font=\bfseries\scriptsize,align=center,text width=1.70cm] {Linear +\\ReLU};
+
+\pic[shift={(1.18,0,0)}] at (proj-east) {Box={name=slice_features,caption=,%
+        xlabel={{"","","","","","","",""}},zlabel=,%
+        fill=\VectorColor,opacity=0.65,height=3,%
+        width={0.55,0.55,0.55,0.55,0.55,0.55,0.55,0.55},depth=28}};
+\path (slice_features-north) ++(0,0.72,0) node[smallnote] {reshape\\B x 8 x 512};
+\path ($(slice_features-nearsouthwest)!0.5!(slice_features-nearsoutheast)$) ++(0,-0.52,0)
+    node[font=\bfseries\scriptsize,align=center,text width=2.20cm]
+    {B x 8 x 512\\slice features};
+
+\pic[shift={(0.95,0,0)}] at (slice_features-east) {Box={name=slice_mean,caption=,%
+        xlabel={{"",""}},zlabel=,fill=\PoolColor,opacity=0.5,%
+        height=4,width=2.2,depth=22}};
+\path ($(slice_mean-nearsouthwest)!0.5!(slice_mean-nearsoutheast)$) ++(0,-0.52,0)
+    node[font=\bfseries\scriptsize,align=center,text width=1.70cm] {mean\\pooling};
+
+\pic[shift={(0.88,0,0)}] at (slice_mean-east) {Box={name=view_feature,caption=,%
+        xlabel={{"",""}},fill=\VectorColor,opacity=0.8,%
+        height=3,width=1.8,depth=24}};
+\path ($(view_feature-nearsouthwest)!0.5!(view_feature-nearsoutheast)$) ++(0,-0.52,0)
+    node[font=\bfseries\scriptsize,align=center,text width=1.90cm] {512 dim\\view feature};
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Encoder connections and projection guide
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\draw [connection] (-1.65,0,0) -- node {\midarrow} (stem-west);
+\node[font=\scriptsize,align=center] at (-2.35,0.65,0) {CT slice tensor\\1 x 256 x 256};
+\draw [connection] (pool-east) -- node {\midarrow} (res2-west);
+\draw [connection] (res2-east) -- node {\midarrow} (res3-west);
+\draw [connection] (res3-east) -- node {\midarrow} (res4-west);
+\draw [connection] (res4-east) -- node {\midarrow} (res5-west);
+\draw [connection] (res5-east) -- node {\midarrow} (gap-west);
+\draw [connection] (gap-east) -- node {\midarrow} (proj-west);
+\draw [connection] (proj-east) -- node {\midarrow} (slice_features-west);
+\draw [connection] (slice_features-east) -- node {\midarrow} (slice_mean-west);
+\draw [connection] (slice_mean-east) -- node {\midarrow} (view_feature-west);
+
+\draw[densely dashed]
+    (gap-west)++(0, 1.5*.2, 1.5*.2) coordinate(a) -- (res5-nearnortheast)
+    (gap-west)++(0,-1.5*.2, 1.5*.2) coordinate(b) -- (res5-nearsoutheast)
+    (gap-west)++(0,-1.5*.2,-1.5*.2) coordinate(c) -- (res5-farsoutheast)
+    (gap-west)++(0, 1.5*.2,-1.5*.2) coordinate(d) -- (res5-farnortheast)
+    (a)--(b)--(c)--(d);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Evidence stack and two downstream branches
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{scope}[shift={(20.65,0)}]
+    \node[draw=black!55,dashed,rounded corners=2pt,fill=white,
+        align=center,font=\scriptsize,text width=3.35cm,minimum height=1.25cm]
+        (evidence_box) at (-0.84,0)
+        {Stack per-view features into a three-view evidence tensor.};
+    \coordinate (evidence_west) at (evidence_box.west);
+    \coordinate (evidence_east) at (evidence_box.east);
+    \coordinate (evidence_head_anchor) at ($(evidence_east)+(0.84,0)$);
+\end{scope}
+\draw[flowline] (view_feature-east) -- (evidence_west);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Visualized disease classifier head
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\node[font=\bfseries\scriptsize,align=center,text=blue!65!black] at (26.70,3.65)
+    {disease classifier head x3};
+\pic[shift={(1.20,2.05,0)}] at (evidence_head_anchor) {Box={name=cls_ln,caption=,%
+        xlabel={{"512",""}},fill=\HeadColor,opacity=0.75,height=3,width=1.2,depth=22}};
+\path (cls_ln-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {LN};
+\pic[shift={(0.82,0,0)}] at (cls_ln-east) {RightBandedBox={name=cls_hidden,caption=,%
+        xlabel={{"h","ReLU"}},fill=\HeadColor,bandfill=\StemReluColor,%
+        height=3,width={1.35,0.75},depth=24}};
+\path (cls_hidden-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {hidden};
+\pic[shift={(0.78,0,0)}] at (cls_hidden-east) {Box={name=cls_drop,caption=,%
+        fill=\PoolColor,opacity=0.35,height=3,width=0.8,depth=18}};
+\path (cls_drop-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {dropout};
+\pic[shift={(0.78,0,0)}] at (cls_drop-east) {Box={name=disease_stack,caption=,%
+        xlabel={{"3x2",""}},fill=\HeadColor,opacity=0.80,height=3,width=1.4,depth=30}};
+\path (disease_stack-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {disease\\logits};
+\path (disease_stack-north) ++(0,0.65,0) node[font=\scriptsize,align=center,text=blue!65!black]
+    {Normal / Abnormal\\per view};
+
+\draw[flowline] (evidence_east) -- ++(0.35,0) |- (cls_ln-west);
+\draw[connection] (cls_ln-east) -- node {\midarrow} (cls_hidden-west);
+\draw[connection] (cls_hidden-east) -- node {\midarrow} (cls_drop-west);
+\draw[connection] (cls_drop-east) -- node {\midarrow} (disease_stack-west);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Visualized reliability estimation and calibration path
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\node[font=\bfseries\scriptsize,align=center,text=green!45!black] at (27.45,-3.90)
+    {reliability estimation head x3};
+\pic[shift={(1.20,-2.25,0)}] at (evidence_head_anchor) {Box={name=rel_ln,caption=,%
+        xlabel={{"512",""}},fill=\ReliabilityColor,opacity=0.75,height=3,width=1.2,depth=22}};
+\path (rel_ln-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {LN};
+\pic[shift={(0.82,0,0)}] at (rel_ln-east) {RightBandedBox={name=rel_hidden,caption=,%
+        xlabel={{"h","ReLU"}},fill=\ReliabilityColor,bandfill=\StageReluColor,%
+        height=3,width={1.35,0.75},depth=24}};
+\path (rel_hidden-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {hidden};
+\pic[shift={(0.78,0,0)}] at (rel_hidden-east) {Box={name=rel_drop,caption=,%
+        fill=\PoolColor,opacity=0.35,height=3,width=0.8,depth=18}};
+\path (rel_drop-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {dropout};
+\pic[shift={(0.78,0,0)}] at (rel_drop-east) {Box={name=rel_logit,caption=,%
+        xlabel={{"3x1",""}},fill=\ReliabilityColor,opacity=0.80,height=3,width=1.2,depth=24}};
+\path (rel_logit-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {rel\\logit};
+\path (rel_logit-south) ++(0,-0.65,0) node[font=\scriptsize,align=center,text=green!45!black]
+    {scalar trust\\per view};
+
+\draw[flowline] (evidence_east) -- ++(0.35,0) |- (rel_ln-west);
+\draw[connection] (rel_ln-east) -- node {\midarrow} (rel_hidden-west);
+\draw[connection] (rel_hidden-east) -- node {\midarrow} (rel_drop-west);
+\draw[connection] (rel_drop-east) -- node {\midarrow} (rel_logit-west);
+
+\node[font=\bfseries\scriptsize,align=center,text=orange!70!black] at (33.55,-3.90)
+    {shared low-rank calibrator};
+\pic[shift={(1.00,0,0)}] at (rel_logit-east) {RightBandedBox={name=calib,caption=calib,%
+        xlabel={{"$\alpha$","$\beta$"}},fill=\CalibColor,bandfill=\StemReluColor,%
+        height=3,width={1.25,1.25},depth=24}};
+\path (calib-south) ++(0,-0.65,0) node[font=\scriptsize,align=center,text=orange!70!black]
+    {feature-conditioned\\scale and bias};
+\pic[shift={(0.92,0,0)}] at (calib-east) {Box={name=calib_logits,caption=,%
+        xlabel={{"3",""}},fill=\ReliabilityColor,opacity=0.72,height=3,width=1.1,depth=22}};
+\path (calib_logits-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {calibrated\\logits};
+\node[trainbox,fill=green!6,minimum width=2.35cm] (gate_drop) at ($(calib_logits-east)+(2.00,0)$)
+    {dominant-gate\\dropout\\training only};
+\pic[shift={(1.05,0,0)}] at (gate_drop.east) {Box={name=view_weights,caption=,%
+        xlabel={{"3",""}},fill=\SoftmaxColor,opacity=0.65,height=3,width=1.1,depth=28}};
+\path (view_weights-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {view\\weights};
+\path (view_weights-south) ++(0,-0.65,0) node[font=\scriptsize,align=center,text=green!45!black]
+    {softmax\\routing weights};
+
+\draw[connection] (rel_logit-east) -- node {\midarrow} (calib-west);
+\draw[connection] (calib-east) -- node {\midarrow} (calib_logits-west);
+\draw[flowline] (calib_logits-east) -- (gate_drop.west);
+\draw[flowline] (gate_drop.east) -- (view_weights-west);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Visualized reliability-weighted decision fusion
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\pic[shift={(2.10,-2.25,0)}] at (view_weights-east) {Ball={name=mul,%
+        fill=\FusionColor,opacity=0.72,radius=2.1,logo=$\times$,caption=weight}};
+\pic[shift={(2.20,0,0)}] at (mul-east) {Ball={name=sum,%
+        fill=\SumColor,opacity=0.62,radius=2.3,logo=$\Sigma$,caption=fusion}};
+\pic[shift={(1.45,0,0)}] at (sum-east) {Box={name=output,caption=,%
+        xlabel={{"2",""}},fill=\OutputColor,opacity=0.82,height=3,width=1.2,depth=30}};
+\path (output-south) ++(0,-0.42,0) node[font=\scriptsize,align=center] {final\\score};
+\path (output-north) ++(0,0.65,0) node[font=\scriptsize,align=center,text=black!70]
+    {Normal vs\\Abnormal};
+
+\draw[flowline] (disease_stack-east) -- (mul-north |- disease_stack-east) -- (mul-north);
+\draw[flowline] (view_weights-east) -- (mul-west);
+\draw[flowline] (mul-east) -- (sum-west);
+\draw[flowline] (sum-east) -- (output-west);
+
+\node[font=\scriptsize,align=center,text=black!70] at ($(sum-south)+(0,-1.05)$)
+    {$z_{\mathrm{fused}} =
+      w_{\mathrm{ax}}z_{\mathrm{ax}} +
+      w_{\mathrm{co}}z_{\mathrm{co}} +
+      w_{\mathrm{sa}}z_{\mathrm{sa}}$};
+
+\end{tikzpicture}
+\end{document}
