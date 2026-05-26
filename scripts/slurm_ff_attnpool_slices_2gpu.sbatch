@@ -39,9 +39,16 @@ WORKERS="${#IDLE_GPU_ARRAY[@]}"
 echo "IDLE_GPU_IDS=${IDLE_GPU_IDS}"
 echo "WORKERS=${WORKERS}"
 
+RESUME_ARGS=()
+if [[ -f runs/optuna_main_ff_attnpool_slices_3seed/study.sqlite3 ]]; then
+  RESUME_ARGS=(--resume --skip-stale-running-cleanup)
+  echo "Resuming existing study with active-worker stale cleanup disabled"
+fi
+
 .venv/bin/python scripts/autoresearch_main.py \
   --search-config configs/optuna_main_search_ff_attnpool_slices_3seed.yaml \
   --trials 12 \
+  "${RESUME_ARGS[@]}" \
   --gpu-ids "${IDLE_GPU_IDS}" \
   --max-workers "${WORKERS}" \
   --max-used-memory-mb 1024 \

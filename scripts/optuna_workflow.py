@@ -828,6 +828,11 @@ def build_study(optuna_module, search_cfg: dict[str, Any], study_root: Path, res
     )
 
 
+def count_non_waiting_trials(study, optuna_module) -> int:
+    waiting_state = optuna_module.trial.TrialState.WAITING
+    return sum(1 for trial in study.trials if trial.state != waiting_state)
+
+
 def fail_stale_running_trials(study, study_root: Path, optuna_module) -> int:
     running_state = optuna_module.trial.TrialState.RUNNING
     failed_state = optuna_module.trial.TrialState.FAIL
@@ -1522,7 +1527,8 @@ def prepare_study(
     study = build_study(optuna, search_cfg, study_root, resume=resume)
     if resume and cleanup_stale_running_trials_on_resume:
         fail_stale_running_trials(study, study_root, optuna)
-    existing_trials = len(study.trials)
+    total_stored_trials = len(study.trials)
+    existing_trials = count_non_waiting_trials(study, optuna)
     requested_target_trials = int(max_trials_override or study_cfg.get("n_trials", 10))
     tail_fill_mode = normalize_tail_fill_mode(tail_fill or study_cfg.get("tail_fill", "auto"))
     target_trials, remaining_trials, tail_fill_trials = plan_parallel_trial_budget(
@@ -1540,11 +1546,11 @@ def prepare_study(
         tail_fill_mode=tail_fill_mode,
         tail_fill_trials=tail_fill_trials,
     )
-    if bool(study_cfg.get("enqueue_current_template", True)) and existing_trials == 0:
+    if bool(study_cfg.get("enqueue_current_template", True)) and total_stored_trials == 0:
         enqueue_template_trial(study, preflight_config, search_space)
-    if existing_trials == 0:
+    if total_stored_trials == 0:
         enqueue_configured_trials(study, study_cfg, search_space)
-    if resolved_source_study and top_k > 0 and existing_trials == 0:
+    if resolved_source_study and top_k > 0 and total_stored_trials == 0:
         enqueue_source_trials(study, resolved_source_study, top_k, search_space)
     save_json(
         study_root / "search_config.snapshot.json",
