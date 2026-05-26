@@ -107,10 +107,27 @@ def build_group_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     groups: dict[str, Any] = {}
     for count in SLICE_COUNTS:
-        items = sorted(by_slices[count], key=lambda item: seed_from_record(item) or -1)
-        completed = [item for item in items if is_completed(item)]
-        seed_metrics = []
+        items = sorted(
+            by_slices[count],
+            key=lambda item: (
+                seed_from_record(item) if seed_from_record(item) is not None else -1,
+                int(item.get("trial_number") or -1),
+            ),
+        )
+        completed_by_seed: dict[int, dict[str, Any]] = {}
+        duplicate_completed_trials = 0
         for item in items:
+            seed = seed_from_record(item)
+            if seed not in SEEDS or not is_completed(item):
+                continue
+            if seed in completed_by_seed:
+                duplicate_completed_trials += 1
+                continue
+            completed_by_seed[seed] = item
+        completed = [completed_by_seed[seed] for seed in SEEDS if seed in completed_by_seed]
+
+        seed_metrics = []
+        for item in completed:
             seed_metrics.append(
                 {
                     "trial_number": item.get("trial_number"),
@@ -125,7 +142,7 @@ def build_group_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
                 }
             )
 
-        complete = len(completed) == len(SEEDS) and sorted(seed_from_record(item) for item in completed) == list(SEEDS)
+        complete = len(completed) == len(SEEDS)
         if complete:
             val_acc = mean([float(item["val_accuracy"]) for item in completed])
             val_auc = mean([float(item["val_auc"]) for item in completed])
@@ -139,6 +156,7 @@ def build_group_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
             "num_slices_per_view": count,
             "complete": complete,
             "completed_seed_count": len(completed),
+            "duplicate_completed_trial_count": duplicate_completed_trials,
             "seed_metrics": seed_metrics,
             "mean": {
                 "val_acc": val_acc,
