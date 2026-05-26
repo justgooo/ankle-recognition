@@ -2164,11 +2164,11 @@ class MultiViewCTClassifier(MultiViewEncoder):
 
                 self.cross_view_mixer = CrossViewAttention(
                     feature_dim=self.feature_dim,
-                    attention_dim=256,
-                    num_heads=4,
-                    num_layers=1,
-                    dropout=0.1,
-                    residual_scale=0.125,
+                    attention_dim=_env_positive_int("ANKLE_FEATURE_XVIEW_ATTENTION_DIM", 256),
+                    num_heads=_env_positive_int("ANKLE_FEATURE_XVIEW_NUM_HEADS", 4),
+                    num_layers=_env_positive_int("ANKLE_FEATURE_XVIEW_NUM_LAYERS", 1),
+                    dropout=_env_unit_float("ANKLE_FEATURE_XVIEW_DROPOUT", 0.1),
+                    residual_scale=_env_positive_float("ANKLE_FEATURE_XVIEW_RESIDUAL_SCALE", 0.125),
                 )
 
             if self.disable_feature_glu_head:

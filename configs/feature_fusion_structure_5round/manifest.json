@@ -1,0 +1,82 @@
+{
+  "description": "Five single-variable 3-seed formal feature-fusion structure refinements.",
+  "anchor": "PAPER-FEATURE-FUSION-GATED-HEAD-3SEED-FORMAL",
+  "seeds": [
+    42,
+    123,
+    456
+  ],
+  "variants": [
+    {
+      "key": "ff_struct01_glu_hidden384",
+      "title": "FF-STRUCT-01-GLU-HIDDEN384-3SEED-FORMAL",
+      "rationale": "Increase only the GLU fusion-head hidden width from 256 to 384 while keeping ResNeXt 256x8 geometry, mean pooling, recalibration, xview mixer, and scalars fixed.",
+      "expected": "A wider gated fused-token head may model higher-order cross-view feature interactions that the existing 256 bottleneck compresses, improving val_acc if current head capacity is the limiting feature-fusion path.",
+      "fusion_hidden_dim": 384,
+      "runtime_env": {},
+      "configs": [
+        "configs/feature_fusion_structure_5round/ff_struct01_glu_hidden384_formal_s42.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct01_glu_hidden384_formal_s123.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct01_glu_hidden384_formal_s456.yaml"
+      ]
+    },
+    {
+      "key": "ff_struct02_glu_hidden128",
+      "title": "FF-STRUCT-02-GLU-HIDDEN128-3SEED-FORMAL",
+      "rationale": "Reduce only the GLU fusion-head hidden width from 256 to 128 while keeping all feature-fusion modules and training scalars fixed.",
+      "expected": "A narrower gated head may regularize fused-token gating and reduce seed-level variance, especially the weaker seed456 anchor, while preserving the GLU mechanism that beat the plain MLP ablation.",
+      "fusion_hidden_dim": 128,
+      "runtime_env": {},
+      "configs": [
+        "configs/feature_fusion_structure_5round/ff_struct02_glu_hidden128_formal_s42.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct02_glu_hidden128_formal_s123.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct02_glu_hidden128_formal_s456.yaml"
+      ]
+    },
+    {
+      "key": "ff_struct03_xview_residual00625",
+      "title": "FF-STRUCT-03-XVIEW-RESIDUAL00625-3SEED-FORMAL",
+      "rationale": "Change only the CrossViewAttention residual scale from 0.125 to 0.0625 while keeping the mixer architecture, GLU head, and scalars fixed.",
+      "expected": "A weaker cross-view residual may retain the positive interaction signal while reducing noisy view-token overwrite, improving stability when a view-specific feature is already discriminative.",
+      "fusion_hidden_dim": 256,
+      "runtime_env": {
+        "ANKLE_FEATURE_XVIEW_RESIDUAL_SCALE": "0.0625"
+      },
+      "configs": [
+        "configs/feature_fusion_structure_5round/ff_struct03_xview_residual00625_formal_s42.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct03_xview_residual00625_formal_s123.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct03_xview_residual00625_formal_s456.yaml"
+      ]
+    },
+    {
+      "key": "ff_struct04_xview_residual025",
+      "title": "FF-STRUCT-04-XVIEW-RESIDUAL025-3SEED-FORMAL",
+      "rationale": "Change only the CrossViewAttention residual scale from 0.125 to 0.25 while keeping the mixer architecture, GLU head, and scalars fixed.",
+      "expected": "A stronger cross-view residual may help the fused representation use non-dominant view context before concatenation, improving val_acc if the current mixer under-shares complementary evidence.",
+      "fusion_hidden_dim": 256,
+      "runtime_env": {
+        "ANKLE_FEATURE_XVIEW_RESIDUAL_SCALE": "0.25"
+      },
+      "configs": [
+        "configs/feature_fusion_structure_5round/ff_struct04_xview_residual025_formal_s42.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct04_xview_residual025_formal_s123.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct04_xview_residual025_formal_s456.yaml"
+      ]
+    },
+    {
+      "key": "ff_struct05_xview_dim512",
+      "title": "FF-STRUCT-05-XVIEW-DIM512-3SEED-FORMAL",
+      "rationale": "Change only the CrossViewAttention internal attention dimension from 256 to 512 while keeping one layer, four heads, residual scale 0.125, and all training scalars fixed.",
+      "expected": "Full-dimensional cross-view attention may preserve channel detail that the 256-dim mixer compresses, improving feature-level multi-view interaction without changing input geometry or the final GLU head.",
+      "fusion_hidden_dim": 256,
+      "runtime_env": {
+        "ANKLE_FEATURE_XVIEW_ATTENTION_DIM": "512"
+      },
+      "configs": [
+        "configs/feature_fusion_structure_5round/ff_struct05_xview_dim512_formal_s42.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct05_xview_dim512_formal_s123.yaml",
+        "configs/feature_fusion_structure_5round/ff_struct05_xview_dim512_formal_s456.yaml"
+      ]
+    }
+  ]
+}
