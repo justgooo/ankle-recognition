@@ -28,17 +28,22 @@ if [[ -z "${GPU_IDS}" ]]; then
   GPU_IDS=auto
 fi
 
-.venv/bin/python scripts/check_idle_gpus.py \
+IDLE_GPU_IDS="$(.venv/bin/python scripts/check_idle_gpus.py \
   --gpu-ids "${GPU_IDS}" \
-  --require-count 3 \
+  --min-idle-count 1 \
   --max-used-memory-mb 1024 \
-  --max-utilization 20
+  --max-utilization 20 \
+  --id-list-only)"
+IFS=',' read -r -a IDLE_GPU_ARRAY <<< "${IDLE_GPU_IDS}"
+WORKERS="${#IDLE_GPU_ARRAY[@]}"
+echo "IDLE_GPU_IDS=${IDLE_GPU_IDS}"
+echo "WORKERS=${WORKERS}"
 
 .venv/bin/python scripts/autoresearch_main.py \
   --search-config configs/optuna_main_search_ff_attnpool_slices_3seed.yaml \
   --trials 12 \
-  --gpu-ids "${GPU_IDS}" \
-  --max-workers 3 \
+  --gpu-ids "${IDLE_GPU_IDS}" \
+  --max-workers "${WORKERS}" \
   --max-used-memory-mb 1024 \
   --max-utilization 20 \
   --worker-cooldown-seconds 5 \

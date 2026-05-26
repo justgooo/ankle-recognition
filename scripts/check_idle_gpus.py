@@ -27,8 +27,14 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated nvidia-smi GPU indexes, or auto to inspect all visible GPUs.",
     )
     parser.add_argument("--require-count", type=int, default=0)
+    parser.add_argument("--min-idle-count", type=int, default=None)
     parser.add_argument("--max-used-memory-mb", type=int, default=1024)
     parser.add_argument("--max-utilization", type=int, default=20)
+    parser.add_argument(
+        "--id-list-only",
+        action="store_true",
+        help="Print only the comma-separated idle GPU ids to stdout.",
+    )
     return parser.parse_args()
 
 
@@ -102,18 +108,42 @@ def main() -> int:
         )
         return 2
 
-    busy = [
+    idle = [
         gpu
         for gpu in selected
-        if gpu.memory_used_mb > args.max_used_memory_mb
-        or gpu.utilization_gpu > args.max_utilization
+        if gpu.memory_used_mb <= args.max_used_memory_mb
+        and gpu.utilization_gpu <= args.max_utilization
     ]
-    print("Selected GPU idle check:")
+    busy = [gpu for gpu in selected if gpu not in idle]
+
+    log_stream = sys.stderr if args.id_list_only else sys.stdout
+    print("Selected GPU idle check:", file=log_stream)
     for gpu in selected:
         print(
             f"  GPU {gpu.index}: {gpu.name} | used={gpu.memory_used_mb} MiB/"
-            f"{gpu.memory_total_mb} MiB | util={gpu.utilization_gpu}%"
+            f"{gpu.memory_total_mb} MiB | util={gpu.utilization_gpu}%",
+            file=log_stream,
         )
+    if idle:
+        print(
+            "Idle GPU subset: " + ",".join(str(gpu.index) for gpu in idle),
+            file=log_stream,
+        )
+
+    if args.id_list_only:
+        print(",".join(str(gpu.index) for gpu in idle))
+
+    if args.min_idle_count is not None:
+        if len(idle) < args.min_idle_count:
+            print(
+                f"Only {len(idle)} idle GPU(s), require {args.min_idle_count}. "
+                f"Thresholds: used<={args.max_used_memory_mb} MiB and "
+                f"util<={args.max_utilization}%.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+
     if busy:
         print(
             "Refusing to start because at least one selected GPU exceeds "
