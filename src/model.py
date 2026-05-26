@@ -2132,6 +2132,13 @@ class MultiViewCTClassifier(MultiViewEncoder):
         # 3 个视角拼接后的总维度：512 * 3 = 1536
         fused_dim = self.feature_dim * 3
         self.minimal_fusion_baseline = minimal_fusion_baseline
+        self.disable_feature_view_recalibration = _env_flag(
+            "ANKLE_FEATURE_DISABLE_VIEW_RECALIBRATION"
+        )
+        self.disable_feature_cross_view_mixer = _env_flag(
+            "ANKLE_FEATURE_DISABLE_CROSS_VIEW_MIXER"
+        )
+        self.disable_feature_glu_head = _env_flag("ANKLE_FEATURE_DISABLE_GLU_HEAD")
 
         if minimal_fusion_baseline:
             # 纯融合对比模式：不引入额外视角交互或门控模块，只保留最小 MLP 头。
@@ -2142,31 +2149,46 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 nn.Linear(fusion_hidden_dim, 2),
             )
         else:
-            self.view_recalibrators = nn.ModuleList(
-                [ViewFeatureRecalibration(self.feature_dim) for _ in range(3)]
-            )
-            # 只在 pooled view token 之间加入极轻量的 cross-view context 交换，
-            # 保持 256x8 mean-pooling 几何不变，检验“缺少显式视角交互”是否仍是瓶颈。
-            from .cross_view_attention import CrossViewAttention
+            if self.disable_feature_view_recalibration:
+                self.view_recalibrators = nn.ModuleList()
+            else:
+                self.view_recalibrators = nn.ModuleList(
+                    [ViewFeatureRecalibration(self.feature_dim) for _ in range(3)]
+                )
+            if self.disable_feature_cross_view_mixer:
+                self.cross_view_mixer = nn.Identity()
+            else:
+                # 只在 pooled view token 之间加入极轻量的 cross-view context 交换，
+                # 保持 256x8 mean-pooling 几何不变，检验“缺少显式视角交互”是否仍是瓶颈。
+                from .cross_view_attention import CrossViewAttention
 
-            self.cross_view_mixer = CrossViewAttention(
-                feature_dim=self.feature_dim,
-                attention_dim=256,
-                num_heads=4,
-                num_layers=1,
-                dropout=0.1,
-                residual_scale=0.125,
-            )
+                self.cross_view_mixer = CrossViewAttention(
+                    feature_dim=self.feature_dim,
+                    attention_dim=256,
+                    num_heads=4,
+                    num_layers=1,
+                    dropout=0.1,
+                    residual_scale=0.125,
+                )
 
-            # 分类器：保留现有 prenorm，但把 plain ReLU MLP 换成轻量 GLU 门控头，
-            # 让 fused token 在不改 256x8 几何的前提下拥有更强的多视角交互表达力。
-            self.classifier = nn.Sequential(
-                nn.LayerNorm(fused_dim),                 # 稳定跨视角拼接特征的尺度
-                nn.Linear(fused_dim, fusion_hidden_dim * 2),  # 为 GLU 同时生成 value / gate 分支
-                nn.GLU(dim=1),
-                nn.Dropout(dropout),                      # 随机丢弃 30% 的神经元（防止过拟合）
-                nn.Linear(fusion_hidden_dim, 2),          # 256 -> 2（输出 2 个类别的分数）
-            )
+            if self.disable_feature_glu_head:
+                self.classifier = nn.Sequential(
+                    nn.LayerNorm(fused_dim),
+                    nn.Linear(fused_dim, fusion_hidden_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout),
+                    nn.Linear(fusion_hidden_dim, 2),
+                )
+            else:
+                # 分类器：保留现有 prenorm，但把 plain ReLU MLP 换成轻量 GLU 门控头，
+                # 让 fused token 在不改 256x8 几何的前提下拥有更强的多视角交互表达力。
+                self.classifier = nn.Sequential(
+                    nn.LayerNorm(fused_dim),                 # 稳定跨视角拼接特征的尺度
+                    nn.Linear(fused_dim, fusion_hidden_dim * 2),  # 为 GLU 同时生成 value / gate 分支
+                    nn.GLU(dim=1),
+                    nn.Dropout(dropout),                      # 随机丢弃 30% 的神经元（防止过拟合）
+                    nn.Linear(fusion_hidden_dim, 2),          # 256 -> 2（输出 2 个类别的分数）
+                )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -2185,10 +2207,13 @@ class MultiViewCTClassifier(MultiViewEncoder):
         else:
             # 第 1 步：提取 3 个视角的特征，并在拼接前做轻量 per-view 重标定
             # encode_views 返回 3 个 (B, 512)，之后再做一次轻量 cross-view mixing。
-            recalibrated_features = [
-                recalibrator(feature)
-                for recalibrator, feature in zip(self.view_recalibrators, view_features)
-            ]
+            if self.disable_feature_view_recalibration:
+                recalibrated_features = view_features
+            else:
+                recalibrated_features = [
+                    recalibrator(feature)
+                    for recalibrator, feature in zip(self.view_recalibrators, view_features)
+                ]
             mixed_features = self.cross_view_mixer(torch.stack(recalibrated_features, dim=1))
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
         # 第 2 步：送进分类器，得到分类结果
