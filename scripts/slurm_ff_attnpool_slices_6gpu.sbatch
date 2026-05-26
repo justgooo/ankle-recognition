@@ -1,12 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=ankle-ff-attnp-6g
-#SBATCH --partition=RTXA6Kq
+#SBATCH --partition=NA100q,PA100q,PH100q,NH100q,RTXA6Kq,HPCAIq
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:6
 #SBATCH --cpus-per-task=72
 #SBATCH --mem=180G
 #SBATCH --time=08:00:00
-#SBATCH --exclusive
 #SBATCH --output=autoresearch_logs/slurm_%x_%j.out
 
 set -euo pipefail
@@ -29,12 +28,18 @@ if [[ -z "${GPU_IDS}" ]]; then
   GPU_IDS=auto
 fi
 
+.venv/bin/python scripts/check_idle_gpus.py \
+  --gpu-ids "${GPU_IDS}" \
+  --require-count 6 \
+  --max-used-memory-mb 1024 \
+  --max-utilization 20
+
 .venv/bin/python scripts/autoresearch_main.py \
   --search-config configs/optuna_main_search_ff_attnpool_slices_3seed.yaml \
   --trials 12 \
   --gpu-ids "${GPU_IDS}" \
   --max-workers 6 \
-  --max-used-memory-mb 4096 \
-  --max-utilization 60 \
+  --max-used-memory-mb 1024 \
+  --max-utilization 20 \
   --worker-cooldown-seconds 5 \
   --tail-fill never
