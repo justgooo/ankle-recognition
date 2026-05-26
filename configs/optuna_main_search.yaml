@@ -1,8 +1,8 @@
 study:
-  name: autoresearch_dfr25_resnext_decision_256x8_main
+  name: autoresearch_resnext_feature_gated_256x8_main
   phase: main
   base_config: configs/autoresearch_formal.yaml
-  study_root: runs/optuna_main_dfr25_resnext_decision_256x8
+  study_root: runs/optuna_main_resnext_feature_gated_256x8
   direction: maximize
   n_trials: 1
   timeout_minutes: 240
@@ -14,10 +14,6 @@ study:
   pruner: none
   objective_metric: val_accuracy
   enqueue_current_template: false
-  env:
-    ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER: 1
-    ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB: 0.25
-
 python_candidates:
   - .venv/bin/python
   - .venv/Scripts/python.exe
@@ -30,21 +26,21 @@ fixed_overrides:
   data.batch_size: 6
   data.num_workers: 12
   model.backbone: resnext
-  model.fusion_type: decision
+  model.fusion_type: feature
   model.share_backbone: false
   model.use_pretrained: true
   model.freeze_layers: 3
   model.fusion_hidden_dim: 256
   model.dropout: 0.25
   model.use_attention_pooling: false
-  model.equal_weight_fusion: false
+  model.minimal_fusion_baseline: false
   train.epochs: 15
   train.lr: 1.0e-4
-  train.weight_decay: 2.5e-4
+  train.weight_decay: 1.0e-4
   train.class_weight: true
   train.augmentation: true
   train.scheduler: none
   train.label_smoothing: 0.0
-  train.gradient_clip_norm: 2.5
+  train.gradient_clip_norm: 1.0
 
 search_space: {}

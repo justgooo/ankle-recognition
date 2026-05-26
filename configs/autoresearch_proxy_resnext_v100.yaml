@@ -1,5 +1,5 @@
-# Dedicated proxy config for the ResNeXt-only V100 tuning campaign.
-# Mirrors the fair-backbone geometry while using a shorter budget for fallback smoke.
+# Dedicated proxy config for the current ResNeXt 256x8 feature-fusion mainline.
+# Mirrors configs/autoresearch_proxy.yaml under the historical V100 filename.
 experiment_name: autoresearch_proxy_resnext_v100
 output_dir: runs/autoresearch_proxy_resnext_v100
 seed: 42
@@ -9,7 +9,7 @@ data:
   base_dir: .
   image_size: 256
   num_slices_per_view: 8
-  trim_edge_slices: 1
+  trim_edge_slices: 2
   batch_size: 6
   num_workers: 12
   val_ratio: 0.25
@@ -23,8 +23,9 @@ model:
   use_pretrained: true
   freeze_layers: 3
   fusion_hidden_dim: 256
-  dropout: 0.3
+  dropout: 0.25
   use_attention_pooling: false
+  minimal_fusion_baseline: false
 
 train:
   epochs: 4

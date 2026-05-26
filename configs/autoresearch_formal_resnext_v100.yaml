@@ -1,5 +1,5 @@
-# Dedicated formal config for the ResNeXt-only V100 tuning campaign.
-# This continues the fair-backbone recipe rather than the canonical ResUNet mainline.
+# Dedicated formal config for the current ResNeXt 256x8 feature-fusion mainline.
+# Mirrors configs/autoresearch_formal.yaml under the historical V100 filename.
 experiment_name: autoresearch_formal_resnext_v100
 output_dir: runs/autoresearch_formal_resnext_v100
 seed: 42
@@ -25,6 +25,7 @@ model:
   fusion_hidden_dim: 256
   dropout: 0.25
   use_attention_pooling: false
+  minimal_fusion_baseline: false
 
 train:
   epochs: 15
