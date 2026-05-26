@@ -58,7 +58,7 @@ mapfile -t CONFIGS < <(
 .venv/bin/python scripts/backbone_preflight.py --config "${CONFIGS[@]}"
 
 .venv/bin/python scripts/run_dfr44_evidence_gate_multiseed.py \
-  --launcher srun \
+  --launcher direct \
   --max-parallel 3 \
   --cpus-per-run 12 \
   --min-free-gb 20 \
