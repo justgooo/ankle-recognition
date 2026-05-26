@@ -272,7 +272,8 @@ def run_with_optional_log(
 
 
 def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: int) -> int:
-    log_path = log_dir / f"seed{spec.seed}_train.log"
+    log_stem = spec.output_dir.name
+    log_path = log_dir / f"{log_stem}_seed{spec.seed}_train.log"
     payload = [
         args.python,
         "scripts/run_train_with_config_env.py",
@@ -301,7 +302,8 @@ def run_config(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: i
 
 
 def run_telemetry(spec: RunSpec, args: argparse.Namespace, log_dir: Path, gpu_id: int) -> int:
-    log_path = log_dir / f"seed{spec.seed}_telemetry.log"
+    log_stem = spec.output_dir.name
+    log_path = log_dir / f"{log_stem}_seed{spec.seed}_telemetry.log"
     payload = [
         args.python,
         "scripts/analyze_fusion_weights.py",

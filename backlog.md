@@ -2152,11 +2152,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `DFR-142 human review answer template`：把 DFR-141 checklist 导出为可填写、可解析的 review answer template。 |
-| 上次结果 | commit `eef1939`；生成 `autoresearch_logs/dfr142_review_answer_template.json/.md`；7 entries / 11 cases，`training_go=false` 与 `training_allowed_now_count=0` 保持不变。 |
-| 下一步 | Training remains blocked. If review answers are filled, first run answer-intake/gate parsing; otherwise only read-only status/watchdog is allowed. |
+| 上次实验 | `PAPER-FEATURE-FUSION-GATED-HEAD/MINIMAL-BASELINE-3SEED-FORMAL`：按人类要求补齐最佳特征融合与特征融合 baseline 的 3-seed formal。 |
+| 上次结果 | commit `fe42d90`；Slurm job `516499` 在已确认干净的 `node09` 5-GPU allocation 上完成 6/6 runs；gated-head mean `0.939716/0.975909/0.934415`，minimal baseline mean `0.914894/0.972121/0.906842`。 |
+| 下一步 | Feature-fusion 论文证据已补上 best-vs-minimal baseline 3-seed。若继续 feature-fusion paper lane，下一步应补模块级消融（去 per-view recalibration / 去 cross-view mixer / 去 GLU head）或统计显著性/CI，而不是重复同一 baseline。Decision-fusion governance gate 仍保留：没有 review answers 前不重启 DFR 主线训练。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（DFR-142 是 analysis-positive review-intake asset；当前最优训练 checkpoint 仍是 DFR-25 3-seed formal mean，当前最优 posthoc calibration branch 仍是 DFR-116 strict combo。） |
+| 连续 discard 计数 | 0（本轮 paper feature-fusion gated-head 为 keep；minimal baseline 是对照 discard，不计入主线连续失败。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -2326,6 +2326,8 @@
 | **当前主线 matched equal-weight control mean val_acc** | **0.9219858156028368** | `8e0bdf4` | `configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l0_equal_formal_{s42,s123,s456}.yaml` | 当前 `DFR-25` confirmation 系列所对齐的 fixed equal-weight 3-seed control mean |
 | **当前主线 pre-repair learned anchor mean val_acc** | **0.9148936170212766** | `27b557c/3f7bc35` | `configs/generated_resnext_decision_256x8_matrix/formal/cmp_resnext_decision_256x8_l3_no_mixer_formal_{s42,s123,s456}.yaml` | `L3-no-mixer` 的 matched 3-seed mean；作为 dominant-gate-dropout 之前的 strongest learned anchor |
 | **当前主线 pre-repair learned anchor mean val_auc** | **0.9628787878787879** | `27b557c/3f7bc35` | 同上 | 与上行同一 matched 3-seed `L3-no-mixer` anchor |
+| **paper feature-fusion best 3-seed mean val_acc** | **0.9397163120567376** | `fe42d90` | `configs/paper_feature_fusion_gated_head_formal_s{42,123,456}.yaml` | ResNeXt 256x8 feature fusion with per-view recalibration + light cross-view mixer + GLU gated head；matched minimal concat-MLP baseline mean `0.9148936170212766` |
+| **paper feature-fusion best 3-seed mean val_auc** | **0.9759090909090910** | `fe42d90` | 同上 | 同一 3-seed formal；baseline mean val_auc `0.9721212121212122` |
 | legacy `512x16` canonical mean val_acc | 0.8581560283687942 | `5b286a7` | `configs/cmp_backbone_decision_resnext_512x16_e20_{s42,s123,s456}.yaml` | 旧 backbone compare winner；保留作历史 reference |
 | legacy `512x16` canonical mean val_auc | 0.9119696969696971 | `5b286a7` | 同上 | 与上行同一 matched final；保留作历史 reference |
 | **paper reproduction best val_acc** | **0.8510638297872340** | `ed6d535` | `paper_repro/configs/d4_hybrid_25d_3d.yaml` | corrected paper reproduction 总冠军；closer-to-paper rerun 后 `D4` 以 `val_auc=0.9309090909090909` 同时占据该 lane 的最高 AUC |
@@ -2996,6 +2998,20 @@
 - **Monitor takeaways**：这次 direct formal 的 `val_acc` 与上一轮 fresh main-study winner 完全一致，`val_f1` 也一致，只是 `val_auc` 轻微回落 `0.0022727272727273`。结合本轮日志尾部可见，训练在 epoch 9 时已经打到 `val_acc=0.9255 / val_auc=0.9782`，最终 best 进一步上探到 `0.9468 / 0.9777`，说明 gated head 带来的 ceiling 提升不是单纯来自 Optuna 搜索或 lucky duplicate trial，而是可以在 direct formal 语义下重现。
 - **本轮结论**：按“是否替换当前 best keep”的 strict rule，本轮记 **discard**；但从研究判断上，它是一次偏正面的 confirmation。当前更可靠的结论是：`gated fusion head` 已经把这条 dedicated ResNeXt V100 `256x8` mean-pooling lane 的 ceiling 稳定抬到 `0.9468085106382979` 档位，只是仍需用 alternate seed 判断其多 seed 稳定性。
 - **推荐动作**：若外层 loop 继续，优先对同一 exact gated-head template 做 1 次 alternate-seed direct formal confirmation（优先 `seed=123`，次选 `seed=456`）；在此之前不要急着重开 fresh adaptive main-study，也不要回到非 `resnext` backbone 或更换 pooling 几何。
+
+---
+
+## 2026-05-26：Paper Feature Fusion 3-Seed Formal Validation
+
+> **实验说明**
+> - 这是按人类要求补齐的论文特征融合证据：同一 ResNeXt 256x8 feature-fusion geometry 下，补齐 `seed=42/123/456` 的最佳 gated-head template 与 matched minimal concat-MLP baseline。
+> - 最佳 template 固定为：`feature fusion`, `share_backbone=false`, `image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`, `freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`, `epochs=15`，并保留 `per-view feature recalibration + light CrossViewAttention mixer + LayerNorm/GLU gated fusion head`。
+> - Minimal baseline 只改一个结构开关：`minimal_fusion_baseline=true`，即三视角 pooled feature 直接 concat 后接 `Linear-ReLU-Dropout-Linear`，不含 recalibration、cross-view mixer、prenorm 或 GLU。
+> - 执行前先申请 60 秒 probe job `516493` 验证 `node09` 完全干净：8 张 RTX A6000 均约 `1 MiB / 49140 MiB`、`0%` util；随后提交 5-GPU formal job `516499`，运行脚本 [scripts/slurm_feature_fusion_3seed_5gpu.sbatch](/dataset/HH/ankle-ct/scripts/slurm_feature_fusion_3seed_5gpu.sbatch)，6 个 run 通过动态空闲 GPU 复用完成。
+
+- [x] **PAPER-FEATURE-FUSION-GATED-HEAD-3SEED-FORMAL**：commit `fe42d90`，配置为 [configs/paper_feature_fusion_gated_head_formal_s42.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_gated_head_formal_s42.yaml)、[configs/paper_feature_fusion_gated_head_formal_s123.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_gated_head_formal_s123.yaml)、[configs/paper_feature_fusion_gated_head_formal_s456.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_gated_head_formal_s456.yaml)。实验实际结果：seed42 `0.9468085106382979/0.9790909090909091/0.9411764705882353`，seed123 `0.9468085106382979/0.9786363636363637/0.9425287356321839`，seed456 `0.9255319148936170/0.9700000000000000/0.9195402298850575`；3-seed mean `val_acc=0.9397163120567376`, `val_auc=0.9759090909090910`, `val_f1=0.9344151453684922`, max peak_vram≈`2.17 GiB` → **keep**（稳定超过 matched minimal feature-fusion baseline，且 seed42/123 复现了 `0.946809` 高点）。
+- [x] **PAPER-FEATURE-FUSION-MINIMAL-BASELINE-3SEED-FORMAL**：commit `fe42d90`，配置为 [configs/paper_feature_fusion_minimal_baseline_formal_s42.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_minimal_baseline_formal_s42.yaml)、[configs/paper_feature_fusion_minimal_baseline_formal_s123.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_minimal_baseline_formal_s123.yaml)、[configs/paper_feature_fusion_minimal_baseline_formal_s456.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_minimal_baseline_formal_s456.yaml)。实验实际结果：seed42 `0.9148936170212766/0.9763636363636364/0.9111111111111111`，seed123 `0.9148936170212766/0.9709090909090909/0.9024390243902439`，seed456 `0.9148936170212766/0.9690909090909091/0.9069767441860465`；3-seed mean `val_acc=0.9148936170212766`, `val_auc=0.9721212121212122`, `val_f1=0.9068422932291339`, max peak_vram≈`2.15 GiB` → **discard as model**, **retain as paper control**。
+- **当前判断**：最佳 feature-fusion gated-head 相对 minimal concat-MLP baseline 的 3-seed mean 提升为 `+0.0248226950354610 val_acc`, `+0.0037878787878788 val_auc`, `+0.0275728521393583 val_f1`。从论文实验完整性看，已经补齐“最佳方法 vs 最小特征融合 baseline”的 3-seed formal；尚缺的下一层证据是模块级消融：去 per-view recalibration、去 cross-view mixer、去 GLU gated head，以及 bootstrap/CI 或 paired per-case 统计。执行层发现旧 multiseed runner 的日志按 `seed*.log` 命名会在同 seed 双组实验中复用日志名，已在后续代码中改为包含 `output_dir.name` 的唯一日志名。
 
 ---
 
