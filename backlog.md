@@ -12,7 +12,29 @@
 
 ---
 
-## 2026-05-10：人类主线追加（weight collapse → minimal internal structure repair）
+## 2026-05-26：人类主线重定向（feature fusion exploration）
+
+> **任务说明**
+> - 人类要求：**把当前主线改为特征融合的探索**。
+> - 该指令覆盖 2026-04-23 / 2026-05-10 的 decision-fusion 锁定规则。旧 DFR decision-fusion 系列保留为历史记录和 comparator，但不再是 operational mainline。
+> - 当前 feature-fusion anchor 固定为 `PAPER-FEATURE-FUSION-GATED-HEAD-3SEED-FORMAL` / `CMP-FAIR-V100-RESNEXT-MAIN-GATED-HEAD`：`ResNeXt + 256x8 + feature fusion + mean pooling + trim_edge_slices=2 + per-view feature recalibration + light CrossViewAttention mixer + LayerNorm/GLU gated fusion head`。
+> - 当前 3-seed reference：gated-head `val_acc=0.9397163120567376`, `val_auc=0.9759090909090910`, `val_f1=0.9344151453684922`；matched minimal concat-MLP baseline `0.9148936170212766 / 0.9721212121212122 / 0.9068422932291339`。
+> - `configs/autoresearch_formal.yaml`、`configs/autoresearch_proxy.yaml`、`configs/optuna_main_search.yaml`、`configs/optuna_proxy_search.yaml` 已切到 feature-fusion gated-head anchor；不要再默认注入 DFR gate/routing runtime env。
+
+> **新主线自检**
+> - 这项改动是否直接增强 feature-level multi-view representation、cross-view interaction、fused-token gating 或 feature-fusion 稳定性？如果不能明确回答，不执行。
+> - 如果成功，为什么有机会提高 `val_acc`？必须说明它相对当前 gated-head anchor 或 minimal concat baseline 的预期收益来源，而不是只说“更复杂”。
+> - 它是否保持 matched geometry / budget / seed protocol？默认保持 `ResNeXt 256x8`, `trim_edge_slices=2`, `freeze_layers=3`, `lr=1e-4`, `wd=1e-4`, `dropout=0.25`, `clip=1.0`；任何偏离都要作为单变量假设写清楚。
+
+- [x] **FF-MODULE-ABLATE-RECAL-3SEED-FORMAL**：从当前 gated-head anchor 出发，只去掉 per-view feature recalibration，保留 cross-view mixer、prenorm 与 GLU head；3-seed mean `0.929078/0.962879/0.921827`，相对 full gated-head `-0.010638 acc`。
+- [x] **FF-MODULE-ABLATE-XVIEW-MIXER-3SEED-FORMAL**：从当前 gated-head anchor 出发，只去掉 light CrossViewAttention mixer，保留 recalibration、prenorm 与 GLU head；3-seed mean `0.921986/0.965758/0.910765`，相对 full gated-head `-0.017730 acc`。
+- [x] **FF-MODULE-ABLATE-GLU-HEAD-3SEED-FORMAL**：从当前 gated-head anchor 出发，只把 GLU gated fusion head 换回 matched-capacity plain MLP / ReLU head，保留 recalibration、xview mixer 与 prenorm；3-seed mean `0.911348/0.974394/0.906366`，相对 full gated-head `-0.028369 acc`。
+- [ ] **FF-PAIRWISE-CASE-STATS**：基于已完成 gated-head vs minimal baseline 3-seed validation telemetry，生成 paired per-case fixed/broken 统计和 bootstrap/CI，不使用测试集指标。
+- **Agent 状态（2026-05-26 SGT）**：当前主线已切到 feature-fusion exploration；last completed=`PAPER-FEATURE-FUSION-MODULE-ABLATIONS-3SEED-FORMAL` (`c709f7c`, Slurm job `516767`)；last retained feature-fusion evidence remains full gated-head (`fe42d90`, mean `0.939716/0.975909/0.934415`)；module ablations show all three submodules contribute, with largest drop from removing GLU head; per human instruction, stop after recording this completed run.
+
+---
+
+## 2026-05-10：人类主线追加（历史冻结：weight collapse → minimal internal structure repair）
 
 > **任务说明**
 > - 人类要求把当前 Auto Research 主线明确补上：**针对本项目特点，decision-fusion 中产生了权重坍塌**；后续改进应围绕这个要点，在网络内部处理中增加最小结构改动，以提高准确率。
@@ -2152,11 +2174,11 @@
 
 | 字段 | 值 |
 |------|-----|
-| 上次实验 | `PAPER-FEATURE-FUSION-GATED-HEAD/MINIMAL-BASELINE-3SEED-FORMAL`：按人类要求补齐最佳特征融合与特征融合 baseline 的 3-seed formal。 |
-| 上次结果 | commit `fe42d90`；Slurm job `516499` 在已确认干净的 `node09` 5-GPU allocation 上完成 6/6 runs；gated-head mean `0.939716/0.975909/0.934415`，minimal baseline mean `0.914894/0.972121/0.906842`。 |
-| 下一步 | Feature-fusion 论文证据已补上 best-vs-minimal baseline 3-seed。若继续 feature-fusion paper lane，下一步应补模块级消融（去 per-view recalibration / 去 cross-view mixer / 去 GLU head）或统计显著性/CI，而不是重复同一 baseline。Decision-fusion governance gate 仍保留：没有 review answers 前不重启 DFR 主线训练。 |
+| 上次实验 | `PAPER-FEATURE-FUSION-MODULE-ABLATIONS-3SEED-FORMAL`：按人类要求在补齐 best-vs-baseline 后继续补齐 feature-fusion 模块级 3-seed formal 消融。 |
+| 上次结果 | commit `c709f7c`；probe job `516763` 确认 `node09` 5 张 RTX A6000 干净后，Slurm job `516767` 完成 9/9 runs、`COMPLETED 0:0`。no-recal mean `0.929078/0.962879/0.921827`；no-xview mean `0.921986/0.965758/0.910765`；no-GLU mean `0.911348/0.974394/0.906366`。 |
+| 下一步 | 按人类指令，本轮完成后停止，不再自动启动新实验。若之后继续 feature-fusion paper lane，优先做 `FF-PAIRWISE-CASE-STATS`：基于 gated-head、minimal baseline 和三组 ablation 的 validation telemetry 做 paired per-case fixed/broken、bootstrap/CI 或显著性统计；不使用测试集指标。 |
 | 默认执行策略 | 24GB+ 显存机器默认直接跑 `main` / `formal`；`proxy` 仅保留作低显存 fallback 与快速 smoke。 |
-| 连续 discard 计数 | 0（本轮 paper feature-fusion gated-head 为 keep；minimal baseline 是对照 discard，不计入主线连续失败。） |
+| 连续 discard 计数 | 0（三组 module ablation 均是论文对照 discard，不计入主线连续失败；当前 retained model 仍为 full gated-head。） |
 | 累计 proxy keep 数 | 7（当前 `val_acc` 主线新增 1 次 keep：`a60c3e0` / fresh proxy winner） |
 | 本地迁移补记 | 2026-04-12 从旧工作副本并入的 legacy 状态：上次实验为 `VR-16`（`9293915`; `no_miss_val_acc=0.872`, `no_miss_val_spe=0.760`, `val_AUC=0.969`）；旧计划下一步为 `VR-MS-01~03`；旧连续 discard 计数为 15。该状态属于旧 `no_miss` / `192x16` campaign，已归档为 legacy，不覆盖当前 canonical `val_acc` 主线。 |
 
@@ -3013,25 +3035,39 @@
 - [x] **PAPER-FEATURE-FUSION-MINIMAL-BASELINE-3SEED-FORMAL**：commit `fe42d90`，配置为 [configs/paper_feature_fusion_minimal_baseline_formal_s42.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_minimal_baseline_formal_s42.yaml)、[configs/paper_feature_fusion_minimal_baseline_formal_s123.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_minimal_baseline_formal_s123.yaml)、[configs/paper_feature_fusion_minimal_baseline_formal_s456.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_minimal_baseline_formal_s456.yaml)。实验实际结果：seed42 `0.9148936170212766/0.9763636363636364/0.9111111111111111`，seed123 `0.9148936170212766/0.9709090909090909/0.9024390243902439`，seed456 `0.9148936170212766/0.9690909090909091/0.9069767441860465`；3-seed mean `val_acc=0.9148936170212766`, `val_auc=0.9721212121212122`, `val_f1=0.9068422932291339`, max peak_vram≈`2.15 GiB` → **discard as model**, **retain as paper control**。
 - **当前判断**：最佳 feature-fusion gated-head 相对 minimal concat-MLP baseline 的 3-seed mean 提升为 `+0.0248226950354610 val_acc`, `+0.0037878787878788 val_auc`, `+0.0275728521393583 val_f1`。从论文实验完整性看，已经补齐“最佳方法 vs 最小特征融合 baseline”的 3-seed formal；尚缺的下一层证据是模块级消融：去 per-view recalibration、去 cross-view mixer、去 GLU gated head，以及 bootstrap/CI 或 paired per-case 统计。执行层发现旧 multiseed runner 的日志按 `seed*.log` 命名会在同 seed 双组实验中复用日志名，已在后续代码中改为包含 `output_dir.name` 的唯一日志名。
 
+## 2026-05-26：Paper Feature Fusion Module Ablations 3-Seed Formal
+
+> **实验说明**
+> - 这是对 `PAPER-FEATURE-FUSION-GATED-HEAD-3SEED-FORMAL` 的 matched module ablation：固定 ResNeXt 256x8、mean pooling、`trim_edge_slices=2`、`freeze_layers=3`、`lr=1e-4`、`weight_decay=1e-4`、`dropout=0.25`、`gradient_clip_norm=1.0`、`epochs=15` 与 seeds `42/123/456`。
+> - 三个单变量分别为：只去 per-view feature recalibration；只去 light CrossViewAttention mixer；只把 GLU gated fusion head 换成 matched plain ReLU MLP。
+> - 执行前用 probe job `516763` 确认 `node09` 可见 5 张 RTX A6000 且显存/利用率干净；随后提交 5-GPU formal job `516767`，运行 [scripts/slurm_feature_fusion_ablation_3seed_5gpu.sbatch](/dataset/HH/ankle-ct/scripts/slurm_feature_fusion_ablation_3seed_5gpu.sbatch)，9/9 runs 完成，`sacct` 显示 `COMPLETED 0:0`。
+
+- [x] **PAPER-FEATURE-FUSION-ABLATION-NO-RECALIBRATION-3SEED-FORMAL**：commit `c709f7c`，配置为 [configs/paper_feature_fusion_ablation_no_recalibration_formal_s42.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_recalibration_formal_s42.yaml)、[configs/paper_feature_fusion_ablation_no_recalibration_formal_s123.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_recalibration_formal_s123.yaml)、[configs/paper_feature_fusion_ablation_no_recalibration_formal_s456.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_recalibration_formal_s456.yaml)。实验实际结果：seed42 `0.9468085106382979/0.9750000000000001/0.9450549450549450`，seed123 `0.9255319148936170/0.9663636363636363/0.9156626506024096`，seed456 `0.9148936170212766/0.9472727272727273/0.9047619047619048`；3-seed mean `val_acc=0.9290780141843972`, `val_auc=0.9628787878787879`, `val_f1=0.9218265001397531`, max peak_vram≈`2.16 GiB` → **discard as model**, **retain as paper ablation**。
+- [x] **PAPER-FEATURE-FUSION-ABLATION-NO-XVIEW-MIXER-3SEED-FORMAL**：commit `c709f7c`，配置为 [configs/paper_feature_fusion_ablation_no_xview_mixer_formal_s42.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_xview_mixer_formal_s42.yaml)、[configs/paper_feature_fusion_ablation_no_xview_mixer_formal_s123.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_xview_mixer_formal_s123.yaml)、[configs/paper_feature_fusion_ablation_no_xview_mixer_formal_s456.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_xview_mixer_formal_s456.yaml)。实验实际结果：seed42 `0.9255319148936170/0.9618181818181819/0.9176470588235294`，seed123 `0.9042553191489362/0.9677272727272728/0.8860759493670886`，seed456 `0.9361702127659575/0.9677272727272728/0.9285714285714286`；3-seed mean `val_acc=0.9219858156028368`, `val_auc=0.9657575757575758`, `val_f1=0.9107648122540155`, max peak_vram≈`2.16 GiB` → **discard as model**, **retain as paper ablation**。
+- [x] **PAPER-FEATURE-FUSION-ABLATION-NO-GLU-HEAD-3SEED-FORMAL**：commit `c709f7c`，配置为 [configs/paper_feature_fusion_ablation_no_glu_head_formal_s42.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_glu_head_formal_s42.yaml)、[configs/paper_feature_fusion_ablation_no_glu_head_formal_s123.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_glu_head_formal_s123.yaml)、[configs/paper_feature_fusion_ablation_no_glu_head_formal_s456.yaml](/dataset/HH/ankle-ct/configs/paper_feature_fusion_ablation_no_glu_head_formal_s456.yaml)。实验实际结果：seed42 `0.9148936170212766/0.9613636363636363/0.9047619047619048`，seed123 `0.9042553191489362/0.9777272727272728/0.9032258064516129`，seed456 `0.9148936170212766/0.9840909090909091/0.9111111111111111`；3-seed mean `val_acc=0.9113475177304965`, `val_auc=0.9743939393939395`, `val_f1=0.9063662741082096`, max peak_vram≈`2.16 GiB` → **discard as model**, **retain as paper ablation**。
+- **当前判断**：full gated-head 仍是 feature-fusion anchor。相对 full gated-head mean `0.939716/0.975909/0.934415`，去 recalibration 下降 `-0.010638 acc / -0.013030 auc / -0.012589 f1`；去 xview mixer 下降 `-0.017730 acc / -0.010152 auc / -0.023650 f1`；去 GLU head 下降 `-0.028369 acc / -0.001515 auc / -0.028049 f1`。结论上，三个模块都有独立正贡献，其中 GLU gated fusion head 对 `val_acc/F1` 的贡献最大；no-GLU 基本退回 minimal concat baseline 的 accuracy/F1 档位，说明论文创新点可以聚焦在 fused-token gated head，再用 recalibration 与 cross-view mixer 作为稳定增益模块。下一步若继续补论文完整性，应做 paired per-case fixed/broken 与 bootstrap/CI 统计；按人类指令，本轮记录后停止，不自动启动新实验。
+
 ---
 
-## 阶段 10：当前主线校准与可复现实验 🔴 当前最高优先级
+## 阶段 10：feature-fusion 主线探索 🔴 当前最高优先级
 
 > **当前主线定义（canonical baseline）**
-> - 2026-05-10 起，operational baseline 改为 `DFR-25 ResNeXt 256x8 learned decision fusion`
-> - `ResNeXt + decision fusion + L3 no-mixer + train-time dominant-gate dropout`
+> - 2026-05-26 起，operational baseline 改为 `ResNeXt 256x8 feature-fusion gated head`
+> - `ResNeXt + feature fusion + mean pooling + per-view recalibration + light CrossViewAttention mixer + LayerNorm/GLU gated fusion head`
 > - `image_size=256`, `num_slices_per_view=8`, `trim_edge_slices=2`, `use_attention_pooling=false`
-> - runtime env 固定为 `ANKLE_DISABLE_FUSION_CROSS_VIEW_MIXER=1` + `ANKLE_DECISION_TRAIN_DOMINANT_GATE_DROPOUT_PROB=0.25`
-> - winning scalar 固定为 `freeze_layers=3`, `lr=1e-4`, `weight_decay=2.5e-4`, `dropout=0.25`, `gradient_clip_norm=2.5`
+> - 不默认注入 DFR/decision-fusion runtime env
+> - anchor scalar 固定为 `freeze_layers=3`, `lr=1e-4`, `weight_decay=1e-4`, `dropout=0.25`, `gradient_clip_norm=1.0`
+> - 当前 3-seed formal reference：`PAPER-FEATURE-FUSION-GATED-HEAD-3SEED-FORMAL` mean `val_acc=0.9397163120567376`, `val_auc=0.9759090909090910`, `val_f1=0.9344151453684922`
+> - matched minimal concat-MLP feature-fusion baseline：mean `val_acc=0.9148936170212766`, `val_auc=0.9721212121212122`, `val_f1=0.9068422932291339`
 > - 主指标是 `summary.json -> best_val.accuracy`
 > - 若 `val_acc` 持平，按 `best_val.auc` 决胜
 >
 > **当前流程约束**
 > - `model.freeze_layers` 必须由 YAML 显式声明，不再通过修改 `src/model.py` 常量切换
 > - Optuna 必须优先使用项目 `.venv`
-> - 默认 Optuna search config 只表达 DFR-25 fixed anchor；`search_space: {}` 是有意收敛，不代表要开始宽搜
-> - 任何后续 ResNeXt 改进都必须从 DFR-25 fork，并且一次只改一个明确声明的变量
-> - 直接训练必须使用 `scripts/run_train_with_config_env.py` 或等价注入，保证 `runtime_env` 生效
+> - 默认 Optuna search config 只表达 feature-fusion gated-head fixed anchor；`search_space: {}` 是有意收敛，不代表要开始宽搜
+> - 任何后续 ResNeXt feature-fusion 改进都必须从 gated-head anchor fork，并且一次只改一个明确声明的变量
+> - 直接训练可使用 `scripts/run_train_with_config_env.py` 或 `train.py --config`；如果配置含 runtime_env，必须保证等价注入
 > - fresh study 默认不得复用旧 `study.sqlite3`；只有显式 `--resume` 才续跑
 > - resume 语义是补足剩余 budget，而不是再次追加完整 `n_trials`
 > - `threshold_eval` 仅作辅助输出；失败时记录 warning，不应判定整个 study 失败
@@ -3041,16 +3077,14 @@
 > - `val_acc` 持平：比较 `val_auc`
 > - 二者仍持平：优先更简单的配置 / 代码路径
 >
-> **2026-04-21 主线追加约束**
-> - 该节是历史约束；若与 2026-05-10 DFR-25 mainline 冲突，以 DFR-25 minimal-variable 约束为准
-> - canonical 主线下一阶段不再先做更激进的 weighting-ratio / gating 优化
-> - 必须先完成一轮 matched **模块贡献分析**，回答“当前 decision-fusion 路径里到底是哪一层在提供净收益，哪一层在引入方差”
-> - 模块分析至少优先覆盖：`equal-weight` 控制、`minimal learned` 路径、`current learned` 路径；必要时再继续拆 richer reliability path
-> - 只有当模块分析显示 learned weighting 某一子路径确有正贡献时，才允许继续做训练中自动优化 weighting 比例
+> **2026-05-26 主线追加约束**
+> - canonical 主线下一阶段优先做 matched **feature-fusion 模块贡献分析**，回答 `recalibration / cross-view mixer / GLU head / prenorm` 分别提供多少净收益和方差。
+> - 模块分析至少优先覆盖：当前 gated-head、minimal concat-MLP、去 recalibration、去 xview mixer、去 GLU head。
+> - 只有当模块分析显示某一 feature-fusion 子路径确有正贡献时，才允许继续围绕该子路径做结构细化或小范围 Optuna。
 >
 > **执行顺序**
-> 1. 先围绕 canonical `decision fusion` 做 matched 模块贡献分析，优先比较 `equal-weight / minimal learned / current learned`
-> 2. 对模块分析中有净收益的路径，再启动 fresh Optuna study 做超参搜索或轻量结构细化
+> 1. 先围绕 canonical `feature fusion` 做 matched 模块贡献分析，优先比较 `minimal concat / gated-head full / individual ablations`
+> 2. 对模块分析中有净收益的 feature-fusion 子路径，再启动 fresh Optuna study 做超参搜索或轻量结构细化
 > 3. 由 `monitor_optuna.py` 汇总 best trial、warning、degraded trial 与建议
 > 4. candidate winner 明显更优后，再做 main/formal 确认
 >
@@ -3058,10 +3092,10 @@
 > - 历史 `VR-01 ~ VR-16`、`no_miss_*`、`192x16` 记录保留供回顾，但不再作为当前主线的直接 comparator
 > - 若需要复盘旧阶段，请显式标注为 legacy campaign
 
-### 2026-04-21：Canonical Mainline 研究顺序重排（模块贡献优先）
+### 2026-05-26：Feature-Fusion 研究顺序重排（模块贡献优先）
 
-- [ ] **MAIN-MODULE-CONTRIB-01**：如需继续模块贡献分析，必须以当前 canonical `DFR-25 ResNeXt 256x8 decision fusion` 为锚点，先回答 `equal-weight`、`minimal learned`、`current learned` 三档的净贡献与方差差异，再决定是否继续拆 richer reliability module。
-- [ ] **MAIN-WEIGHT-OPT-01**：仅在 `MAIN-MODULE-CONTRIB-01` 给出明确正信号后，才进入训练中自动优化 weighting 比例；若模块分析未显示净收益，则维持更简单的 weighting baseline，不把“更复杂 gating”当默认方向。
+- [x] **FF-MODULE-CONTRIB-01**：以当前 canonical `ResNeXt 256x8 feature-fusion gated head` 为锚点，已完成 `minimal concat / full gated-head / no-recal / no-xview / no-GLU` 的 matched 3-seed formal；full gated-head mean `0.939716/0.975909/0.934415` 最高。
+- [ ] **FF-STRUCTURE-OPT-01**：仅在 `FF-MODULE-CONTRIB-01` 给出明确正信号后，围绕有净收益的子模块做单变量结构细化；若模块分析未显示净收益，则维持更简单 feature-fusion baseline，不把“更复杂 head”当默认方向。
 
 ### 2026-04-13：一轮基线校准 + capped fresh proxy Optuna + formal confirmation
 
