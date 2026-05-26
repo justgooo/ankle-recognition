@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -427,12 +427,26 @@ def main() -> int:
 
     train_status = 0
     with ThreadPoolExecutor(max_workers=args.max_parallel) as executor:
-        futures = {
-            executor.submit(run_config, spec, args, log_dir, gpu_ids[index % len(gpu_ids)]): spec
-            for index, spec in enumerate(specs)
-        }
-        for future in as_completed(futures):
-            train_status = max(train_status, int(future.result()))
+        spec_iter = iter(specs)
+        active = {}
+
+        def launch_next(free_gpu_id: int) -> None:
+            try:
+                next_spec = next(spec_iter)
+            except StopIteration:
+                return
+            future = executor.submit(run_config, next_spec, args, log_dir, free_gpu_id)
+            active[future] = free_gpu_id
+
+        for gpu_id in gpu_ids:
+            launch_next(gpu_id)
+
+        while active:
+            done, _ = wait(active.keys(), return_when=FIRST_COMPLETED)
+            for future in done:
+                freed_gpu_id = active.pop(future)
+                train_status = max(train_status, int(future.result()))
+                launch_next(freed_gpu_id)
     if train_status != 0:
         return train_status
 

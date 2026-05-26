@@ -2119,7 +2119,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         freeze_layers: int = DEFAULT_FREEZE_LAYERS,  # 冻结 backbone 前 N 个 layer block
         backbone: str = "resnet18",      # backbone 类型
         minimal_fusion_baseline: bool = False,
+        equal_weight_fusion: bool = False,
     ) -> None:
+        _ = equal_weight_fusion  # build_model passes this shared key for decision fusion only.
         super().__init__(
             share_backbone=share_backbone,
             use_pretrained=use_pretrained,
