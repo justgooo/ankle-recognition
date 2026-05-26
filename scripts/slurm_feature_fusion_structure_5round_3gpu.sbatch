@@ -50,7 +50,10 @@ if [[ -z "${IDLE_GPU_IDS}" ]]; then
   exit 2
 fi
 
-mapfile -t CONFIGS < <(.venv/bin/python scripts/prepare_feature_fusion_structure_5round.py | grep '^configs/')
+mapfile -t CONFIGS < <(
+  .venv/bin/python scripts/prepare_feature_fusion_structure_5round.py \
+    | grep '^configs/.*\.yaml$'
+)
 
 .venv/bin/python scripts/backbone_preflight.py --config "${CONFIGS[@]}"
 
