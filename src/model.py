@@ -558,6 +558,72 @@ class ViewFeatureRecalibration(nn.Module):
         return view_feature * gate
 
 
+class FeaturePairwiseTokenResidual(nn.Module):
+    """Low-capacity pairwise correction for feature-fusion view tokens."""
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        pair_dim: int = 64,
+        dropout: float = 0.05,
+        residual_scale: float = 0.0625,
+    ) -> None:
+        super().__init__()
+        if pair_dim <= 0:
+            raise ValueError("pair_dim must be > 0.")
+        if residual_scale <= 0.0:
+            raise ValueError("residual_scale must be > 0.")
+
+        self.residual_scale = float(residual_scale)
+        self.pair_norm = nn.LayerNorm(feature_dim * 3)
+        self.token_norm = nn.LayerNorm(feature_dim + pair_dim)
+        self.pair_encoder = nn.Sequential(
+            nn.Linear(feature_dim * 3, pair_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+        )
+        self.adapter = nn.Sequential(
+            nn.Linear(feature_dim + pair_dim, feature_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(feature_dim, feature_dim),
+        )
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        _, num_views, _ = view_features.shape
+        if num_views <= 1:
+            return view_features
+
+        relative_features = view_features - view_features.mean(dim=1, keepdim=True)
+        pair_contexts: list[torch.Tensor] = []
+        for view_index in range(num_views):
+            anchor = relative_features[:, view_index]
+            encoded_pairs = []
+            for other_index in range(num_views):
+                if other_index == view_index:
+                    continue
+                other = relative_features[:, other_index]
+                pair_input = torch.cat(
+                    [
+                        anchor,
+                        anchor - other,
+                        anchor * other,
+                    ],
+                    dim=-1,
+                )
+                encoded_pairs.append(self.pair_encoder(self.pair_norm(pair_input)))
+            pair_contexts.append(torch.stack(encoded_pairs, dim=1).mean(dim=1))
+
+        pair_context = torch.stack(pair_contexts, dim=1)
+        residual_input = torch.cat([view_features, pair_context], dim=-1)
+        residual = self.adapter(self.token_norm(residual_input))
+        return view_features + self.residual_scale * residual
+
+
 class SharedLowRankReliabilityCalibrator(nn.Module):
     """Shared low-rank residual calibrator for per-view reliability logits."""
 
@@ -2142,6 +2208,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.enable_feature_view_role_embedding = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_ROLE_EMBEDDING"
         )
+        self.enable_feature_pairwise_token_residual = _env_flag(
+            "ANKLE_FEATURE_ENABLE_PAIRWISE_TOKEN_RESIDUAL"
+        )
 
         if minimal_fusion_baseline:
             # 纯融合对比模式：不引入额外视角交互或门控模块，只保留最小 MLP 头。
@@ -2176,6 +2245,22 @@ class MultiViewCTClassifier(MultiViewEncoder):
             if self.enable_feature_view_role_embedding:
                 self.feature_view_role_embedding = nn.Parameter(
                     torch.zeros(3, self.feature_dim)
+                )
+            if self.enable_feature_pairwise_token_residual:
+                self.feature_pairwise_token_residual = FeaturePairwiseTokenResidual(
+                    feature_dim=self.feature_dim,
+                    pair_dim=_env_positive_int(
+                        "ANKLE_FEATURE_PAIRWISE_TOKEN_PAIR_DIM",
+                        64,
+                    ),
+                    dropout=_env_unit_float(
+                        "ANKLE_FEATURE_PAIRWISE_TOKEN_DROPOUT",
+                        0.05,
+                    ),
+                    residual_scale=_env_positive_float(
+                        "ANKLE_FEATURE_PAIRWISE_TOKEN_RESIDUAL_SCALE",
+                        0.0625,
+                    ),
                 )
 
             if self.disable_feature_glu_head:
@@ -2225,6 +2310,8 @@ class MultiViewCTClassifier(MultiViewEncoder):
             if self.enable_feature_view_role_embedding:
                 stacked_features = stacked_features + self.feature_view_role_embedding.unsqueeze(0)
             mixed_features = self.cross_view_mixer(stacked_features)
+            if self.enable_feature_pairwise_token_residual:
+                mixed_features = self.feature_pairwise_token_residual(mixed_features)
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
         # 第 2 步：送进分类器，得到分类结果
         return self.classifier(image_feature)
