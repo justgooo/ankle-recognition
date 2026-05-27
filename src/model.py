@@ -2139,6 +2139,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
             "ANKLE_FEATURE_DISABLE_CROSS_VIEW_MIXER"
         )
         self.disable_feature_glu_head = _env_flag("ANKLE_FEATURE_DISABLE_GLU_HEAD")
+        self.enable_feature_view_role_embedding = _env_flag(
+            "ANKLE_FEATURE_ENABLE_VIEW_ROLE_EMBEDDING"
+        )
 
         if minimal_fusion_baseline:
             # 纯融合对比模式：不引入额外视角交互或门控模块，只保留最小 MLP 头。
@@ -2169,6 +2172,10 @@ class MultiViewCTClassifier(MultiViewEncoder):
                     num_layers=_env_positive_int("ANKLE_FEATURE_XVIEW_NUM_LAYERS", 1),
                     dropout=_env_unit_float("ANKLE_FEATURE_XVIEW_DROPOUT", 0.1),
                     residual_scale=_env_positive_float("ANKLE_FEATURE_XVIEW_RESIDUAL_SCALE", 0.125),
+                )
+            if self.enable_feature_view_role_embedding:
+                self.feature_view_role_embedding = nn.Parameter(
+                    torch.zeros(3, self.feature_dim)
                 )
 
             if self.disable_feature_glu_head:
@@ -2214,7 +2221,10 @@ class MultiViewCTClassifier(MultiViewEncoder):
                     recalibrator(feature)
                     for recalibrator, feature in zip(self.view_recalibrators, view_features)
                 ]
-            mixed_features = self.cross_view_mixer(torch.stack(recalibrated_features, dim=1))
+            stacked_features = torch.stack(recalibrated_features, dim=1)
+            if self.enable_feature_view_role_embedding:
+                stacked_features = stacked_features + self.feature_view_role_embedding.unsqueeze(0)
+            mixed_features = self.cross_view_mixer(stacked_features)
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
         # 第 2 步：送进分类器，得到分类结果
         return self.classifier(image_feature)
