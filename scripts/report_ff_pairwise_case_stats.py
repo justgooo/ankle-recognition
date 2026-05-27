@@ -531,6 +531,34 @@ def aggregate_report(
             key: round_float(float(np.mean([metrics[key] for metrics in metrics_by_seed])))
             for key in ("accuracy", "auc", "f1", "specificity", "sensitivity")
         }
+    summary_means = {}
+    recomputed_minus_summary = {}
+    for method in ("minimal_baseline", "gated_head"):
+        summary_metrics_by_seed = [
+            predictions[method][seed].get("expected_best_val") for seed in SEEDS
+        ]
+        if all(metrics is not None for metrics in summary_metrics_by_seed):
+            summary_means[method] = {
+                key: round_float(
+                    float(
+                        np.mean(
+                            [
+                                metrics[key]  # type: ignore[index]
+                                for metrics in summary_metrics_by_seed
+                            ]
+                        )
+                    )
+                )
+                for key in ("accuracy", "auc", "f1", "specificity", "sensitivity")
+            }
+        recomputed_minus_summary[method] = {}
+        for seed in SEEDS:
+            expected = predictions[method][seed].get("expected_best_val")
+            actual = predictions[method][seed]["metrics"]
+            if expected is None:
+                recomputed_minus_summary[method][str(seed)] = None
+                continue
+            recomputed_minus_summary[method][str(seed)] = metric_delta(actual, expected)
 
     fixed_counter = Counter(row["patient_id"] for row in rows if row["transition"] == "fixed_by_gated")
     broken_counter = Counter(row["patient_id"] for row in rows if row["transition"] == "broken_by_gated")
@@ -551,6 +579,13 @@ def aggregate_report(
             method_means["gated_head"],
             method_means["minimal_baseline"],
         ),
+        "summary_mean_metrics": summary_means,
+        "summary_delta_gated_minus_minimal": (
+            metric_delta(summary_means["gated_head"], summary_means["minimal_baseline"])
+            if set(summary_means) == {"minimal_baseline", "gated_head"}
+            else None
+        ),
+        "recomputed_minus_summary_by_run": recomputed_minus_summary,
         "paired_transitions": {
             **counter_dict(transitions),
             "fixed_by_gated": fixed,
@@ -569,6 +604,13 @@ def aggregate_report(
         "paired_rows": rows,
         "run_metrics": {
             method: {str(seed): predictions[method][seed]["metrics"] for seed in SEEDS}
+            for method in ("minimal_baseline", "gated_head")
+        },
+        "summary_metrics": {
+            method: {
+                str(seed): predictions[method][seed].get("expected_best_val")
+                for seed in SEEDS
+            }
             for method in ("minimal_baseline", "gated_head")
         },
         "run_paths": {
@@ -590,6 +632,7 @@ def format_metric_triplet(metrics: dict[str, float]) -> str:
 
 def write_markdown(report: dict[str, Any], path: Path) -> None:
     delta = report["mean_delta_gated_minus_minimal"]
+    summary_delta = report.get("summary_delta_gated_minus_minimal")
     transitions = report["paired_transitions"]
     bootstrap = report["bootstrap"]["metrics"]
     lines = [
@@ -597,12 +640,35 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         "",
         "Scope: validation split only. No test metrics are used or reported.",
         "",
-        "## 3-seed means",
+        "## 3-seed means from checkpoint re-eval",
         "",
         f"- minimal_baseline acc/auc/f1: {format_metric_triplet(report['method_mean_metrics']['minimal_baseline'])}",
         f"- gated_head acc/auc/f1: {format_metric_triplet(report['method_mean_metrics']['gated_head'])}",
         f"- delta gated-minimal acc/auc/f1: {delta['accuracy']:.6f}/{delta['auc']:.6f}/{delta['f1']:.6f}",
         "",
+        "## Canonical training summary means",
+        "",
+    ]
+    if summary_delta is not None:
+        lines.extend(
+            [
+                f"- minimal_baseline acc/auc/f1: {format_metric_triplet(report['summary_mean_metrics']['minimal_baseline'])}",
+                f"- gated_head acc/auc/f1: {format_metric_triplet(report['summary_mean_metrics']['gated_head'])}",
+                (
+                    "- delta gated-minimal acc/auc/f1: "
+                    f"{summary_delta['accuracy']:.6f}/{summary_delta['auc']:.6f}/{summary_delta['f1']:.6f}"
+                ),
+                (
+                    "- note: paired transitions below use the checkpoint re-eval predictions; "
+                    "canonical model-selection metrics remain the training summaries."
+                ),
+                "",
+            ]
+        )
+    else:
+        lines.extend(["- unavailable", ""])
+    lines.extend(
+        [
         "## Paired transitions",
         "",
         f"- seed-case rows: {report['scope']['row_count']} ({report['scope']['unique_patient_count']} unique patients x 3 seeds)",
@@ -627,7 +693,8 @@ def write_markdown(report: dict[str, Any], path: Path) -> None:
         "",
         "## Per seed",
         "",
-    ]
+        ]
+    )
     for seed in map(str, SEEDS):
         seed_report = report["per_seed"][seed]
         seed_delta = seed_report["metrics"]["delta_gated_minus_minimal"]
