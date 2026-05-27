@@ -641,6 +641,23 @@ class FeatureViewTokenScalarGate(nn.Module):
         return view_features * scale
 
 
+class FeatureViewTokenChannelGate(nn.Module):
+    """Identity-initialized channel gate for mixed feature-fusion view tokens."""
+
+    def __init__(self, feature_dim: int = 512) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(feature_dim)
+        self.gate = nn.Linear(feature_dim, feature_dim)
+        nn.init.zeros_(self.gate.weight)
+        nn.init.zeros_(self.gate.bias)
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        scale = 2.0 * torch.sigmoid(self.gate(self.norm(view_features)))
+        return view_features * scale
+
+
 class SharedLowRankReliabilityCalibrator(nn.Module):
     """Shared low-rank residual calibrator for per-view reliability logits."""
 
@@ -2231,6 +2248,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.enable_feature_view_token_scalar_gate = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_SCALAR_GATE"
         )
+        self.enable_feature_view_token_channel_gate = _env_flag(
+            "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_CHANNEL_GATE"
+        )
 
         if minimal_fusion_baseline:
             # 纯融合对比模式：不引入额外视角交互或门控模块，只保留最小 MLP 头。
@@ -2286,6 +2306,10 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 self.feature_view_token_scalar_gate = FeatureViewTokenScalarGate(
                     feature_dim=self.feature_dim
                 )
+            if self.enable_feature_view_token_channel_gate:
+                self.feature_view_token_channel_gate = FeatureViewTokenChannelGate(
+                    feature_dim=self.feature_dim
+                )
 
             if self.disable_feature_glu_head:
                 self.classifier = nn.Sequential(
@@ -2338,6 +2362,8 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 mixed_features = self.feature_pairwise_token_residual(mixed_features)
             if self.enable_feature_view_token_scalar_gate:
                 mixed_features = self.feature_view_token_scalar_gate(mixed_features)
+            if self.enable_feature_view_token_channel_gate:
+                mixed_features = self.feature_view_token_channel_gate(mixed_features)
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
         # 第 2 步：送进分类器，得到分类结果
         return self.classifier(image_feature)
