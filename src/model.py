@@ -658,6 +658,37 @@ class FeatureViewTokenChannelGate(nn.Module):
         return view_features * scale
 
 
+class FeatureCrossViewIdentitySkipGate(nn.Module):
+    """Bounded residual gate from mixed view tokens back to their pre-mixer identities."""
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        max_scale: float = 0.5,
+    ) -> None:
+        super().__init__()
+        if max_scale <= 0.0:
+            raise ValueError("max_scale must be > 0.")
+        self.max_scale = float(max_scale)
+        self.norm = nn.LayerNorm(feature_dim)
+        self.gate = nn.Linear(feature_dim, feature_dim)
+        nn.init.zeros_(self.gate.weight)
+        nn.init.zeros_(self.gate.bias)
+
+    def forward(
+        self,
+        mixed_features: torch.Tensor,
+        skip_features: torch.Tensor,
+    ) -> torch.Tensor:
+        if mixed_features.ndim != 3 or skip_features.ndim != 3:
+            raise ValueError("mixed_features and skip_features must have shape (batch, views, features).")
+        if mixed_features.shape != skip_features.shape:
+            raise ValueError("mixed_features and skip_features must have identical shapes.")
+        skip_delta = skip_features - mixed_features
+        gate = self.max_scale * torch.tanh(self.gate(self.norm(skip_delta)))
+        return mixed_features + gate * skip_delta
+
+
 class SharedLowRankReliabilityCalibrator(nn.Module):
     """Shared low-rank residual calibrator for per-view reliability logits."""
 
@@ -2251,6 +2282,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.enable_feature_view_token_channel_gate = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_CHANNEL_GATE"
         )
+        self.enable_feature_xview_identity_skip_gate = _env_flag(
+            "ANKLE_FEATURE_ENABLE_XVIEW_IDENTITY_SKIP_GATE"
+        )
 
         if minimal_fusion_baseline:
             # 纯融合对比模式：不引入额外视角交互或门控模块，只保留最小 MLP 头。
@@ -2310,6 +2344,14 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 self.feature_view_token_channel_gate = FeatureViewTokenChannelGate(
                     feature_dim=self.feature_dim
                 )
+            if self.enable_feature_xview_identity_skip_gate:
+                self.feature_xview_identity_skip_gate = FeatureCrossViewIdentitySkipGate(
+                    feature_dim=self.feature_dim,
+                    max_scale=_env_positive_float(
+                        "ANKLE_FEATURE_XVIEW_IDENTITY_SKIP_MAX_SCALE",
+                        0.5,
+                    ),
+                )
 
             if self.disable_feature_glu_head:
                 self.classifier = nn.Sequential(
@@ -2357,7 +2399,13 @@ class MultiViewCTClassifier(MultiViewEncoder):
             stacked_features = torch.stack(recalibrated_features, dim=1)
             if self.enable_feature_view_role_embedding:
                 stacked_features = stacked_features + self.feature_view_role_embedding.unsqueeze(0)
+            skip_features = stacked_features
             mixed_features = self.cross_view_mixer(stacked_features)
+            if self.enable_feature_xview_identity_skip_gate:
+                mixed_features = self.feature_xview_identity_skip_gate(
+                    mixed_features,
+                    skip_features,
+                )
             if self.enable_feature_pairwise_token_residual:
                 mixed_features = self.feature_pairwise_token_residual(mixed_features)
             if self.enable_feature_view_token_scalar_gate:
