@@ -203,11 +203,12 @@ def build_prompt(
 - 本轮 proxy search 模板：`{proxy_search_template}`
 - 本轮 direct formal 配置：`{formal_config}`
 - 本轮 direct proxy 配置：`{proxy_config}`
-- 当前唯一主方向：实验 decision fusion，把 axial / coronal / sagittal 各视角的信息还原成它们在 full-fusion 中应有的作用；核心不是机械平均分权，而是让该主导的视角主导、该补充的视角补充，并让真正的 multi-view full-fusion learned `val_acc` 明确超过 matched `equal-weight` control
-- 在 full-fusion learned `val_acc` 尚未明确超过 matched `equal-weight` 之前，禁止切换到其他方向；不要切 backbone/geometry family，不要切到 feature fusion，不要把无关 side campaign 或泛化 cleanup 当主线
-- 单 seed spike、只提升 `val_auc` / `val_f1`、只改善 single-view 或 leave-one-view-out 结果，都不算完成上述主方向
-- 每轮实验完成后，必须验证各视角权重比例；默认对本轮 best completed checkpoint / best trial 生成或补齐 `fusion_weight_analysis.json`，至少提取三视角 `mean fusion weight axial/coronal/sagittal` 与 `top-weight count/rate`
-- 每条实验记录都必须写出：设计思路、预计改进效果、实验实际结果；其中预计改进效果必须明确说明预期哪一视角权重比例 / routing 行为会如何变化，以及为什么这有机会把 learned full-fusion `val_acc` 推过 matched `equal-weight`
+- 当前唯一主方向：feature-fusion exploration。当前 anchor 是 `ResNeXt + 256x8 + feature fusion + mean pooling + trim_edge_slices=2 + per-view feature recalibration + light CrossViewAttention mixer + LayerNorm/GLU gated fusion head`
+- 后续实验必须直接增强 feature-level multi-view representation、cross-view interaction、fused-token gating 或 feature-fusion 稳定性；不要回到旧 DFR decision-fusion gate/routing 修复，除非人类重新明确指定
+- 默认保持 matched geometry / budget / seed protocol：`ResNeXt 256x8`, `trim_edge_slices=2`, `freeze_layers=3`, `lr=1e-4`, `wd=1e-4`, `dropout=0.25`, `clip=1.0`；任何偏离都必须作为单变量假设写清楚
+- 当前 3-seed reference：gated-head `val_acc=0.9397163120567376`, `val_auc=0.9759090909090910`, `val_f1=0.9344151453684922`；matched minimal concat-MLP baseline `0.9148936170212766 / 0.9721212121212122 / 0.9068422932291339`
+- 单 seed spike、只提升 `val_auc` / `val_f1`、只改善 single-view 或无关诊断，都不算完成当前 feature-fusion 主方向
+- 每条实验记录都必须写出：设计思路、预计改进效果、实验实际结果；其中预计改进效果必须说明预期 feature-fusion 表征或融合头行为如何变化，以及为什么这种变化有机会提高 `val_acc`
 - fresh run 默认必须使用新的 `study_root`；只有你明确想续跑同一个 study 时才允许 `--resume`
 - 不要修改 train.py、src/dataset.py、src/utils.py、tools/、任何数据文件或数据集划分
 - 不要使用测试集指标做模型选择
@@ -226,12 +227,12 @@ def build_prompt(
 
 本轮任务（exactly one research iteration）：
 1. 阅读 backlog.md 和 program.md，理解当前主线、最新 best record、允许修改范围和实验协议。
-2. 自主判断这一轮最值得做的一项实验性改动。backlog 不是严格 machine-readable 队列，你可以根据当前仓库状态自行判断，但必须对齐文档主线，并且必须直接服务于“让 decision fusion 还原各视角信息应有作用、让 learned full-fusion 超过 equal-weight”这一唯一目标。
+2. 自主判断这一轮最值得做的一项实验性改动。backlog 不是严格 machine-readable 队列，你可以根据当前仓库状态自行判断，但必须对齐当前 feature-fusion 主线，并且必须直接服务于 feature-level multi-view representation、cross-view interaction、fused-token gating 或 feature-fusion 稳定性。
 3. 在真正行动前，先做两轮自检：
-   - 这项改动是否直接帮助“该主导的视角主导、该补充的视角补充”，或直接修复 evidence 与 routing 不一致、增强弱视角在有证据样本上的有效贡献？
-   - 如果它成功，为什么它有机会把 multi-view full-fusion learned `val_acc` 推到 matched `equal-weight` 之上，而不是只把权重做得更平均、或只改善单视角表现、稳定性或局部 calibration？
+   - 这项改动是否直接增强 feature-level multi-view representation、cross-view interaction、fused-token gating 或 feature-fusion 稳定性？
+   - 如果它成功，为什么有机会提高 `val_acc`，相对当前 gated-head anchor 或 minimal concat baseline 的预期收益来源是什么？
    如果这两问任意一问不能给出具体机制链路，就不要执行该改动，换一个更直接的方向。
-   - 在这一步同时整理好将写入实验记录的两段短说明：`设计思路` 与 `预计改进效果`，其中必须包含预期会改变的视角权重比例 / top-weight 分布 / routing 迁移方向。
+   - 在这一步同时整理好将写入实验记录的两段短说明：`设计思路` 与 `预计改进效果`，其中必须包含预期会改变的 feature-fusion 表征、cross-view token interaction 或融合头行为。
 4. 只做一项离散、可解释的研究改动；不要把多个独立想法混在同一轮。
 5. 在训练或调参前 git commit 本轮改动。
 {primary_lane_instructions}
@@ -246,7 +247,7 @@ def build_prompt(
    - data issue：停止本轮并输出阻塞原因
    - code bug：可以修复后重跑 1 次
    - 其他失败：按 crash 记录
-9. 对本轮 best completed checkpoint / best trial 验证各视角权重比例。优先运行 `scripts/analyze_fusion_weights.py` 生成或刷新 `fusion_weight_analysis.json`；至少提取并记录三视角 `mean fusion weight axial/coronal/sagittal` 与 `top-weight count/rate`。如果本轮是 analysis-only 实验，也必须在记录里显式引用已有权重 telemetry 文件和关键比例。
+9. 对本轮 best completed checkpoint / best trial 读取 `summary.json`，记录 `best_val.accuracy`、`best_val.auc`、`best_val.f1`、峰值显存和必要的 feature-fusion telemetry；只有当本轮显式涉及 decision-fusion 权重时，才需要生成 `fusion_weight_analysis.json`。
 10. 更新 results.tsv（只追加；并行风险下使用 `flock -x /tmp/ankle_results.lock`）和 backlog.md，包括 Agent 状态、上次实验、上次结果、下一步；并且本轮实验记录必须明确写出：`设计思路`、`预计改进效果`、`实验实际结果（含权重比例验证）`。
 11. `results.tsv` 的 config 列仍保持 `formal` / `proxy` 语义：main-study 或 direct formal 记为 `formal`；proxy-study 或 direct proxy 记为 `proxy`。
 12. 最后输出一行机器可读总结，格式必须是：
