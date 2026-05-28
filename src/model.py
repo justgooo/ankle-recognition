@@ -742,6 +742,44 @@ class FeatureViewTokenPostMixerAffine(nn.Module):
         return view_features * scale + bias
 
 
+class FeatureViewTokenResidualCentering(nn.Module):
+    """Identity-initialized residual that emphasizes view-relative token channels."""
+
+    def __init__(
+        self,
+        num_views: int = 3,
+        feature_dim: int = 512,
+        max_scale: float = 0.25,
+    ) -> None:
+        super().__init__()
+        if num_views <= 0:
+            raise ValueError("num_views must be > 0.")
+        if feature_dim <= 0:
+            raise ValueError("feature_dim must be > 0.")
+        if max_scale <= 0.0:
+            raise ValueError("max_scale must be > 0.")
+        self.max_scale = float(max_scale)
+        self.centering_delta = nn.Parameter(torch.zeros(num_views, feature_dim))
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        num_views = view_features.shape[1]
+        if num_views > self.centering_delta.shape[0]:
+            raise ValueError(
+                f"view_features has {num_views} views, but module was initialized "
+                f"for {self.centering_delta.shape[0]} views."
+            )
+        relative_features = view_features - view_features.mean(dim=1, keepdim=True)
+        scale = self.max_scale * torch.tanh(
+            self.centering_delta[:num_views].to(
+                device=view_features.device,
+                dtype=view_features.dtype,
+            )
+        ).unsqueeze(0)
+        return view_features + scale * relative_features
+
+
 class FeatureCrossViewIdentitySkipGate(nn.Module):
     """Bounded residual gate from mixed view tokens back to their pre-mixer identities."""
 
@@ -2404,6 +2442,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.enable_feature_view_token_post_mixer_affine = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_POST_MIXER_AFFINE"
         )
+        self.enable_feature_view_token_residual_centering = _env_flag(
+            "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_RESIDUAL_CENTERING"
+        )
         self.enable_feature_view_token_dropout = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_DROPOUT"
         )
@@ -2482,6 +2523,15 @@ class MultiViewCTClassifier(MultiViewEncoder):
                     ),
                     bias_limit=_env_positive_float(
                         "ANKLE_FEATURE_VIEW_TOKEN_POST_MIXER_AFFINE_BIAS_LIMIT",
+                        0.25,
+                    ),
+                )
+            if self.enable_feature_view_token_residual_centering:
+                self.feature_view_token_residual_centering = FeatureViewTokenResidualCentering(
+                    num_views=3,
+                    feature_dim=self.feature_dim,
+                    max_scale=_env_positive_float(
+                        "ANKLE_FEATURE_VIEW_TOKEN_RESIDUAL_CENTERING_MAX_SCALE",
                         0.25,
                     ),
                 )
@@ -2578,6 +2628,8 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 mixed_features = self.feature_view_token_channel_gate(mixed_features)
             if self.enable_feature_view_token_post_mixer_affine:
                 mixed_features = self.feature_view_token_post_mixer_affine(mixed_features)
+            if self.enable_feature_view_token_residual_centering:
+                mixed_features = self.feature_view_token_residual_centering(mixed_features)
             if self.enable_feature_view_token_dropout:
                 mixed_features = self.feature_view_token_dropout(mixed_features)
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
