@@ -644,19 +644,48 @@ class FeatureViewTokenScalarGate(nn.Module):
 class FeatureViewTokenChannelGate(nn.Module):
     """Identity-initialized channel gate for mixed feature-fusion view tokens."""
 
-    def __init__(self, feature_dim: int = 512, max_delta: float = 1.0) -> None:
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        max_delta: float = 1.0,
+        per_view: bool = False,
+        num_views: int = 3,
+    ) -> None:
         super().__init__()
         if max_delta <= 0.0:
             raise ValueError("max_delta must be > 0.")
         self.max_delta = float(max_delta)
-        self.norm = nn.LayerNorm(feature_dim)
-        self.gate = nn.Linear(feature_dim, feature_dim)
-        nn.init.zeros_(self.gate.weight)
-        nn.init.zeros_(self.gate.bias)
+        self.per_view = bool(per_view)
+        self.num_views = int(num_views)
+        if self.per_view:
+            if self.num_views <= 0:
+                raise ValueError("num_views must be > 0.")
+            self.norms = nn.ModuleList([nn.LayerNorm(feature_dim) for _ in range(self.num_views)])
+            self.gates = nn.ModuleList([nn.Linear(feature_dim, feature_dim) for _ in range(self.num_views)])
+            for gate in self.gates:
+                nn.init.zeros_(gate.weight)
+                nn.init.zeros_(gate.bias)
+        else:
+            self.norm = nn.LayerNorm(feature_dim)
+            self.gate = nn.Linear(feature_dim, feature_dim)
+            nn.init.zeros_(self.gate.weight)
+            nn.init.zeros_(self.gate.bias)
 
     def forward(self, view_features: torch.Tensor) -> torch.Tensor:
         if view_features.ndim != 3:
             raise ValueError("view_features must have shape (batch, views, features).")
+        if self.per_view:
+            if view_features.shape[1] != self.num_views:
+                raise ValueError(
+                    f"view_features has {view_features.shape[1]} views, "
+                    f"but module was initialized with {self.num_views}."
+                )
+            outputs = []
+            for view_index, (norm, gate) in enumerate(zip(self.norms, self.gates)):
+                view_token = view_features[:, view_index]
+                scale = 1.0 + self.max_delta * torch.tanh(gate(norm(view_token)))
+                outputs.append(view_token * scale)
+            return torch.stack(outputs, dim=1)
         scale = 1.0 + self.max_delta * torch.tanh(self.gate(self.norm(view_features)))
         return view_features * scale
 
@@ -2625,6 +2654,10 @@ class MultiViewCTClassifier(MultiViewEncoder):
                         "ANKLE_FEATURE_VIEW_TOKEN_CHANNEL_GATE_MAX_DELTA",
                         1.0,
                     ),
+                    per_view=_env_flag(
+                        "ANKLE_FEATURE_VIEW_TOKEN_CHANNEL_GATE_PER_VIEW"
+                    ),
+                    num_views=3,
                 )
             if self.enable_feature_view_token_post_mixer_affine:
                 self.feature_view_token_post_mixer_affine = FeatureViewTokenPostMixerAffine(
