@@ -15,6 +15,9 @@ study:
   objective_metric: val_accuracy
   enqueue_current_template: false
   tail_fill: never
+  env:
+    ANKLE_FEATURE_ENABLE_XVIEW_IDENTITY_SKIP_GATE: "1"
+    ANKLE_FEATURE_XVIEW_IDENTITY_SKIP_MAX_SCALE: "0.25"
   enqueue_trials:
     - params:
         seed: 42
