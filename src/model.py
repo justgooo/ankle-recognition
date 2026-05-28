@@ -696,6 +696,52 @@ class FeatureViewTokenDropout(nn.Module):
         return view_features * keep_mask.to(view_features.dtype) / keep_prob
 
 
+class FeatureViewTokenPostMixerAffine(nn.Module):
+    """Identity-initialized per-view affine calibration after cross-view mixing."""
+
+    def __init__(
+        self,
+        num_views: int = 3,
+        feature_dim: int = 512,
+        scale_limit: float = 0.25,
+        bias_limit: float = 0.25,
+    ) -> None:
+        super().__init__()
+        if num_views <= 0:
+            raise ValueError("num_views must be > 0.")
+        if feature_dim <= 0:
+            raise ValueError("feature_dim must be > 0.")
+        if scale_limit <= 0.0:
+            raise ValueError("scale_limit must be > 0.")
+        if bias_limit <= 0.0:
+            raise ValueError("bias_limit must be > 0.")
+        self.scale_limit = float(scale_limit)
+        self.bias_limit = float(bias_limit)
+        self.log_scale_delta = nn.Parameter(torch.zeros(num_views, feature_dim))
+        self.bias_delta = nn.Parameter(torch.zeros(num_views, feature_dim))
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        num_views = view_features.shape[1]
+        if num_views > self.log_scale_delta.shape[0]:
+            raise ValueError(
+                f"view_features has {num_views} views, but module was initialized "
+                f"for {self.log_scale_delta.shape[0]} views."
+            )
+        scale_delta = self.log_scale_delta[:num_views].to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        bias_delta = self.bias_delta[:num_views].to(
+            device=view_features.device,
+            dtype=view_features.dtype,
+        )
+        scale = 1.0 + self.scale_limit * torch.tanh(scale_delta).unsqueeze(0)
+        bias = self.bias_limit * torch.tanh(bias_delta).unsqueeze(0)
+        return view_features * scale + bias
+
+
 class FeatureCrossViewIdentitySkipGate(nn.Module):
     """Bounded residual gate from mixed view tokens back to their pre-mixer identities."""
 
@@ -2355,6 +2401,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.enable_feature_view_token_channel_gate = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_CHANNEL_GATE"
         )
+        self.enable_feature_view_token_post_mixer_affine = _env_flag(
+            "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_POST_MIXER_AFFINE"
+        )
         self.enable_feature_view_token_dropout = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_DROPOUT"
         )
@@ -2422,6 +2471,19 @@ class MultiViewCTClassifier(MultiViewEncoder):
             if self.enable_feature_view_token_channel_gate:
                 self.feature_view_token_channel_gate = FeatureViewTokenChannelGate(
                     feature_dim=self.feature_dim
+                )
+            if self.enable_feature_view_token_post_mixer_affine:
+                self.feature_view_token_post_mixer_affine = FeatureViewTokenPostMixerAffine(
+                    num_views=3,
+                    feature_dim=self.feature_dim,
+                    scale_limit=_env_positive_float(
+                        "ANKLE_FEATURE_VIEW_TOKEN_POST_MIXER_AFFINE_SCALE_LIMIT",
+                        0.25,
+                    ),
+                    bias_limit=_env_positive_float(
+                        "ANKLE_FEATURE_VIEW_TOKEN_POST_MIXER_AFFINE_BIAS_LIMIT",
+                        0.25,
+                    ),
                 )
             if self.enable_feature_view_token_dropout:
                 self.feature_view_token_dropout = FeatureViewTokenDropout(
@@ -2514,6 +2576,8 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 mixed_features = self.feature_view_token_scalar_gate(mixed_features)
             if self.enable_feature_view_token_channel_gate:
                 mixed_features = self.feature_view_token_channel_gate(mixed_features)
+            if self.enable_feature_view_token_post_mixer_affine:
+                mixed_features = self.feature_view_token_post_mixer_affine(mixed_features)
             if self.enable_feature_view_token_dropout:
                 mixed_features = self.feature_view_token_dropout(mixed_features)
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
