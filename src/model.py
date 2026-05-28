@@ -874,11 +874,13 @@ class FeatureCrossViewIdentitySkipGate(nn.Module):
         self,
         feature_dim: int = 512,
         max_scale: float = 0.5,
+        normalize_gate_input: bool = False,
     ) -> None:
         super().__init__()
         if max_scale <= 0.0:
             raise ValueError("max_scale must be > 0.")
         self.max_scale = float(max_scale)
+        self.normalize_gate_input = bool(normalize_gate_input)
         self.norm = nn.LayerNorm(feature_dim)
         self.gate = nn.Linear(feature_dim, feature_dim)
         nn.init.zeros_(self.gate.weight)
@@ -894,7 +896,10 @@ class FeatureCrossViewIdentitySkipGate(nn.Module):
         if mixed_features.shape != skip_features.shape:
             raise ValueError("mixed_features and skip_features must have identical shapes.")
         skip_delta = skip_features - mixed_features
-        gate = self.max_scale * torch.tanh(self.gate(self.norm(skip_delta)))
+        gate_input = skip_delta
+        if self.normalize_gate_input:
+            gate_input = torch.nn.functional.normalize(gate_input, p=2, dim=-1)
+        gate = self.max_scale * torch.tanh(self.gate(self.norm(gate_input)))
         return mixed_features + gate * skip_delta
 
 
@@ -2677,6 +2682,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
                     max_scale=_env_positive_float(
                         "ANKLE_FEATURE_XVIEW_IDENTITY_SKIP_MAX_SCALE",
                         0.5,
+                    ),
+                    normalize_gate_input=_env_flag(
+                        "ANKLE_FEATURE_XVIEW_IDENTITY_SKIP_NORMALIZE_GATE_INPUT"
                     ),
                 )
 
