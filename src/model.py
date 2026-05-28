@@ -658,6 +658,44 @@ class FeatureViewTokenChannelGate(nn.Module):
         return view_features * scale
 
 
+class FeatureViewTokenDropout(nn.Module):
+    """Training-only whole-view token dropout for feature-fusion stability."""
+
+    def __init__(self, drop_prob: float = 0.1) -> None:
+        super().__init__()
+        if not math.isfinite(drop_prob) or not (0.0 <= drop_prob < 1.0):
+            raise ValueError(f"drop_prob must be finite and in [0, 1), got {drop_prob!r}.")
+        self.drop_prob = float(drop_prob)
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        if not self.training or self.drop_prob <= 0.0:
+            return view_features
+
+        keep_prob = 1.0 - self.drop_prob
+        batch_size, num_views, _ = view_features.shape
+        keep_mask = torch.rand(
+            batch_size,
+            num_views,
+            1,
+            device=view_features.device,
+            dtype=view_features.dtype,
+        ) < keep_prob
+        empty_samples = keep_mask.sum(dim=1, keepdim=True) == 0
+        if empty_samples.any():
+            fallback_view = torch.randint(
+                low=0,
+                high=num_views,
+                size=(batch_size, 1, 1),
+                device=view_features.device,
+            )
+            fallback_mask = torch.zeros_like(keep_mask, dtype=torch.bool)
+            fallback_mask.scatter_(1, fallback_view, True)
+            keep_mask = torch.where(empty_samples, fallback_mask, keep_mask)
+        return view_features * keep_mask.to(view_features.dtype) / keep_prob
+
+
 class FeatureCrossViewIdentitySkipGate(nn.Module):
     """Bounded residual gate from mixed view tokens back to their pre-mixer identities."""
 
@@ -2317,6 +2355,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.enable_feature_view_token_channel_gate = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_CHANNEL_GATE"
         )
+        self.enable_feature_view_token_dropout = _env_flag(
+            "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_DROPOUT"
+        )
         self.enable_feature_xview_identity_skip_gate = _env_flag(
             "ANKLE_FEATURE_ENABLE_XVIEW_IDENTITY_SKIP_GATE"
         )
@@ -2381,6 +2422,13 @@ class MultiViewCTClassifier(MultiViewEncoder):
             if self.enable_feature_view_token_channel_gate:
                 self.feature_view_token_channel_gate = FeatureViewTokenChannelGate(
                     feature_dim=self.feature_dim
+                )
+            if self.enable_feature_view_token_dropout:
+                self.feature_view_token_dropout = FeatureViewTokenDropout(
+                    drop_prob=_env_unit_float(
+                        "ANKLE_FEATURE_VIEW_TOKEN_DROPOUT_PROB",
+                        0.1,
+                    )
                 )
             if self.enable_feature_xview_identity_skip_gate:
                 self.feature_xview_identity_skip_gate = FeatureCrossViewIdentitySkipGate(
@@ -2466,6 +2514,8 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 mixed_features = self.feature_view_token_scalar_gate(mixed_features)
             if self.enable_feature_view_token_channel_gate:
                 mixed_features = self.feature_view_token_channel_gate(mixed_features)
+            if self.enable_feature_view_token_dropout:
+                mixed_features = self.feature_view_token_dropout(mixed_features)
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
         # 第 2 步：送进分类器，得到分类结果
         logits = self.classifier(image_feature)
