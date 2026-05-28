@@ -644,8 +644,11 @@ class FeatureViewTokenScalarGate(nn.Module):
 class FeatureViewTokenChannelGate(nn.Module):
     """Identity-initialized channel gate for mixed feature-fusion view tokens."""
 
-    def __init__(self, feature_dim: int = 512) -> None:
+    def __init__(self, feature_dim: int = 512, max_delta: float = 1.0) -> None:
         super().__init__()
+        if max_delta <= 0.0:
+            raise ValueError("max_delta must be > 0.")
+        self.max_delta = float(max_delta)
         self.norm = nn.LayerNorm(feature_dim)
         self.gate = nn.Linear(feature_dim, feature_dim)
         nn.init.zeros_(self.gate.weight)
@@ -654,7 +657,7 @@ class FeatureViewTokenChannelGate(nn.Module):
     def forward(self, view_features: torch.Tensor) -> torch.Tensor:
         if view_features.ndim != 3:
             raise ValueError("view_features must have shape (batch, views, features).")
-        scale = 2.0 * torch.sigmoid(self.gate(self.norm(view_features)))
+        scale = 1.0 + self.max_delta * torch.tanh(self.gate(self.norm(view_features)))
         return view_features * scale
 
 
@@ -2617,7 +2620,11 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 )
             if self.enable_feature_view_token_channel_gate:
                 self.feature_view_token_channel_gate = FeatureViewTokenChannelGate(
-                    feature_dim=self.feature_dim
+                    feature_dim=self.feature_dim,
+                    max_delta=_env_positive_float(
+                        "ANKLE_FEATURE_VIEW_TOKEN_CHANNEL_GATE_MAX_DELTA",
+                        1.0,
+                    ),
                 )
             if self.enable_feature_view_token_post_mixer_affine:
                 self.feature_view_token_post_mixer_affine = FeatureViewTokenPostMixerAffine(
