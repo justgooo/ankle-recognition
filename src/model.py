@@ -689,6 +689,41 @@ class FeatureCrossViewIdentitySkipGate(nn.Module):
         return mixed_features + gate * skip_delta
 
 
+class FeatureFusionLogitResidualAdapter(nn.Module):
+    """Zero-initialized low-rank logit residual for fused feature tokens."""
+
+    def __init__(
+        self,
+        fused_dim: int,
+        bottleneck_dim: int = 64,
+        dropout: float = 0.05,
+        residual_scale: float = 0.25,
+    ) -> None:
+        super().__init__()
+        if fused_dim <= 0:
+            raise ValueError("fused_dim must be > 0.")
+        if bottleneck_dim <= 0:
+            raise ValueError("bottleneck_dim must be > 0.")
+        if residual_scale <= 0.0:
+            raise ValueError("residual_scale must be > 0.")
+
+        self.residual_scale = float(residual_scale)
+        self.norm = nn.LayerNorm(fused_dim)
+        self.adapter = nn.Sequential(
+            nn.Linear(fused_dim, bottleneck_dim * 2),
+            nn.GLU(dim=1),
+            nn.Dropout(dropout),
+            nn.Linear(bottleneck_dim, 2),
+        )
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def forward(self, fused_feature: torch.Tensor) -> torch.Tensor:
+        if fused_feature.ndim != 2:
+            raise ValueError("fused_feature must have shape (batch, features).")
+        return self.residual_scale * self.adapter(self.norm(fused_feature))
+
+
 class SharedLowRankReliabilityCalibrator(nn.Module):
     """Shared low-rank residual calibrator for per-view reliability logits."""
 
@@ -2285,6 +2320,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.enable_feature_xview_identity_skip_gate = _env_flag(
             "ANKLE_FEATURE_ENABLE_XVIEW_IDENTITY_SKIP_GATE"
         )
+        self.enable_feature_fusion_logit_residual = _env_flag(
+            "ANKLE_FEATURE_ENABLE_FUSION_LOGIT_RESIDUAL"
+        )
 
         if minimal_fusion_baseline:
             # 纯融合对比模式：不引入额外视角交互或门控模块，只保留最小 MLP 头。
@@ -2371,6 +2409,22 @@ class MultiViewCTClassifier(MultiViewEncoder):
                     nn.Dropout(dropout),                      # 随机丢弃 30% 的神经元（防止过拟合）
                     nn.Linear(fusion_hidden_dim, 2),          # 256 -> 2（输出 2 个类别的分数）
                 )
+            if self.enable_feature_fusion_logit_residual:
+                self.feature_fusion_logit_residual = FeatureFusionLogitResidualAdapter(
+                    fused_dim=fused_dim,
+                    bottleneck_dim=_env_positive_int(
+                        "ANKLE_FEATURE_FUSION_LOGIT_RESIDUAL_BOTTLENECK_DIM",
+                        64,
+                    ),
+                    dropout=_env_unit_float(
+                        "ANKLE_FEATURE_FUSION_LOGIT_RESIDUAL_DROPOUT",
+                        0.05,
+                    ),
+                    residual_scale=_env_positive_float(
+                        "ANKLE_FEATURE_FUSION_LOGIT_RESIDUAL_SCALE",
+                        0.25,
+                    ),
+                )
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -2414,7 +2468,13 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 mixed_features = self.feature_view_token_channel_gate(mixed_features)
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
         # 第 2 步：送进分类器，得到分类结果
-        return self.classifier(image_feature)
+        logits = self.classifier(image_feature)
+        if (
+            not self.minimal_fusion_baseline
+            and self.enable_feature_fusion_logit_residual
+        ):
+            logits = logits + self.feature_fusion_logit_residual(image_feature)
+        return logits
 
 
 class MultiViewDecisionFusionClassifier(MultiViewEncoder):
