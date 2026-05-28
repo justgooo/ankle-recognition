@@ -97,6 +97,21 @@ def _env_positive_int(name: str, default: int) -> int:
     return value
 
 
+def _env_non_negative_int(name: str, default: int) -> int:
+    if default < 0:
+        raise ValueError(f"Default value for {name} must be >= 0, got {default}.")
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}.") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}.")
+    return value
+
+
 def _env_view_mask(name: str) -> tuple[float, float, float] | None:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -650,26 +665,44 @@ class FeatureViewTokenChannelGate(nn.Module):
         max_delta: float = 1.0,
         per_view: bool = False,
         num_views: int = 3,
+        bottleneck_dim: int = 0,
     ) -> None:
         super().__init__()
         if max_delta <= 0.0:
             raise ValueError("max_delta must be > 0.")
+        if bottleneck_dim < 0:
+            raise ValueError("bottleneck_dim must be >= 0.")
         self.max_delta = float(max_delta)
         self.per_view = bool(per_view)
         self.num_views = int(num_views)
+        self.bottleneck_dim = int(bottleneck_dim)
+        gate_factory = self._build_gate
         if self.per_view:
             if self.num_views <= 0:
                 raise ValueError("num_views must be > 0.")
             self.norms = nn.ModuleList([nn.LayerNorm(feature_dim) for _ in range(self.num_views)])
-            self.gates = nn.ModuleList([nn.Linear(feature_dim, feature_dim) for _ in range(self.num_views)])
-            for gate in self.gates:
-                nn.init.zeros_(gate.weight)
-                nn.init.zeros_(gate.bias)
+            self.gates = nn.ModuleList([gate_factory(feature_dim) for _ in range(self.num_views)])
         else:
             self.norm = nn.LayerNorm(feature_dim)
-            self.gate = nn.Linear(feature_dim, feature_dim)
-            nn.init.zeros_(self.gate.weight)
-            nn.init.zeros_(self.gate.bias)
+            self.gate = gate_factory(feature_dim)
+
+    def _build_gate(self, feature_dim: int) -> nn.Module:
+        if self.bottleneck_dim > 0:
+            if self.bottleneck_dim >= feature_dim:
+                raise ValueError("bottleneck_dim must be smaller than feature_dim when enabled.")
+            gate = nn.Sequential(
+                nn.Linear(feature_dim, self.bottleneck_dim),
+                nn.GELU(),
+                nn.Linear(self.bottleneck_dim, feature_dim),
+            )
+            nn.init.zeros_(gate[-1].weight)
+            nn.init.zeros_(gate[-1].bias)
+            return gate
+
+        gate = nn.Linear(feature_dim, feature_dim)
+        nn.init.zeros_(gate.weight)
+        nn.init.zeros_(gate.bias)
+        return gate
 
     def forward(self, view_features: torch.Tensor) -> torch.Tensor:
         if view_features.ndim != 3:
@@ -2658,6 +2691,10 @@ class MultiViewCTClassifier(MultiViewEncoder):
                         "ANKLE_FEATURE_VIEW_TOKEN_CHANNEL_GATE_PER_VIEW"
                     ),
                     num_views=3,
+                    bottleneck_dim=_env_non_negative_int(
+                        "ANKLE_FEATURE_VIEW_TOKEN_CHANNEL_GATE_BOTTLENECK_DIM",
+                        0,
+                    ),
                 )
             if self.enable_feature_view_token_post_mixer_affine:
                 self.feature_view_token_post_mixer_affine = FeatureViewTokenPostMixerAffine(
