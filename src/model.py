@@ -818,6 +818,55 @@ class FeatureViewTokenAdaptiveResidualCentering(nn.Module):
         return view_features + scale * relative_features
 
 
+class FeatureFusedTokenContextResidual(nn.Module):
+    """Zero-initialized global-context residual for mixed feature-fusion tokens."""
+
+    def __init__(
+        self,
+        feature_dim: int = 512,
+        bottleneck_dim: int = 64,
+        residual_scale: float = 0.125,
+        dropout: float = 0.05,
+    ) -> None:
+        super().__init__()
+        if feature_dim <= 0:
+            raise ValueError("feature_dim must be > 0.")
+        if bottleneck_dim <= 0:
+            raise ValueError("bottleneck_dim must be > 0.")
+        if residual_scale <= 0.0:
+            raise ValueError("residual_scale must be > 0.")
+        if not math.isfinite(dropout) or not (0.0 <= dropout < 1.0):
+            raise ValueError(f"dropout must be finite and in [0, 1), got {dropout!r}.")
+
+        self.residual_scale = float(residual_scale)
+        self.token_norm = nn.LayerNorm(feature_dim)
+        self.context_norm = nn.LayerNorm(feature_dim)
+        self.adapter_norm = nn.LayerNorm(feature_dim * 2)
+        self.adapter = nn.Sequential(
+            nn.Linear(feature_dim * 2, bottleneck_dim * 2),
+            nn.GLU(dim=-1),
+            nn.Dropout(dropout),
+            nn.Linear(bottleneck_dim, feature_dim),
+        )
+        nn.init.zeros_(self.adapter[-1].weight)
+        nn.init.zeros_(self.adapter[-1].bias)
+
+    def forward(self, view_features: torch.Tensor) -> torch.Tensor:
+        if view_features.ndim != 3:
+            raise ValueError("view_features must have shape (batch, views, features).")
+        global_context = self.context_norm(view_features.mean(dim=1, keepdim=True))
+        expanded_context = global_context.expand_as(view_features)
+        residual_input = torch.cat(
+            [
+                self.token_norm(view_features),
+                expanded_context,
+            ],
+            dim=-1,
+        )
+        residual = self.adapter(self.adapter_norm(residual_input))
+        return view_features + self.residual_scale * residual
+
+
 class FeatureCrossViewIdentitySkipGate(nn.Module):
     """Bounded residual gate from mixed view tokens back to their pre-mixer identities."""
 
@@ -2486,6 +2535,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
         self.enable_feature_view_token_adaptive_residual_centering = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_ADAPTIVE_RESIDUAL_CENTERING"
         )
+        self.enable_feature_fused_token_context_residual = _env_flag(
+            "ANKLE_FEATURE_ENABLE_FUSED_TOKEN_CONTEXT_RESIDUAL"
+        )
         self.enable_feature_view_token_dropout = _env_flag(
             "ANKLE_FEATURE_ENABLE_VIEW_TOKEN_DROPOUT"
         )
@@ -2594,6 +2646,24 @@ class MultiViewCTClassifier(MultiViewEncoder):
                         ),
                     )
                 )
+            if self.enable_feature_fused_token_context_residual:
+                self.feature_fused_token_context_residual = (
+                    FeatureFusedTokenContextResidual(
+                        feature_dim=self.feature_dim,
+                        bottleneck_dim=_env_positive_int(
+                            "ANKLE_FEATURE_FUSED_TOKEN_CONTEXT_BOTTLENECK_DIM",
+                            64,
+                        ),
+                        residual_scale=_env_positive_float(
+                            "ANKLE_FEATURE_FUSED_TOKEN_CONTEXT_RESIDUAL_SCALE",
+                            0.125,
+                        ),
+                        dropout=_env_unit_float(
+                            "ANKLE_FEATURE_FUSED_TOKEN_CONTEXT_DROPOUT",
+                            0.05,
+                        ),
+                    )
+                )
             if self.enable_feature_view_token_dropout:
                 self.feature_view_token_dropout = FeatureViewTokenDropout(
                     drop_prob=_env_unit_float(
@@ -2691,6 +2761,8 @@ class MultiViewCTClassifier(MultiViewEncoder):
                 mixed_features = self.feature_view_token_residual_centering(mixed_features)
             if self.enable_feature_view_token_adaptive_residual_centering:
                 mixed_features = self.feature_view_token_adaptive_residual_centering(mixed_features)
+            if self.enable_feature_fused_token_context_residual:
+                mixed_features = self.feature_fused_token_context_residual(mixed_features)
             if self.enable_feature_view_token_dropout:
                 mixed_features = self.feature_view_token_dropout(mixed_features)
             image_feature = mixed_features.reshape(mixed_features.shape[0], -1)
