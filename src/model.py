@@ -875,14 +875,17 @@ class FeatureCrossViewIdentitySkipGate(nn.Module):
         feature_dim: int = 512,
         max_scale: float = 0.5,
         normalize_gate_input: bool = False,
+        include_mixed_context: bool = False,
     ) -> None:
         super().__init__()
         if max_scale <= 0.0:
             raise ValueError("max_scale must be > 0.")
         self.max_scale = float(max_scale)
         self.normalize_gate_input = bool(normalize_gate_input)
-        self.norm = nn.LayerNorm(feature_dim)
-        self.gate = nn.Linear(feature_dim, feature_dim)
+        self.include_mixed_context = bool(include_mixed_context)
+        gate_input_dim = feature_dim * 2 if self.include_mixed_context else feature_dim
+        self.norm = nn.LayerNorm(gate_input_dim)
+        self.gate = nn.Linear(gate_input_dim, feature_dim)
         nn.init.zeros_(self.gate.weight)
         nn.init.zeros_(self.gate.bias)
 
@@ -899,6 +902,11 @@ class FeatureCrossViewIdentitySkipGate(nn.Module):
         gate_input = skip_delta
         if self.normalize_gate_input:
             gate_input = torch.nn.functional.normalize(gate_input, p=2, dim=-1)
+        if self.include_mixed_context:
+            mixed_context = mixed_features
+            if self.normalize_gate_input:
+                mixed_context = torch.nn.functional.normalize(mixed_context, p=2, dim=-1)
+            gate_input = torch.cat([mixed_context, gate_input], dim=-1)
         gate = self.max_scale * torch.tanh(self.gate(self.norm(gate_input)))
         return mixed_features + gate * skip_delta
 
@@ -2685,6 +2693,9 @@ class MultiViewCTClassifier(MultiViewEncoder):
                     ),
                     normalize_gate_input=_env_flag(
                         "ANKLE_FEATURE_XVIEW_IDENTITY_SKIP_NORMALIZE_GATE_INPUT"
+                    ),
+                    include_mixed_context=_env_flag(
+                        "ANKLE_FEATURE_XVIEW_IDENTITY_SKIP_INCLUDE_MIXED_CONTEXT"
                     ),
                 )
 
