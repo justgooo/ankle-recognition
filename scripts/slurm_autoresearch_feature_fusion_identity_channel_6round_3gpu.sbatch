@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=ankle-ff-id-ch6
-#SBATCH --partition=V100q,RTXA6Kq,PA100q,PH100q,NH100q,NA100q,HPCAIq
+#SBATCH --partition=V100q
+#SBATCH --nodelist=node21
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:3
@@ -36,9 +37,13 @@ nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --for
 import torch
 
 print(torch.__version__)
-print(torch.cuda.is_available())
-print(torch.cuda.device_count())
-for index in range(torch.cuda.device_count()):
+cuda_available = torch.cuda.is_available()
+device_count = torch.cuda.device_count()
+print(cuda_available)
+print(device_count)
+if not cuda_available or device_count < 3:
+    raise SystemExit(f"CUDA preflight failed: available={cuda_available} device_count={device_count}")
+for index in range(device_count):
     print(index, torch.cuda.get_device_name(index))
 PY
 
